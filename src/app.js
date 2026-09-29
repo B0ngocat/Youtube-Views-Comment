@@ -1,0 +1,543 @@
+/* App wiring: Teach tab (capture words) and Write tab (generate handwriting). */
+(function () {
+  'use strict';
+  const HW = window.HW;
+  const $ = (s, el) => (el || document).querySelector(s);
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+
+  // ---- persistence (all wrapped: Safari private mode / quota can throw) -------------------
+  const store = {
+    get(key, dflt) {
+      try {
+        const v = localStorage.getItem(key);
+        return v ? JSON.parse(v) : dflt;
+      } catch {
+        return dflt;
+      }
+    },
+    set(key, val) {
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    del(key) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+
+  // ---- state ------------------------------------------------------------------------------
+  let words = store.get('hw.words.v1', []).filter((w) => w && w.text && Array.isArray(w.strokes));
+  let customSentences = store.get('hw.custom.v1', []);
+  let style = null;
+  let seed = 1;
+  let lastLayout = null;
+  let cur = { r: 0, i: 0 };
+  let rebuildTimer = null;
+  let renderQueued = false;
+
+  const rounds = () => {
+    const list = HW.prompts.ROUNDS.slice();
+    customSentences.forEach((s, n) => list.push({ id: 'c' + n, title: 'Mine ' + (n + 1), blurb: 'Your own sentence.', sentences: [s], custom: true }));
+    return list;
+  };
+  const tokensOf = (r) => HW.prompts.tokens(rounds()[r]);
+  const capturedKeys = () => new Set(words.map((w) => w.key));
+
+  // ---- style -----------------------------------------------------------------------------
+  function rebuild() {
+    style = HW.style.buildStyle(words);
+    updateStatus();
+    renderCoverage();
+    renderGallery();
+    renderRounds();
+    renderPrompt();
+    if (!$('#write').hidden) queueRender();
+  }
+  function scheduleRebuild() {
+    clearTimeout(rebuildTimer);
+    rebuildTimer = setTimeout(rebuild, 120);
+  }
+  function persist() {
+    const ok = store.set('hw.words.v1', words);
+    if (!ok) $('#status').textContent = 'Could not save in this browser (storage full?). Use Export to keep a copy.';
+  }
+
+  function updateStatus() {
+    const n = style ? style.count : 0;
+    const chars = style ? style.byChar.size : 0;
+    $('#status').textContent = n ? n + ' words, ' + chars + ' characters learned' : 'No samples yet';
+  }
+
+  // ---- teach: rounds & prompt --------------------------------------------------------------
+  const pad = new HW.Pad($('#pad'), { xh: 52, height: 270, onChange: onPadChange });
+
+  function renderRounds() {
+    const host = $('#rounds');
+    host.textContent = '';
+    const keys = capturedKeys();
+    rounds().forEach((round, r) => {
+      const toks = tokensOf(r);
+      const done = toks.filter((t) => keys.has(t.key)).length;
+      const b = el('button', 'round' + (r === cur.r ? ' cur' : '') + (done === toks.length ? ' done' : ''));
+      b.type = 'button';
+      b.append(el('b', '', round.title), el('span', '', done + ' / ' + toks.length));
+      b.addEventListener('click', () => {
+        commit();
+        goTo(r, firstOpen(r));
+      });
+      host.appendChild(b);
+    });
+  }
+
+  function firstOpen(r) {
+    const keys = capturedKeys();
+    const toks = tokensOf(r);
+    const i = toks.findIndex((t) => !keys.has(t.key));
+    return i < 0 ? 0 : i;
+  }
+
+  function renderPrompt() {
+    const round = rounds()[cur.r];
+    const toks = tokensOf(cur.r);
+    const keys = capturedKeys();
+    const tok = toks[cur.i];
+    $('#roundBlurb').textContent = round.blurb || '';
+    $('#wordCount').textContent = 'Word ' + (cur.i + 1) + ' of ' + toks.length;
+    const host = $('#prompt');
+    host.textContent = '';
+    if (round.chars) {
+      host.append(el('span', 'muted small', 'Write this mark: '), el('span', 'big', tok.text));
+    } else {
+      const sentence = round.sentences[tok.si];
+      sentence
+        .split(/\s+/)
+        .filter(Boolean)
+        .forEach((w, wi) => {
+          const k = round.id + '.' + tok.si + '.' + wi;
+          const span = el('span', 'w' + (wi === tok.wi ? ' cur' : keys.has(k) ? ' done' : ''), w);
+          host.append(span, ' ');
+        });
+    }
+    onPadChange();
+  }
+
+  function onPadChange() {
+    const empty = !pad.strokes.length;
+    const toks = tokensOf(cur.r);
+    const last = cur.r === rounds().length - 1 && cur.i === toks.length - 1;
+    $('#btnNext').textContent = empty ? 'Skip' : last ? 'Save' : 'Next';
+    $('#btnUndo').disabled = empty;
+    $('#btnClear').disabled = empty;
+    const pen = pad.penSeen;
+    $('#penState').textContent = !pen
+      ? ''
+      : pad.sawPressure
+      ? 'Apple Pencil detected, pressure sensing on'
+      : 'Apple Pencil detected, no pressure sensor, so line weight follows how fast you write';
+  }
+
+  function loadCurrentInk() {
+    const tok = tokensOf(cur.r)[cur.i];
+    const existing = words.find((w) => w.key === tok.key);
+    pad.load(existing ? existing.strokes : []);
+  }
+
+  function goTo(r, i) {
+    cur = { r, i };
+    loadCurrentInk();
+    renderRounds();
+    renderPrompt();
+  }
+
+  /** Save whatever is on the pad for the current word (if anything). */
+  function commit() {
+    const tok = tokensOf(cur.r)[cur.i];
+    const snap = pad.snapshot(tok.text);
+    if (!snap) return false;
+    snap.key = tok.key;
+    const at = words.findIndex((w) => w.key === tok.key);
+    if (at >= 0) words[at] = snap;
+    else words.push(snap);
+    persist();
+    scheduleRebuild();
+    return true;
+  }
+
+  function advance() {
+    const toks = tokensOf(cur.r);
+    if (cur.i < toks.length - 1) goTo(cur.r, cur.i + 1);
+    else if (cur.r < rounds().length - 1) goTo(cur.r + 1, firstOpen(cur.r + 1));
+    else goTo(cur.r, cur.i);
+  }
+
+  function back() {
+    if (cur.i > 0) goTo(cur.r, cur.i - 1);
+    else if (cur.r > 0) goTo(cur.r - 1, tokensOf(cur.r - 1).length - 1);
+  }
+
+  $('#btnNext').addEventListener('click', () => {
+    commit();
+    advance();
+  });
+  $('#btnPrev').addEventListener('click', () => {
+    commit();
+    back();
+  });
+  $('#btnUndo').addEventListener('click', () => pad.undo());
+  $('#btnClear').addEventListener('click', () => pad.clear());
+  $('#palm').addEventListener('change', (e) => {
+    pad.palmReject = e.target.checked;
+  });
+  document.addEventListener('keydown', (e) => {
+    if ($('#teach').hidden) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      $('#btnNext').click();
+    } else if (e.key === 'ArrowLeft') $('#btnPrev').click();
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      pad.undo();
+    }
+  });
+
+  $('#btnCustom').addEventListener('click', () => {
+    const v = $('#customText').value.trim().replace(/\s+/g, ' ');
+    if (!v) return;
+    commit();
+    customSentences.push(v);
+    store.set('hw.custom.v1', customSentences);
+    $('#customText').value = '';
+    goTo(rounds().length - 1, 0);
+  });
+
+  // ---- teach: coverage & gallery -------------------------------------------------------------
+  function renderCoverage() {
+    const host = $('#coverage');
+    host.textContent = '';
+    const cov = style ? HW.style.coverage(style) : {};
+    HW.prompts.CHAR_GROUPS.forEach((g) => {
+      host.appendChild(el('div', 'gtitle', g.title));
+      const grid = el('div', 'chipgrid');
+      for (const ch of g.chars) {
+        const n = cov[ch] || 0;
+        const chip = el('span', 'chip' + (n ? ' on' : ''), ch);
+        if (n) chip.appendChild(el('sub', '', String(n)));
+        grid.appendChild(chip);
+      }
+      host.appendChild(grid);
+    });
+    const lower = 'abcdefghijklmnopqrstuvwxyz'.split('').filter((c) => !cov[c]);
+    $('#missing').textContent = lower.length ? 'Still missing lowercase: ' + lower.join(' ') : 'All lowercase letters covered.';
+  }
+
+  function thumbSVG(w, index) {
+    const S = 22;
+    let maxX = 1;
+    w.units.forEach((u) => {
+      maxX = Math.max(maxX, u.box.maxX);
+      u.marks.forEach((m) => m.pts.forEach((p) => (maxX = Math.max(maxX, p.x))));
+    });
+    const W = Math.ceil(maxX * S + 12);
+    const H = Math.ceil(3.4 * S);
+    let paths = '';
+    w.units.forEach((u, i) => {
+      const color = 'hsl(' + ((i * 53 + 210) % 360) + ',62%,42%)';
+      let d = '';
+      const conv = (p) => ({ x: p.x * S + 6, y: (2.3 - p.y) * S, w: p.w });
+      u.strokes.forEach((s) => (d += HW.render.strokeToPath({ pts: s.pts.map(conv) }, 2.2, S)));
+      u.marks.forEach((m) => (d += HW.render.strokeToPath({ pts: m.pts.map(conv) }, 2.2, S)));
+      paths += '<path d="' + d + '" fill="' + color + '"/>';
+    });
+    const base = 2.3 * S;
+    return (
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' +
+      '<line x1="0" x2="' + W + '" y1="' + base + '" y2="' + base + '" stroke="#c9d3ee" stroke-width="1"/>' + paths + '</svg>'
+    );
+  }
+
+  function renderGallery() {
+    const host = $('#gallery');
+    host.textContent = '';
+    if (!style) return;
+    let bad = 0;
+    style.words.forEach((w, i) => {
+      const raw = words[i];
+      const box = el('div', 'thumb');
+      if (!w.ok) {
+        box.classList.add('bad');
+        box.append(el('small', '', w.text + ' (could not read)'));
+        bad++;
+      } else {
+        box.innerHTML = thumbSVG(w, i);
+        const suspect = !!w.suspect;
+        if (suspect) {
+          box.classList.add('bad');
+          bad++;
+        }
+        box.appendChild(el('small', '', (suspect ? 'check: ' : '') + w.text));
+      }
+      const x = el('button', 'x', '×');
+      x.type = 'button';
+      x.title = 'Delete this sample';
+      x.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        words.splice(i, 1);
+        persist();
+        rebuild();
+      });
+      box.appendChild(x);
+      box.addEventListener('click', () => {
+        const at = rounds().findIndex((_, r) => tokensOf(r).some((t) => t.key === raw.key));
+        if (at < 0) return;
+        commit();
+        goTo(at, tokensOf(at).findIndex((t) => t.key === raw.key));
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      host.appendChild(box);
+    });
+    $('#samplesNote').textContent = style.words.length ? ', ' + style.words.length + ' words' + (bad ? ', ' + bad + ' need a second look' : '') : '';
+  }
+
+  // backup
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  }
+  $('#btnExport').addEventListener('click', () => {
+    download(new Blob([HW.style.toJSON(words)], { type: 'application/json' }), 'my-handwriting.json');
+  });
+  $('#btnImport').addEventListener('click', () => $('#fileImport').click());
+  $('#fileImport').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const incoming = HW.style.fromJSON(await f.text());
+      incoming.forEach((w, n) => {
+        if (!w.key) w.key = 'import.' + Date.now() + '.' + n;
+        const at = words.findIndex((x) => x.key === w.key);
+        if (at >= 0) words[at] = w;
+        else words.push(w);
+      });
+      persist();
+      rebuild();
+      $('#status').textContent = 'Imported ' + incoming.length + ' words';
+    } catch {
+      alert('That file is not a handwriting export.');
+    }
+  });
+  $('#btnReset').addEventListener('click', () => {
+    if (!confirm('Delete all your handwriting samples from this browser?')) return;
+    words = [];
+    customSentences = [];
+    store.del('hw.words.v1');
+    store.del('hw.custom.v1');
+    pad.clear();
+    goTo(0, 0);
+    rebuild();
+  });
+
+  // ---- write ------------------------------------------------------------------------------------
+  const CONTROLS = ['xh', 'messiness', 'variation', 'slantDelta', 'wordSpacing', 'lineHeight', 'pen'];
+  const fmt = {
+    xh: (v) => v + ' px',
+    messiness: (v) => Math.round(v * 100) + '%',
+    variation: (v) => Math.round(v * 100) + '%',
+    slantDelta: (v) => (v > 0 ? '+' : '') + v + '°',
+    wordSpacing: (v) => Number(v).toFixed(2) + '×',
+    lineHeight: (v) => Number(v).toFixed(1) + '×',
+    pen: (v) => Number(v).toFixed(2) + '×',
+  };
+
+  function readOpts() {
+    const o = {};
+    CONTROLS.forEach((k) => (o[k] = Number($('#' + k).value)));
+    return o;
+  }
+
+  function syncOutputs() {
+    CONTROLS.forEach((k) => ($('#o-' + k).textContent = fmt[k]($('#' + k).value)));
+  }
+
+  function saveSettings() {
+    const s = { text: $('#text').value, paperKind: $('#paperKind').value, ink: $('#ink').value };
+    CONTROLS.forEach((k) => (s[k] = $('#' + k).value));
+    store.set('hw.settings.v1', s);
+  }
+
+  function loadSettings() {
+    const s = store.get('hw.settings.v1', null);
+    if (!s) return;
+    if (typeof s.text === 'string') $('#text').value = s.text;
+    ['paperKind', 'ink'].forEach((k) => {
+      if (s[k]) $('#' + k).value = s[k];
+    });
+    CONTROLS.forEach((k) => {
+      if (s[k] !== undefined) $('#' + k).value = s[k];
+    });
+  }
+
+  function queueRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      renderOutput();
+    });
+  }
+
+  function paperOptions() {
+    const o = readOpts();
+    return { ink: $('#ink').value, pen: o.pen, paper: $('#paperKind').value };
+  }
+
+  function renderOutput() {
+    if (!style) return;
+    const canvas = $('#paper');
+    const host = $('#paperhost');
+    const empty = style.count === 0;
+    $('#empty').hidden = !empty;
+    const text = $('#text').value;
+    const o = readOpts();
+    const missing = HW.style.missingChars(style, text);
+    const warn = $('#warn');
+    if (missing.length && !empty) {
+      warn.hidden = false;
+      warn.textContent = 'No sample yet for: ' + missing.join(' ') + '. Those characters are skipped. Add them in the Teach tab.';
+    } else warn.hidden = true;
+
+    const W = Math.max(320, Math.min(1100, Math.floor(host.clientWidth)));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    let lay;
+    if (empty) lay = { width: W, height: 260, xh: o.xh, strokes: [], baselines: [80], lineHeightPx: o.lineHeight * o.xh, missing: [] };
+    else lay = HW.synth.layout(style, text, Object.assign({}, o, { width: W, seed }));
+    lastLayout = lay;
+    canvas.width = Math.round(lay.width * dpr);
+    canvas.height = Math.round(Math.ceil(lay.height) * dpr);
+    canvas.style.height = Math.ceil(lay.height) * (host.clientWidth / lay.width) + 'px';
+    HW.render.drawToCanvas(canvas.getContext('2d'), lay, paperOptions(), dpr);
+  }
+
+  CONTROLS.concat(['paperKind', 'ink']).forEach((k) => {
+    $('#' + k).addEventListener('input', () => {
+      syncOutputs();
+      saveSettings();
+      queueRender();
+    });
+  });
+  $('#text').addEventListener('input', () => {
+    saveSettings();
+    queueRender();
+  });
+  $('#btnAgain').addEventListener('click', () => {
+    seed = (seed * 48271 + 11) % 2147483647;
+    queueRender();
+  });
+  window.addEventListener('resize', () => {
+    if (!$('#write').hidden) queueRender();
+  });
+
+  $('#btnSVG').addEventListener('click', () => {
+    if (!lastLayout) return;
+    download(new Blob([HW.render.toSVG(lastLayout, paperOptions())], { type: 'image/svg+xml' }), 'handwriting.svg');
+  });
+  $('#btnPNG').addEventListener('click', async () => {
+    if (!lastLayout) return;
+    const c = document.createElement('canvas');
+    const sc = 2;
+    c.width = lastLayout.width * sc;
+    c.height = Math.ceil(lastLayout.height) * sc;
+    HW.render.drawToCanvas(c.getContext('2d'), lastLayout, paperOptions(), sc);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    const file = new File([blob], 'handwriting.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    download(blob, 'handwriting.png');
+  });
+
+  // ---- tabs -------------------------------------------------------------------------------------
+  function showTab(name) {
+    const teach = name === 'teach';
+    $('#teach').hidden = !teach;
+    $('#write').hidden = teach;
+    $('#tab-teach').setAttribute('aria-selected', String(teach));
+    $('#tab-write').setAttribute('aria-selected', String(!teach));
+    if (teach) pad.resize();
+    else queueRender();
+    try {
+      history.replaceState(null, '', '#' + name);
+    } catch {
+      /* file:// in some browsers */
+    }
+  }
+  $('#tab-teach').addEventListener('click', () => {
+    showTab('teach');
+  });
+  $('#tab-write').addEventListener('click', () => {
+    commit();
+    showTab('write');
+  });
+
+  // On the password-protected site the login page provides HW_LOCK
+  if (window.HW_LOCK) {
+    $('#btnLock').hidden = false;
+    $('#btnLock').addEventListener('click', window.HW_LOCK);
+  }
+
+  // ---- boot -------------------------------------------------------------------------------------
+  loadSettings();
+  syncOutputs();
+  rebuild();
+  goTo(0, firstOpen(0));
+  const hash = (location.hash || '').replace('#', '');
+  showTab(hash === 'write' || hash === 'teach' ? hash : words.length >= 20 ? 'write' : 'teach');
+
+  window.HW_APP = {
+    pad,
+    get style() {
+      return style;
+    },
+    get words() {
+      return words;
+    },
+    get layout() {
+      return lastLayout;
+    },
+    rebuild,
+    goTo,
+    commit,
+    advance,
+    get cur() {
+      return cur;
+    },
+    tokensOf,
+    rounds,
+  };
+})();
