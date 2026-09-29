@@ -10,6 +10,9 @@
   const G = typeof require !== 'undefined' ? require('./geometry') : root.HW.geometry;
 
   const STEP = 0.03; // resampling step, in x-heights
+  // Gaussian smoothing of raw pen data, in samples. Small, quick handwriting has pen tremor that
+  // shows up as jagged strokes once it is enlarged, so this is fairly strong.
+  const SMOOTH_SIGMA = 2.4;
 
   // ---- priors ---------------------------------------------------------------------------
 
@@ -59,12 +62,12 @@
 
   function heightCostK(k, minY, maxY) {
     let c = 0;
-    if (k.asc) c += Math.max(0, 1.4 - maxY) * 2;
-    else if (k.tee) c += Math.max(0, 1.0 - maxY) * 2;
+    if (k.asc) c += Math.max(0, 1.45 - maxY) * 2;
+    else if (k.tee) c += Math.max(0, 0.95 - maxY) * 2 + Math.max(0, maxY - 1.8) * 1.5;
     else if (k.tall) c += Math.max(0, 1.35 - maxY) * 2;
-    else if (k.low) c += Math.max(0, maxY - 1.6) * 1.5;
-    if (k.desc) c += Math.max(0, minY + 0.25) * 2;
-    else if (k.noDesc) c += Math.max(0, -0.5 - minY) * 1.5;
+    else if (k.low) c += Math.max(0, maxY - 1.3) * 2 + Math.max(0, 0.7 - maxY) * 2;
+    if (k.desc) c += Math.max(0, minY + 0.35) * 2;
+    else if (k.noDesc) c += Math.max(0, -0.4 - minY) * 1.5;
     return c;
   }
 
@@ -75,9 +78,21 @@
 
   // ---- normalisation --------------------------------------------------------------------
 
-  /** raw = {text, strokes:[[ [x,y,t,p], ... ]], xh, baseline}; canvas pixels, y down. */
-  function normalize(raw) {
-    const xh = raw.xh;
+  const IDENTITY = { s: 1, dy: 0 };
+  // How tall / deep letters usually are, in x-heights. learnProfile() replaces these with the
+  // writer's own numbers once enough words have been measured.
+  const DEFAULT_PROFILE = { asc: 1.85, tee: 1.35, tall: 1.8, dot: 1.55, desc: -0.85 };
+
+  /**
+   * raw = {text, strokes:[[ [x,y,t,p], ... ]], xh, baseline}; canvas pixels, y down.
+   * view = {s, dy}: the writer's real x-height as a fraction of the guide's, and how far below
+   * the guide baseline their real baseline sits (in guide x-heights). Words are normalised to
+   * their own baseline and x-height, since people rarely write exactly at the guide size.
+   */
+  function normalize(raw, view) {
+    const v = view || IDENTITY;
+    const xh = raw.xh * v.s;
+    const base = raw.baseline + v.dy * raw.xh;
     let minX = Infinity;
     for (const s of raw.strokes) for (const pt of s) minX = Math.min(minX, pt[0]);
     const out = [];
@@ -86,7 +101,7 @@
       for (const pt of s) {
         const q = {
           x: (pt[0] - minX) / xh,
-          y: (raw.baseline - pt[1]) / xh,
+          y: (base - pt[1]) / xh,
           t: pt[2] || 0,
           p: pt[3] == null ? 0.5 : pt[3],
         };
@@ -113,7 +128,7 @@
   /** Resample + smooth one stroke and attach a width factor `w` per point. */
   function cleanStroke(s, stats) {
     const rs = G.resample(s, STEP);
-    const sm = rs.length >= 8 ? G.smooth(rs, 1.5, ['p']) : rs;
+    const sm = rs.length >= 8 ? G.smooth(rs, SMOOTH_SIGMA, ['p']) : rs;
     if (stats && stats.hasPressure) {
       const pm = stats.pMean || 0.5;
       for (const pt of sm) pt.w = clamp(0.5 + 0.5 * (pt.p / pm), 0.4, 1.8);
@@ -175,9 +190,137 @@
   }
 
   /** Clean strokes + raw slant estimate (null when there is too little to judge from). */
-  function preprocess(raw, stats) {
-    const strokes = normalize(raw).map((s) => cleanStroke(s, stats));
-    return { strokes, slant: strokes.length ? estimateSlant(strokes) : null };
+  function preprocess(raw, stats, view) {
+    const v = view || IDENTITY;
+    const strokes = normalize(raw, v).map((s) => cleanStroke(s, stats));
+    return { strokes, slant: strokes.length ? estimateSlant(strokes) : null, view: v };
+  }
+
+  /**
+   * First guess at a word's baseline and x-height. The word's text says roughly how tall and
+   * how deep its ink should be (a "b" reaches ~1.9 x-heights, a "g" drops ~0.85, an "o" only
+   * fills the x-height), so the ink extent gives the size and the ink bottom gives the baseline.
+   */
+  function initialView(raw, prof) {
+    const P = prof || DEFAULT_PROFILE;
+    let top = Infinity;
+    let bottom = -Infinity;
+    for (const s of raw.strokes) {
+      for (const p of s) {
+        top = Math.min(top, p[1]);
+        bottom = Math.max(bottom, p[1]);
+      }
+    }
+    if (!isFinite(top) || bottom - top < 1) return IDENTITY;
+    let up = 1.0; // nominal top of the tallest letter, in x-heights
+    let down = 0; // nominal depth of the deepest letter
+    for (const ch of Array.from(raw.text)) {
+      const k = heightClass(ch);
+      if (k.asc) up = Math.max(up, P.asc);
+      else if (k.tall) up = Math.max(up, P.tall);
+      else if (ch === 'i' || ch === 'j') up = Math.max(up, P.dot);
+      else if (k.tee) up = Math.max(up, P.tee);
+      if (k.desc) down = Math.min(down, P.desc);
+      else if (ch === ',' || ch === ';') down = Math.min(down, -0.3);
+    }
+    const s = clamp((bottom - top) / raw.xh / (up - down), 0.25, 1.6);
+    // baseline (canvas y) = ink bottom raised by the nominal depth
+    const baselinePx = bottom + down * s * raw.xh;
+    return { s, dy: (baselinePx - raw.baseline) / raw.xh };
+  }
+
+  /**
+   * Correct a word's baseline and x-height using its own aligned letters. The bottoms of
+   * letters that don't descend should sit at 0; the tops of x-height letters at 1, and the tops
+   * of tall letters at the writer's usual ascender height. Every letter votes, using medians so
+   * a few badly cut ones don't matter.
+   */
+  function refinedView(view, units, prof) {
+    const P = prof || DEFAULT_PROFILE;
+    const bottoms = [];
+    for (const u of units) {
+      const k = heightClass(u.ch);
+      if (k.low || k.asc || k.tee || k.tall) bottoms.push(u.box.minY);
+    }
+    if (bottoms.length < 2) return view;
+    const b = median(bottoms);
+    const votes = [];
+    for (const u of units) {
+      const k = heightClass(u.ch);
+      const h = u.box.maxY - b;
+      if (k.low) votes.push(h);
+      else if (k.asc) votes.push(h / P.asc);
+      else if (k.tall) votes.push(h / P.tall);
+    }
+    if (votes.length < 2) return view;
+    const h = median(votes);
+    if (!(h > 0.2)) return view;
+    return { s: clamp(view.s * h, 0.2, 2), dy: view.dy - b * view.s };
+  }
+
+  /** How far a letter's height is from this writer's usual for that letter (0 = typical). */
+  function deviation(u, prof) {
+    const k = heightClass(u.ch);
+    if (k.low) return Math.abs(u.box.maxY - 1);
+    if (k.asc) return Math.abs(u.box.maxY - prof.asc) / prof.asc;
+    if (k.tall) return Math.abs(u.box.maxY - prof.tall) / prof.tall;
+    if (k.tee) return Math.abs(u.box.maxY - prof.tee) / prof.tee;
+    if (k.desc) return Math.abs(u.box.minY - prof.desc) / Math.abs(prof.desc);
+    return 0;
+  }
+
+  /**
+   * The writer's own letter proportions, measured on words whose size is reliably known (those
+   * with several x-height letters, so the x-height itself can be read off them).
+   * aligned: [{units, ...}] as returned by alignWord for a fitted word.
+   */
+  function learnProfile(aligned) {
+    const pick = (test, val) => {
+      const v = [];
+      for (const w of aligned) {
+        if (!w.ok) continue;
+        if (w.units.filter((u) => heightClass(u.ch).low).length < 3) continue;
+        for (const u of w.units) if (test(u.ch)) v.push(val(u));
+      }
+      return v.length >= 6 ? median(v) : null;
+    };
+    const P = Object.assign({}, DEFAULT_PROFILE);
+    const asc = pick((c) => heightClass(c).asc, (u) => u.box.maxY);
+    const tee = pick((c) => c === 't', (u) => u.box.maxY);
+    const tall = pick((c) => heightClass(c).tall, (u) => u.box.maxY);
+    const desc = pick((c) => heightClass(c).desc, (u) => u.box.minY);
+    if (asc) P.asc = clamp(asc, 1.3, 2.6);
+    if (tee) P.tee = clamp(tee, 1.0, 2.0);
+    if (tall) P.tall = clamp(tall, 1.3, 2.6);
+    if (desc) P.desc = clamp(desc, -1.4, -0.4);
+    return P;
+  }
+
+  /**
+   * Find the baseline and x-height of a word: start from the text-based guess, align, measure
+   * the result against what the letters should look like, and repeat until it settles.
+   * Returns the prepared word (strokes normalised to that baseline and x-height).
+   */
+  function fitView(raw, stats, prof) {
+    let view = initialView(raw, prof);
+    let best = null;
+    for (let round = 0; round < 4; round++) {
+      const prep = preprocess(raw, stats, view);
+      let res;
+      try {
+        res = alignWord(raw, { stats, prepared: prep });
+      } catch {
+        res = { ok: false };
+      }
+      const q = res.ok ? res.quality : Infinity;
+      if (!best || q < best.q) best = { prep, q };
+      if (!res.ok) break;
+      const next = refinedView(view, res.units, prof);
+      const moved = Math.abs(next.s / view.s - 1) + Math.abs(next.dy - view.dy) / view.s;
+      view = next;
+      if (moved < 0.04) break;
+    }
+    return best ? best.prep : preprocess(raw, stats, initialView(raw, prof));
   }
 
   function strokeInfo(s) {
@@ -278,7 +421,7 @@
 
     if (n === 1) {
       const unit = buildUnit(chars[0], strokes.map((pts) => ({ pts, entryMid: false, exitMid: false })), []);
-      return { ok: true, units: [unit], slant, quality: 0 };
+      return { ok: true, units: [unit], slant, quality: 0, view: prep.view };
     }
 
     const { primary, delayed } = splitDelayed(strokes);
@@ -457,7 +600,7 @@
     // attach delayed strokes (i-dots, t-bars, ...)
     for (const d of delayed) assignMark(units, d);
 
-    return { ok: true, units, slant, quality };
+    return { ok: true, units, slant, quality, view: prep.view };
   }
 
   function boxOf(pieces) {
@@ -542,7 +685,7 @@
     best.marks.push({ pts: stroke });
   }
 
-  const api = { alignWord, preprocess, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
+  const api = { alignWord, preprocess, fitView, initialView, learnProfile, deviation, DEFAULT_PROFILE, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
   root.HW = root.HW || {};
   root.HW.align = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -4,6 +4,7 @@
  */
 (function (root) {
   'use strict';
+  const G = typeof require !== 'undefined' ? require('./geometry') : root.HW.geometry;
   const A = typeof require !== 'undefined' ? require('./align') : root.HW.align;
 
   /** Pressure / speed statistics over every captured point. */
@@ -56,35 +57,112 @@
       }
       if (e.sk !== sk) {
         e.sk = sk;
-        e.prepared = A.preprocess(raw, stats);
+        e.prepared = null;
         e.aligned = null;
       }
       return e;
     });
-    // slant is a property of the writer: judge it from all words, then keep each word close to it
+    const alignOne = (raw, e, slantHint) => {
+      let res;
+      try {
+        res = A.alignWord(raw, { stats, slantHint, prepared: e.prepared });
+      } catch (err) {
+        res = { ok: false, reason: String(err && err.message ? err.message : err) };
+      }
+      return Object.assign({ text: raw.text }, res);
+    };
+
+    // Pass 1: size each word from its own letters, then learn this writer's proportions
+    // (how tall their b/d/h/k/l are, how deep their descenders go).
+    entries.forEach((e, i) => {
+      if (!e.prepared) e.prepared = A.fitView(rawWords[i], stats);
+    });
+    const firstSlants = entries.filter((e) => e.prepared.slant !== null).map((e) => e.prepared.slant);
+    const firstHint = firstSlants.length >= 3 ? A.median(firstSlants) : undefined;
+    const probe = rawWords.map((raw, i) => alignOne(raw, entries[i], firstHint));
+    const profile = A.learnProfile(probe);
+    const pk = [profile.asc, profile.tee, profile.tall, profile.desc].map((v) => v.toFixed(2)).join('|');
+
+    // Pass 2: re-size every word with those proportions (so words with few x-height letters get
+    // a sensible size too), then align for real.
+    entries.forEach((e, i) => {
+      if (e.pk !== pk) {
+        e.prepared = A.fitView(rawWords[i], stats, profile);
+        e.pk = pk;
+        e.aligned = null;
+      }
+    });
     const slants = entries.filter((e) => e.prepared.slant !== null).map((e) => e.prepared.slant);
     const slantHint = slants.length >= 3 ? A.median(slants) : undefined;
     const hk = slantHint === undefined ? 'none' : Math.round(slantHint / 0.02);
-    return rawWords.map((raw, i) => {
+    const aligned = rawWords.map((raw, i) => {
       const e = entries[i];
       if (!e.aligned || e.hk !== hk) {
-        let res;
-        try {
-          res = A.alignWord(raw, { stats, slantHint, prepared: e.prepared });
-        } catch (err) {
-          res = { ok: false, reason: String(err && err.message ? err.message : err) };
-        }
-        e.aligned = Object.assign({ text: raw.text }, res);
+        e.aligned = alignOne(raw, e, slantHint);
         e.hk = hk;
       }
       return e.aligned;
     });
+    return { aligned, profile };
+  }
+
+  /** ~28 points spread along all of a unit's ink, left edge at x = 0 (baseline stays at y = 0). */
+  function shapeSample(u) {
+    const strokes = u.strokes.map((s) => s.pts).concat(u.marks.map((m) => m.pts));
+    const lens = strokes.map((pts) => G.pathLength(pts));
+    const total = lens.reduce((a, b) => a + b, 0) || 1;
+    const out = [];
+    strokes.forEach((pts, i) => {
+      const n = Math.max(2, Math.round((28 * lens[i]) / total));
+      for (const p of G.resample(pts, Math.max(lens[i] / n, 1e-3))) out.push([p.x - u.box.minX, p.y]);
+    });
+    return out;
+  }
+
+  /** Mean nearest-point distance both ways between two point sets. */
+  function shapeDistance(a, b) {
+    const oneWay = (p, q) => {
+      let sum = 0;
+      for (const [x, y] of p) {
+        let best = Infinity;
+        for (const [u, v] of q) {
+          const d = (x - u) * (x - u) + (y - v) * (y - v);
+          if (d < best) best = d;
+        }
+        sum += Math.sqrt(best);
+      }
+      return sum / p.length;
+    };
+    return 0.5 * (oneWay(a, b) + oneWay(b, a));
+  }
+
+  /**
+   * Flag examples of a letter that look unlike the writer's other examples of it. A letter that
+   * was cut in the wrong place (half of a neighbour, a stray loop) differs from its siblings, so
+   * u.odd gets large and the synthesizer avoids it. Needs a few examples of the letter.
+   */
+  function markOddOnes(byChar) {
+    for (const list of byChar.values()) {
+      for (const u of list) u.odd = 0;
+      if (list.length < 4) continue;
+      const shapes = list.map(shapeSample);
+      const score = list.map((_, i) => {
+        const d = [];
+        for (let j = 0; j < list.length; j++) if (j !== i) d.push(shapeDistance(shapes[i], shapes[j]));
+        return A.median(d);
+      });
+      const med = A.median(score);
+      const mad = A.median(score.map((v) => Math.abs(v - med)));
+      list.forEach((u, i) => {
+        u.odd = Math.min(4, Math.max(0, (score[i] - med) / (mad * 1.5 + 0.03)));
+      });
+    }
   }
 
   function buildStyle(rawWords) {
     const words = rawWords.filter((w) => w && w.strokes && w.strokes.length && w.text);
     const stats = computeStats(words);
-    const aligned = alignAll(words, stats);
+    const { aligned, profile } = alignAll(words, stats);
 
     const byChar = new Map();
     const slants = [];
@@ -105,6 +183,7 @@
         u.idx = idx;
         u.id = wi + ':' + idx;
         u.word = w;
+        u.dev = A.deviation(u, profile);
         if (!byChar.has(u.ch)) byChar.set(u.ch, []);
         byChar.get(u.ch).push(u);
         if (idx > 0) {
@@ -131,10 +210,13 @@
       }
     });
 
+    markOddOnes(byChar);
+
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     return {
       words: aligned,
       byChar,
+      profile,
       slant: slants.length ? A.median(slants) : 0,
       liftGap,
       connectivity: joins ? joinsMid / joins : 0,

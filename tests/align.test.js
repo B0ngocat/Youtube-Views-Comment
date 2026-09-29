@@ -23,7 +23,8 @@ function score(styleName) {
   let dotGood = 0;
   st.words.forEach((w, wi) => {
     if (!w.ok) return;
-    const d = w.units.map((u, k) => (u.box.minX + u.box.maxX) / 2 - raws[wi].truth.centers[k]);
+    // words are stored at the writer's own x-height, so convert back to guide x-heights
+    const d = w.units.map((u, k) => ((u.box.minX + u.box.maxX) / 2) * w.view.s - raws[wi].truth.centers[k]);
     const off = d.slice().sort((a, b) => a - b)[d.length >> 1];
     w.units.forEach((u, k) => {
       total++;

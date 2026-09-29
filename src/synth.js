@@ -84,6 +84,8 @@
           if (!prev && unit.entry.mid) c += 2;
           if (j === n - 1 && unit.exit.mid) c += 0.6;
           c += 2.5 * Math.min(unit.hc || 0, 3); // implausible shape for this character (mis-cut)
+          c += 1.2 * (unit.odd || 0); // looks unlike the writer's other examples of this letter
+          c += 4 * Math.min(Math.max(0, (unit.dev || 0) - 0.25), 1.5); // much taller / deeper than this writer usually writes it
           let rep = 0;
           for (const s of h.seq) if (s.unit === unit) rep++;
           c += variation * 1.2 * rep + variation * 0.12 * (ctx.usage.get(unit.id) || 0);
@@ -123,6 +125,42 @@
     if (cut) pts.splice(0, cut);
   }
 
+  const MAX_JOIN_TURN = 60; // degrees; a bridge that bends more than this becomes a pen lift instead
+
+  /**
+   * Join the end of stroke `aIn` to the start of `bIn` with a smooth bridge. Works on copies.
+   * Returns {a, b, bridge} or null when the join would bend sharply (then the caller lifts the
+   * pen, as a real writer would, instead of drawing a kink).
+   */
+  function bridgeJoin(aIn, bIn) {
+    const a = aIn.slice();
+    const b = bIn.slice();
+    trimEnd(a, TRIM);
+    trimStart(b, TRIM);
+    // The bridge needs enough length for the pen to make its turn at a sensible radius.
+    // If the two ends are too close for the direction change between them, trim further
+    // back on both sides until they are not.
+    let p0;
+    let p1;
+    let t0;
+    let t1;
+    for (let tries = 0; tries < 10; tries++) {
+      p0 = a[a.length - 1];
+      p1 = b[0];
+      t0 = G.dirAt(a, a.length - 1, 3);
+      t1 = G.dirAt(b, 0, 3);
+      const d = G.dist(p0, p1);
+      const c = d > 1e-6 ? { dx: (p1.x - p0.x) / d, dy: (p1.y - p0.y) / d } : t0;
+      const turn = Math.max(angleBetween(t0, c), angleBetween(c, t1));
+      if (d >= MIN_TURN_RADIUS * turn || tries === 9) break;
+      trimEnd(a, 0.05);
+      trimStart(b, 0.05);
+    }
+    const bridge = G.hermite(p0, t0, p1, t1, STEP);
+    if (G.maxTurnDeg(a.slice(-2).concat(bridge, b.slice(0, 2))) > MAX_JOIN_TURN) return null;
+    return { a, b, bridge };
+  }
+
   function assemble(choices, liftGap) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
@@ -131,13 +169,20 @@
     for (const ch of choices) {
       const u = ch.unit;
       const sc = ch.scale;
-      const conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
+      let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
       const natural = !!prev && prev.sc === 1 && sc === 1 && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
+      let bridged = null;
       if (!prev) tx = -u.box.minX * sc;
       else if (natural) tx = prev.tx;
-      else if (conn) tx = prev.tx + prev.unit.exit.x - u.entry.x;
-      else tx = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
+      else {
+        if (conn) {
+          tx = prev.tx + prev.unit.exit.x - u.entry.x;
+          bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w })));
+          if (!bridged) conn = false; // no clean join between these two: lift the pen
+        }
+        if (!conn) tx = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
+      }
 
       const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w });
       let lastStroke = null;
@@ -150,32 +195,9 @@
           for (let k = 1; k < pts.length; k++) stroke.pts.push(pts[k]);
         } else if (pi === 0 && conn) {
           stroke = prev.lastStroke;
-          trimEnd(stroke.pts, TRIM);
-          trimStart(pts, TRIM);
-          // The bridge needs enough length for the pen to make its turn at a sensible radius.
-          // If the two ends are too close for the direction change between them, trim further
-          // back on both sides until they are not.
-          let a;
-          let b;
-          let t0;
-          let t1;
-          for (let tries = 0; tries < 10; tries++) {
-            a = stroke.pts[stroke.pts.length - 1];
-            b = pts[0];
-            t0 = G.dirAt(stroke.pts, stroke.pts.length - 1, 3);
-            t1 = G.dirAt(pts, 0, 3);
-            const d = G.dist(a, b);
-            const c = d > 1e-6 ? { dx: (b.x - a.x) / d, dy: (b.y - a.y) / d } : t0;
-            const turn = Math.max(angleBetween(t0, c), angleBetween(c, t1));
-            if (d >= MIN_TURN_RADIUS * turn || tries === 9) break;
-            trimEnd(stroke.pts, 0.05);
-            trimStart(pts, 0.05);
-          }
-          const bridge = G.hermite(a, t0, b, t1, STEP);
-          const at = stroke.pts.length - 1;
-          for (const q of bridge) stroke.pts.push(q);
-          for (const q of pts) stroke.pts.push(q);
-          joins.push({ stroke, from: at, to: at + bridge.length + 1 });
+          const at = bridged.a.length - 1;
+          stroke.pts = bridged.a.concat(bridged.bridge, bridged.b);
+          joins.push({ stroke, from: at, to: at + bridged.bridge.length + 1 });
         } else {
           stroke = { pts, taperStart: 0, taperEnd: 0 };
           if (pi === 0) {
@@ -202,7 +224,7 @@
     }
     const all = out.concat(marks);
     for (const s of all) {
-      if (s.pts.length >= 5) s.pts = G.smooth(s.pts, 1.0, ['w']);
+      if (s.pts.length >= 5) s.pts = G.smooth(s.pts, 1.6, ['w']);
     }
     // safety net: extra smoothing that fades in only around each bridge
     const strokeJoins = new Map();
@@ -294,7 +316,7 @@
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 2.6, wordSpacing: 1, messiness: 0.5, variation: 0.6, slantDelta: 0, seed: 1 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1 },
       opts || {}
     );
     const rng = G.mulberry32(o.seed);
