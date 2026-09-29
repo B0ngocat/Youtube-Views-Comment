@@ -1,26 +1,39 @@
 #!/usr/bin/env bash
-# Build the password-protected site and publish it as the `gh-pages` branch.
+# Build the password-protected site and publish it on the gh-pages branch.
 #
-#   SITE_PASSWORD='your long password' npm run deploy:pages
+#   SITE_PASSWORD='...' npm run deploy:pages
 #
-# The branch holds only generated files (the login page + ciphertext), never the source or the
-# password, and is rewritten from scratch on every deploy. In the repo settings, set
-# Pages -> Source: "Deploy from a branch" -> gh-pages / (root).
+# Adds a normal commit on top of gh-pages (no force push). The branch only ever contains the
+# login page and the encrypted app. In the repo settings, set Pages to deploy from gh-pages.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-: "${SITE_PASSWORD:?Set SITE_PASSWORD (12+ characters)}"
+: "${SITE_PASSWORD:?Set SITE_PASSWORD}"
 
-OUT="$(mktemp -d)"
-trap 'rm -rf "$OUT"' EXIT
-node scripts/build-protected.js "$OUT"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+node scripts/build-protected.js "$WORK/site"
 
 REMOTE="$(git remote get-url origin)"
-NAME="$(git config user.name || echo 'Handwriting Engine deploy')"
-EMAIL="$(git config user.email || echo 'deploy@users.noreply.github.com')"
+NAME="$(git config user.name || true)"
+EMAIL="$(git config user.email || true)"
+if git ls-remote --exit-code --heads "$REMOTE" gh-pages >/dev/null 2>&1; then
+  git clone -q --branch gh-pages --depth 1 "$REMOTE" "$WORK/repo"
+else
+  git init -q -b gh-pages "$WORK/repo"
+  git -C "$WORK/repo" remote add origin "$REMOTE"
+fi
+# commit as whoever this repo is configured as
+[ -n "$NAME" ] && git -C "$WORK/repo" config user.name "$NAME"
+[ -n "$EMAIL" ] && git -C "$WORK/repo" config user.email "$EMAIL"
 
-cd "$OUT"
-git init -q -b gh-pages
+find "$WORK/repo" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+cp -r "$WORK/site/." "$WORK/repo/"
+cd "$WORK/repo"
 git add -A
-git -c user.name="$NAME" -c user.email="$EMAIL" commit -q -m "Deploy protected site"
-git push --force "$REMOTE" gh-pages
-echo "Published branch gh-pages."
+if git diff --cached --quiet; then
+  echo "Nothing changed."
+  exit 0
+fi
+git commit -q -m "Update site"
+git push -q origin gh-pages
+echo "Published to gh-pages."
