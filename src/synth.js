@@ -84,7 +84,8 @@
           if (!prev && unit.entry.mid) c += 2;
           if (j === n - 1 && unit.exit.mid) c += 0.6;
           c += 2.5 * Math.min(unit.hc || 0, 3); // implausible shape for this character (mis-cut)
-          c += 1.2 * (unit.odd || 0); // looks unlike the writer's other examples of this letter
+          c += 2 * (unit.odd || 0); // looks unlike the writer's other examples of this letter
+          if (unit.word.suspect) c += 1.5; // taken from a word the aligner was unsure about
           c += 4 * Math.min(Math.max(0, (unit.dev || 0) - 0.25), 1.5); // much taller / deeper than this writer usually writes it
           let rep = 0;
           for (const s of h.seq) if (s.unit === unit) rep++;

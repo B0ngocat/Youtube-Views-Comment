@@ -355,7 +355,33 @@
 
   // ---- cut costs ------------------------------------------------------------------------
 
-  function computeCutCosts(P, first, sStart, sEnd, sId, strokeMaxX, strokeDot) {
+  /** Do two polylines cross each other? (bounding-box pruned segment intersection) */
+  function polylinesCross(a, b) {
+    const ccw = (p, q, r) => (r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x);
+    for (let i = 1; i < a.length; i++) {
+      const a0 = a[i - 1];
+      const a1 = a[i];
+      const ax0 = Math.min(a0.x, a1.x);
+      const ax1 = Math.max(a0.x, a1.x);
+      const ay0 = Math.min(a0.y, a1.y);
+      const ay1 = Math.max(a0.y, a1.y);
+      for (let j = 1; j < b.length; j++) {
+        const b0 = b[j - 1];
+        const b1 = b[j];
+        if (Math.max(b0.x, b1.x) < ax0 || Math.min(b0.x, b1.x) > ax1 || Math.max(b0.y, b1.y) < ay0 || Math.min(b0.y, b1.y) > ay1) continue;
+        if (ccw(a0, a1, b0) * ccw(a0, a1, b1) < 0 && ccw(b0, b1, a0) * ccw(b0, b1, a1) < 0) return true;
+      }
+    }
+    return false;
+  }
+
+  /** 0..1: how much of the narrower of two strokes' x-ranges lies inside the other's. */
+  function xOverlap(a, b) {
+    const w = Math.max(0.15, Math.min(a.maxX - a.minX, b.maxX - b.minX));
+    return clamp((Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX)) / w, 0, 1);
+  }
+
+  function computeCutCosts(P, first, sStart, sEnd, sId, strokeMaxX, strokeDot, together) {
     const N = P.length;
     const cost = new Float64Array(N + 1).fill(Infinity);
     const W = 4;
@@ -364,6 +390,7 @@
         const prevMax = strokeMaxX[sId[k] - 1];
         const over = prevMax - P[k].x;
         cost[k] = clamp((over - 0.25) * 1.5, 0, 2) + (strokeDot[sId[k]] ? 2.5 : 0); // a dot belongs to the letter before it
+        cost[k] += together[sId[k]]; // strokes that cross or sit on top of each other are one letter (x, a t and its bar)
         continue;
       }
       const si = sId[k];
@@ -434,6 +461,7 @@
     const sEnd = [];
     const strokeMaxX = [];
     const strokeDot = [];
+    const strokeInfos = [];
     primary.forEach((s, si) => {
       sStart.push(P.length);
       let mx = -Infinity;
@@ -447,11 +475,20 @@
       strokeMaxX.push(mx);
       const inf = strokeInfo(s);
       strokeDot.push(inf.len < 0.35 && inf.cy > 1.0);
+      strokeInfos.push(inf);
     });
     const N = P.length;
     if (N < n * 3) return { ok: false, reason: 'too short' };
 
-    const cutCost = computeCutCosts(P, first, sStart, sEnd, sId, strokeMaxX, strokeDot);
+    // how strongly each stroke belongs with the one before it
+    const together = primary.map((st, si) => {
+      if (si === 0 || strokeDot[si]) return 0;
+      let c = 0;
+      if (polylinesCross(primary[si - 1], st)) c += 3;
+      c += 1.5 * Math.max(0, xOverlap(strokeInfos[si - 1], strokeInfos[si]) - 0.4);
+      return c;
+    });
+    const cutCost = computeCutCosts(P, first, sStart, sEnd, sId, strokeMaxX, strokeDot, together);
     const isMid = (c) => c > 0 && c < N && !first[c];
 
     // expected widths
@@ -676,7 +713,9 @@
     let best = units[0];
     let bs = Infinity;
     for (const u of units) {
-      const s = score(u);
+      // a late bar or dot that crosses a letter's strokes belongs to that letter
+      const crosses = u.strokes.some((p) => polylinesCross(p.pts, stroke));
+      const s = score(u) - (crosses ? 1 : 0);
       if (s < bs) {
         bs = s;
         best = u;
