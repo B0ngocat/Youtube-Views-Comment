@@ -233,6 +233,19 @@ async function inkPixels(page, selector) {
   await page.waitForTimeout(400);
   check('tapping it again restores it', (await page.evaluate(() => window.HW_APP.style.byChar.get('o').length)) === nO);
 
+  console.log('Math mode');
+  await page.click('#tab-write');
+  await page.fill('#text', String.raw`\frac{a}{b} + x^2 = \sqrt{x}`);
+  await page.check('#mathMode');
+  await page.waitForTimeout(500);
+  const mathInfo = await page.evaluate(() => ({ strokes: window.HW_APP.layout.strokes.length, help: !document.querySelector('#mathHelp').hidden }));
+  check('math mode lays out a fraction, exponent and root', mathInfo.strokes > 8, JSON.stringify(mathInfo));
+  check('math mode shows its help line', mathInfo.help);
+  await page.uncheck('#mathMode');
+  await page.waitForTimeout(300);
+  check('switching math mode off goes back to ordinary text', (await page.evaluate(() => document.querySelector('#mathHelp').hidden)) === true);
+  check('the Teach tab lists a Math round', await page.evaluate(() => window.HW_APP.rounds().some((r) => r.id === 'math')));
+
   console.log('Layout on iPad and phone sized screens');
   for (const [name, w, h] of [['ipad-portrait', 820, 1180], ['ipad-landscape', 1180, 820], ['phone', 390, 844]]) {
     await page.setViewportSize({ width: w, height: h });

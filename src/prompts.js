@@ -47,6 +47,20 @@
       chars: ('abcdefghijklmnopqrstuvwxyz' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' + 'abcdefghijklmnopqrstuvwxyz').split(''),
     },
     {
+      id: 'math',
+      title: 'Math',
+      kind: 'letter',
+      blurb: 'Write each symbol and digit on its own, the way you write it in math: operators twice, the rest once. Brackets stretch to fit what is inside them, so write them at normal height. Skip any you never use.',
+      chars: [
+        ...'+-=×÷±<>≤≥≠≈→',
+        ...'()[]{}|',
+        ...'∫∑∞',
+        ...'πθΔαβλμσφω∂',
+        ...'0123456789',
+        ...'+-=×÷±<>≤≥≠≈→',
+      ],
+    },
+    {
       id: 'ln',
       title: 'Full lines',
       kind: 'line',
@@ -98,6 +112,7 @@
     { title: 'Capitals', chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
     { title: 'Digits', chars: '0123456789' },
     { title: 'Punctuation', chars: '.,!?\'"-:;()/&@#%+=$*' },
+    { title: 'Math', chars: '×÷±<>≤≥≠≈→[]{}|∫∑∞πθΔαβλμσφω∂' },
   ];
 
   const api = { ROUNDS, tokens, CHAR_GROUPS };

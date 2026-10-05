@@ -14,6 +14,8 @@ The Single letters round has you write each letter on its own (lowercase twice, 
 
 The Full lines round has you write whole sentences on one line. From those the app learns how you really space words and how your baseline, size and slant drift along a line, and uses that when it writes. The words in each line also count as extra samples. At least 3 lines are needed. Word gaps are taken as measured; baseline, size and slant drift are measured less reliably from short lines, so they are kept within ordinary human ranges. The Natural variation slider scales the drift (30% is the default, lower is neater).
 
+Math mode (a checkbox under the text box in the Write tab) lays out math in your hand. It reads TeX-style input: `x^2`, `x_1`, `\frac{a}{b}`, `\sqrt{x}`, `\lim_{x \to 0}`, `\int_0^1 x\,dx`, `\sum_{i=1}^{n}`, and `->`, `<=`, `>=`, `!=` for the arrows and comparisons. Exponents and subscripts are smaller and shifted, fractions are stacked with a bar, and brackets stretch to fit what is inside. Letters and digits come from your samples. For symbols, the Math round in the Teach tab has you write each one on its own (the operators twice); a symbol you haven't written yet is drawn for you with a small wobble, and your own is used as soon as you have written it. Plain paper looks best for math.
+
 Export (in the Teach tab) saves your samples to a file, and Import loads them on another device.
 
 ## Apple Pencil
@@ -36,7 +38,7 @@ The encrypted file is public, so a short or guessable password can be cracked of
 
 Each captured word is cut into letters along the pen path, so joins and loops stay attached to the right letter. To write new text it picks from your recorded letters (reusing real letter pairs when it has them), joins them with smooth curves and adds a little drift so the result doesn't look copy-pasted.
 
-The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses and joins them, `render.js` draws the ink and `capture.js` is the pad.
+The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses and joins them, `math.js` lays out math, `render.js` draws the ink and `capture.js` is the pad.
 
 ## Tests
 

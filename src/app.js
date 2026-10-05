@@ -517,7 +517,7 @@
   }
 
   function saveSettings() {
-    const s = { text: $('#text').value, paperKind: $('#paperKind').value, ink: $('#ink').value };
+    const s = { text: $('#text').value, paperKind: $('#paperKind').value, ink: $('#ink').value, mathMode: $('#mathMode').checked };
     CONTROLS.forEach((k) => (s[k] = $('#' + k).value));
     store.set('hw.settings.v1', s);
   }
@@ -526,6 +526,8 @@
     const s = store.get('hw.settings.v1', null);
     if (!s) return;
     if (typeof s.text === 'string') $('#text').value = s.text;
+    $('#mathMode').checked = !!s.mathMode;
+    $('#mathHelp').hidden = !s.mathMode;
     ['paperKind', 'ink'].forEach((k) => {
       if (s[k]) $('#' + k).value = s[k];
     });
@@ -556,18 +558,20 @@
     $('#empty').hidden = !empty;
     const text = $('#text').value;
     const o = readOpts();
-    const missing = HW.style.missingChars(style, text);
-    const warn = $('#warn');
-    if (missing.length && !empty) {
-      warn.hidden = false;
-      warn.textContent = 'No sample yet for: ' + missing.join(' ') + '. Those characters are skipped. Add them in the Teach tab.';
-    } else warn.hidden = true;
+    const math = $('#mathMode').checked;
 
     const W = Math.max(320, Math.min(1100, Math.floor(host.clientWidth)));
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     let lay;
     if (empty) lay = { width: W, height: 260, xh: o.xh, strokes: [], baselines: [80], lineHeightPx: o.lineHeight * o.xh, missing: [] };
+    else if (math) lay = HW.math.layout(style, text, Object.assign({}, o, { width: W, seed }));
     else lay = HW.synth.layout(style, text, Object.assign({}, o, { width: W, seed }));
+    const missing = empty ? [] : math ? lay.missing : HW.style.missingChars(style, text);
+    const warn = $('#warn');
+    if (missing.length) {
+      warn.hidden = false;
+      warn.textContent = 'No sample yet for: ' + missing.join(' ') + '. Those characters are skipped. Add them in the Teach tab.';
+    } else warn.hidden = true;
     lastLayout = lay;
     canvas.width = Math.round(lay.width * dpr);
     canvas.height = Math.round(Math.ceil(lay.height) * dpr);
@@ -581,6 +585,11 @@
       saveSettings();
       queueRender();
     });
+  });
+  $('#mathMode').addEventListener('change', () => {
+    $('#mathHelp').hidden = !$('#mathMode').checked;
+    saveSettings();
+    queueRender();
   });
   $('#text').addEventListener('input', () => {
     saveSettings();

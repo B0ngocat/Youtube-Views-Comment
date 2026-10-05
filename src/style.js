@@ -195,7 +195,7 @@
     const refs = [];
     for (const [ch, list] of byChar) {
       const iso = list.filter((u) => u.iso);
-      if (iso.length >= 2) refs.push({ ch, units: iso });
+      if (iso.length >= 2 && /[A-Za-z0-9]/.test(ch)) refs.push({ ch, units: iso });
     }
     // recompute only when a new letter gets references, or every few more references, not for each one added
     const sig = refs.map((r) => r.ch).join('') + ':' + Math.floor(refs.reduce((n, r) => n + r.units.length, 0) / 6);

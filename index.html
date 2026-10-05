@@ -90,6 +90,8 @@
             <label for="text" class="lbl">Text to write</label>
             <textarea id="text" rows="5" spellcheck="false">The quick brown fox jumps over the lazy dog.
 Pack my box with five dozen liquor jugs.</textarea>
+            <label class="check"><input type="checkbox" id="mathMode"> Math mode</label>
+            <p class="muted small" id="mathHelp" hidden>Write math like this: <code>x^2</code>, <code>x_1</code>, <code>\frac{a}{b}</code>, <code>\sqrt{x}</code>, <code>\lim_{x \to 0}</code>, <code>\int_0^1 x\,dx</code>, <code>\sum_{i=1}^{n}</code>. A new line starts a new row. Symbols you have not written yet are drawn for you. Plain paper looks best.</p>
             <p class="warn" id="warn" hidden></p>
           </div>
           <div class="paperhost" id="paperhost">
@@ -145,6 +147,7 @@ Pack my box with five dozen liquor jugs.</textarea>
   <script src="src/align.js"></script>
   <script src="src/style.js"></script>
   <script src="src/synth.js"></script>
+  <script src="src/math.js"></script>
   <script src="src/render.js"></script>
   <script src="src/lines.js"></script>
   <script src="src/capture.js"></script>
