@@ -157,4 +157,45 @@ function writeWord(text, o) {
   };
 }
 
-module.exports = { writeWord, GLYPHS: L };
+/**
+ * A whole sentence written in one go, as on the "full lines" round: words separated by gaps,
+ * with a baseline that wanders, size and slant that drift, and a slight slope. Everything that
+ * varies is drawn from known distributions (the defaults below) so a test can check that the
+ * engine measures them back. Returns a raw record like a captured word, plus the truth.
+ */
+function writeLine(text, o) {
+  o = Object.assign(
+    { seed: 1, guideXh: 52, guideBase: 189, size: 0.5, gap: 0.9, gapSd: 0.15, baseSd: 0.06, baseRho: 0.5, sizeSd: 0.05, sizeRho: 0.5, slantSd: 0.03, slant: 0.1, slope: 0, style: 'print', x0: 30, float: 0.12, minGap: 0.35 },
+    o || {}
+  );
+  const rng = G.mulberry32(o.seed * 977 + 3);
+  const xhRef = o.guideXh * o.size;
+  const words = text.split(/\s+/).filter(Boolean);
+  const strokes = [];
+  const truth = { gaps: [], base: [], size: [], slant: [], xhRef };
+  let x = o.x0;
+  let off = 0;
+  let lsz = 0;
+  let prevRight = null;
+  words.forEach((w, k) => {
+    off = o.baseRho * off + Math.sqrt(1 - o.baseRho * o.baseRho) * o.baseSd * G.gaussian(rng);
+    lsz = o.sizeRho * lsz + Math.sqrt(1 - o.sizeRho * o.sizeRho) * o.sizeSd * G.gaussian(rng);
+    const xh = xhRef * Math.exp(lsz);
+    const baseY = o.guideBase - o.float * o.guideXh - off * xhRef + o.slope * (x - o.x0);
+    const slant = o.slant + o.slantSd * G.gaussian(rng);
+    const rec = writeWord(w, { style: o.style, seed: o.seed * 100 + k, xh, baseline: baseY, x0: x, slant });
+    let left = Infinity;
+    let right = -Infinity;
+    rec.strokes.forEach((st) => st.forEach((p) => { left = Math.min(left, p[0]); right = Math.max(right, p[0]); }));
+    rec.strokes.forEach((st) => strokes.push(st.map((p) => [p[0], p[1], p[2] + k * 4000, p[3]])));
+    if (prevRight !== null) truth.gaps.push((left - prevRight) / xhRef);
+    truth.base.push(baseY);
+    truth.size.push(xh);
+    truth.slant.push(slant);
+    prevRight = right;
+    x = right + Math.max(o.minGap, o.gap + o.gapSd * G.gaussian(rng)) * xhRef;
+  });
+  return { text, xh: o.guideXh, baseline: o.guideBase, pen: true, strokes, truth };
+}
+
+module.exports = { writeWord, writeLine, GLYPHS: L };

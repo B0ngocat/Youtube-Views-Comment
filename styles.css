@@ -116,6 +116,7 @@ textarea { resize: vertical; font-size: 1rem; }
 /* the canvas is taken out of flow so it can never stop the container from shrinking */
 .padwrap canvas { position: absolute; left: 0; top: 0; display: block; touch-action: none; cursor: crosshair; }
 .padhint { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+.padhint.problem { color: var(--warn); font-weight: 600; }
 .penstate { font-size: 0.82rem; margin-top: 4px; min-height: 1.2em; }
 
 .chipgrid { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }

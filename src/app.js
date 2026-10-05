@@ -53,12 +53,14 @@
     return list;
   };
   const tokensOf = (r) => HW.prompts.tokens(rounds()[r]);
-  const capturedKeys = () => new Set(words.map((w) => w.key));
+  // a sentence written as a line is stored as its words; the line counts as done when they exist
+  const capturedKeys = () => new Set(words.map((w) => w.key).concat(words.filter((w) => w.line).map((w) => w.line)));
 
   // ---- style -----------------------------------------------------------------------------
   function rebuild() {
     style = HW.style.buildStyle(words);
     updateStatus();
+    updateRhythmNotes();
     renderCoverage();
     renderGallery();
     renderRounds();
@@ -72,6 +74,23 @@
   function persist() {
     const ok = store.set('hw.words.v1', words);
     if (!ok) $('#status').textContent = 'Could not save in this browser (storage full?). Use Export to keep a copy.';
+  }
+
+  function updateRhythmNotes() {
+    const r = style && style.rhythm;
+    const note = $('#rhythmNote');
+    const hint = $('#rhythmHint');
+    if (r && r.learned) {
+      note.textContent = 'Your line rhythm: learned from ' + r.lines + ' lines (word gaps, baseline, size and slant drift).';
+      hint.hidden = false;
+      hint.textContent = 'Learned from your lines: 30% reproduces your own drift. Lower is neater, higher exaggerates.';
+    } else {
+      const n = r ? r.lines : 0;
+      note.textContent = n
+        ? 'Full lines: ' + n + ' so far, at least 3 are needed to learn your rhythm.'
+        : 'Write a few lines in the Full lines round so spacing and drift come from your own writing.';
+      hint.hidden = true;
+    }
   }
 
   function updateStatus() {
@@ -94,7 +113,7 @@
       b.type = 'button';
       b.append(el('b', '', round.title), el('span', '', done + ' / ' + toks.length));
       b.addEventListener('click', () => {
-        commit();
+        if (commit() === 'failed') return;
         goTo(r, firstOpen(r));
       });
       host.appendChild(b);
@@ -114,10 +133,13 @@
     const keys = capturedKeys();
     const tok = toks[cur.i];
     $('#roundBlurb').textContent = round.blurb || '';
-    $('#wordCount').textContent = 'Word ' + (cur.i + 1) + ' of ' + toks.length;
+    $('#wordCount').textContent = (tok.kind === 'line' ? 'Line ' : 'Word ') + (cur.i + 1) + ' of ' + toks.length;
+    setHint(tok.kind === 'line' ? LINE_HINT : WORD_HINT, false);
     const host = $('#prompt');
     host.textContent = '';
-    if (round.chars) {
+    if (tok.kind === 'line') {
+      host.appendChild(el('span', 'w cur', tok.text));
+    } else if (round.chars) {
       host.append(el('span', 'muted small', 'Write this mark: '), el('span', 'big', tok.text));
     } else {
       const sentence = round.sentences[tok.si];
@@ -133,8 +155,20 @@
     onPadChange();
   }
 
+  const WORD_HINT = $('#padHint').textContent;
+  const LINE_HINT = 'Write the whole sentence on one line, at your normal size and speed, with normal gaps between words.';
+  function setHint(text, problem) {
+    const h = $('#padHint');
+    h.textContent = text;
+    h.classList.toggle('problem', !!problem);
+  }
+
   function onPadChange() {
     const empty = !pad.strokes.length;
+    if ($('#padHint').classList.contains('problem')) {
+      const tok = tokensOf(cur.r)[cur.i];
+      setHint(tok.kind === 'line' ? LINE_HINT : WORD_HINT, false); // writing again clears the warning
+    }
     const toks = tokensOf(cur.r);
     const last = cur.r === rounds().length - 1 && cur.i === toks.length - 1;
     $('#btnNext').textContent = empty ? 'Skip' : last ? 'Save' : 'Next';
@@ -150,6 +184,12 @@
 
   function loadCurrentInk() {
     const tok = tokensOf(cur.r)[cur.i];
+    if (tok.kind === 'line') {
+      // a line is stored as its words, at their exact pad positions: put them back together
+      const parts = words.filter((w) => w.line === tok.key).sort((a, b) => a.pos - b.pos);
+      pad.load(parts.flatMap((w) => w.strokes));
+      return;
+    }
     const existing = words.find((w) => w.key === tok.key);
     pad.load(existing ? existing.strokes : []);
   }
@@ -161,18 +201,43 @@
     renderPrompt();
   }
 
-  /** Save whatever is on the pad for the current word (if anything). */
+  /**
+   * Save whatever is on the pad for the current word or line.
+   * Returns 'saved', 'empty' (nothing written), or 'failed' (a line couldn't be split into words;
+   * the pad is left as it is so it can be rewritten).
+   */
   function commit() {
     const tok = tokensOf(cur.r)[cur.i];
     const snap = pad.snapshot(tok.text);
-    if (!snap) return false;
+    if (!snap) return 'empty';
+    if (tok.kind === 'line') {
+      const res = HW.lines.splitLine(snap);
+      if (!res.ok) {
+        setHint(
+          res.reason === 'words touch'
+            ? 'The words run together, so I can\'t tell where each one starts. Leave a clear gap between words and write the line again.'
+            : 'I couldn\'t tell where the words are. Leave clearer gaps between words (wider than the gaps between letters) and write the line again.',
+          true
+        );
+        return 'failed';
+      }
+      words = words.filter((w) => w.line !== tok.key);
+      res.words.forEach((w, i) => {
+        w.line = tok.key;
+        w.key = tok.key + '.w' + i;
+        words.push(w);
+      });
+      persist();
+      scheduleRebuild();
+      return 'saved';
+    }
     snap.key = tok.key;
     const at = words.findIndex((w) => w.key === tok.key);
     if (at >= 0) words[at] = snap;
     else words.push(snap);
     persist();
     scheduleRebuild();
-    return true;
+    return 'saved';
   }
 
   function advance() {
@@ -188,11 +253,11 @@
   }
 
   $('#btnNext').addEventListener('click', () => {
-    commit();
+    if (commit() === 'failed') return;
     advance();
   });
   $('#btnPrev').addEventListener('click', () => {
-    commit();
+    if (commit() === 'failed') return;
     back();
   });
   $('#btnUndo').addEventListener('click', () => pad.undo());
@@ -217,7 +282,7 @@
   $('#btnCustom').addEventListener('click', () => {
     const v = $('#customText').value.trim().replace(/\s+/g, ' ');
     if (!v) return;
-    commit();
+    if (commit() === 'failed') return;
     customSentences.push(v);
     store.set('hw.custom.v1', customSentences);
     $('#customText').value = '';
@@ -301,10 +366,11 @@
       });
       box.appendChild(x);
       box.addEventListener('click', () => {
-        const at = rounds().findIndex((_, r) => tokensOf(r).some((t) => t.key === raw.key));
+        const home = raw.line || raw.key;
+        const at = rounds().findIndex((_, r) => tokensOf(r).some((t) => t.key === home));
         if (at < 0) return;
-        commit();
-        goTo(at, tokensOf(at).findIndex((t) => t.key === raw.key));
+        if (commit() === 'failed') return;
+        goTo(at, tokensOf(at).findIndex((t) => t.key === home));
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
       host.appendChild(box);
@@ -501,7 +567,7 @@
     showTab('teach');
   });
   $('#tab-write').addEventListener('click', () => {
-    commit();
+    if (commit() === 'failed') return;
     showTab('write');
   });
 

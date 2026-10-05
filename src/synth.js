@@ -258,13 +258,14 @@
 
   // ---- natural imperfection -------------------------------------------------------------
 
-  function deform(strokes, rng, m) {
+  function deform(strokes, rng, m, wordLevel) {
     if (m <= 0) return;
     const nY = G.makeNoise(rng);
     const nS = G.makeNoise(rng);
     const nT = G.makeNoise(rng);
-    const off = (rng() * 2 - 1) * 0.05 * m;
-    const gs = 1 + G.gaussian(rng) * 0.025 * m;
+    // per-word offset and size are replaced by the writer's measured line rhythm when we have it
+    const off = wordLevel === false ? 0 : (rng() * 2 - 1) * 0.05 * m;
+    const gs = wordLevel === false ? 1 : 1 + G.gaussian(rng) * 0.025 * m;
     for (const s of strokes) {
       for (const p of s.pts) {
         const u = p.x;
@@ -302,7 +303,7 @@
     const choices = chooseUnits(style, chars, rng, ctx);
     if (!choices.length) return null;
     const strokes = assemble(choices, style.liftGap);
-    deform(strokes, rng, ctx.messiness);
+    deform(strokes, rng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
     for (const s of strokes) for (const p of s.pts) p.x -= b.minX;
     return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices };
@@ -321,7 +322,12 @@
       opts || {}
     );
     const rng = G.mulberry32(o.seed);
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set() };
+    // The writer's own line rhythm (word gaps, baseline / size / slant drift), when they have
+    // written full lines. The Natural variation slider scales it: 30% (the default) is exactly as
+    // measured, 0 is none, above 30% exaggerates.
+    const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
+    const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;
@@ -333,14 +339,20 @@
     const baselines = [];
     let line = 0;
     let x = margin;
-    let slope = (rng() * 2 - 1) * 0.006 * o.messiness;
+    const pickSlope = () => (R ? Math.tan(R.slopeSd * k * G.gaussian(rng)) : (rng() * 2 - 1) * 0.006 * o.messiness);
+    let slope = pickSlope();
     let wordOff = 0;
+    let sizeState = 0; // log scale of the current word, drifts like the writer's does
     baselines.push(firstBase);
+    // AR(1): next = rho * previous + noise, so drift is smooth along the line instead of jumping
+    const ar = (prev, rho, sd) => rho * prev + Math.sqrt(1 - rho * rho) * sd * G.gaussian(rng);
 
     const newLine = () => {
       line++;
       x = margin;
-      slope = (rng() * 2 - 1) * 0.006 * o.messiness;
+      slope = pickSlope();
+      wordOff = 0;
+      sizeState = 0;
       baselines.push(firstBase + line * lineH);
     };
 
@@ -351,16 +363,24 @@
       for (const word of words) {
         const w = synthWord(style, word, rng, ctx);
         if (!w) continue;
-        // to pixels, with slant
+        // to pixels, with slant (and, from the writer's rhythm, this word's own size and slant)
+        let sc = 1;
+        let tanW = tanS;
+        if (R) {
+          sizeState = ar(sizeState, R.sizeRho, R.sizeSd * k);
+          sc = Math.exp(sizeState);
+          tanW = Math.tan(style.slant + (o.slantDelta * Math.PI) / 180 + R.slantSd * k * G.gaussian(rng));
+        }
         const pxStrokes = w.strokes.map((s) => ({
           taperStart: s.taperStart,
           taperEnd: s.taperEnd,
-          pts: s.pts.map((p) => ({ x: (p.x + p.y * tanS) * xh, y: -p.y * xh, w: p.w })),
+          pts: s.pts.map((p) => ({ x: (p.x + p.y * tanW) * xh * sc, y: -p.y * xh * sc, w: p.w })),
         }));
         const b = bounds(pxStrokes);
         const wpx = b.maxX - b.minX;
         if (x > margin && x + wpx > o.width - margin) newLine();
-        wordOff = wordOff * 0.7 + (rng() * 2 - 1) * 0.035 * xh * o.messiness;
+        if (R) wordOff = ar(wordOff / xh, R.baseRho, R.baseSd * k) * xh;
+        else wordOff = wordOff * 0.7 + (rng() * 2 - 1) * 0.035 * xh * o.messiness;
         const base = baselines[line] + slope * (x - margin) + wordOff;
         const dx = x - b.minX;
         for (const s of pxStrokes) {
@@ -370,7 +390,8 @@
           }
           strokesOut.push(s);
         }
-        x += wpx + spaceW * (0.85 + 0.3 * rng());
+        const gap = R ? Math.max(0.15, R.gapMean + R.gapSd * k * G.gaussian(rng)) * xh * o.wordSpacing : spaceW * (0.85 + 0.3 * rng());
+        x += wpx + gap;
       }
     });
 

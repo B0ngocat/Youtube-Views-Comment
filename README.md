@@ -10,6 +10,8 @@ It runs in the browser. Nothing is uploaded; your samples stay in the browser's 
 2. Look at "What it learned". Each letter it cut out of your words has its own colour. If a word looks wrong, tap it and write it again.
 3. Switch to the Write tab, type some text and adjust size, slant, spacing, pen and paper. "Write it again" gives a new take. You can save the result as PNG or SVG.
 
+The Full lines round has you write whole sentences on one line. From those the app learns how you really space words and how your baseline, size and slant drift along a line, and uses that when it writes. The words in each line also count as extra samples. At least 3 lines are needed; the Natural variation slider scales the drift (30% is as measured, lower is neater).
+
 Export (in the Teach tab) saves your samples to a file, and Import loads them on another device.
 
 ## Apple Pencil

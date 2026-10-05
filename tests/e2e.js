@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { chromium } = require('playwright');
-const { writeWord } = require('./synth-writer');
+const { writeWord, writeLine } = require('./synth-writer');
 
 const OUT = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'hw-e2e-'));
 fs.mkdirSync(OUT, { recursive: true });
@@ -116,9 +116,43 @@ async function inkPixels(page, selector) {
   await page.evaluate(() => window.HW_APP.pad.clear());
   await page.click('#btnUndo', { force: true }).catch(() => {});
 
+  console.log('Full lines: write whole sentences, learn the rhythm');
+  const lineRound = await page.evaluate(() => window.HW_APP.rounds().findIndex((r) => r.id === 'ln'));
+  check('the Full lines round exists', lineRound > 0, String(lineRound));
+  await page.evaluate((r) => window.HW_APP.goTo(r, 0), lineRound);
+  const lineToks = await page.evaluate((r) => window.HW_APP.tokensOf(r).map((t) => t.text), lineRound);
+  check('hint asks for a whole sentence on one line', /whole sentence/.test(await page.textContent('#padHint')));
+  const before = await page.evaluate(() => window.HW_APP.words.length);
+
+  // a line whose words run together is refused, with a message, and nothing is saved
+  await drawOnPad(page, writeLine(lineToks[0], { seed: 90, guideXh: g.xh, guideBase: g.baseline, size: 0.4, gap: -0.3, gapSd: 0, minGap: -0.5 }), 'pen');
+  await page.click('#btnNext');
+  check('a line with no gaps between words is refused with a message', /gaps|run together/.test(await page.textContent('#padHint')) && (await page.evaluate(() => window.HW_APP.words.length)) === before);
+  check('...and stays on the same line so it can be rewritten', (await page.evaluate(() => window.HW_APP.cur.i)) === 0);
+  await page.click('#btnClear');
+
+  for (let k = 0; k < 5; k++) {
+    await drawOnPad(page, writeLine(lineToks[k], { seed: 100 + k, guideXh: g.xh, guideBase: g.baseline, size: 0.4, gap: 1.0, gapSd: 0.15 }), 'pen');
+    await page.click('#btnNext');
+    await page.waitForTimeout(80);
+  }
+  await page.waitForTimeout(500);
+  const afterLines = await page.evaluate(() => ({
+    words: window.HW_APP.words.length,
+    lines: new Set(window.HW_APP.words.filter((w) => w.line).map((w) => w.line)).size,
+    rhythm: window.HW_APP.style.rhythm,
+    note: document.querySelector('#rhythmNote').textContent,
+  }));
+  check('five lines were saved as their words', afterLines.lines === 5 && afterLines.words > before + 20, JSON.stringify({ lines: afterLines.lines, words: afterLines.words }));
+  check('the rhythm was learned from them', afterLines.rhythm.learned === true && Math.abs(afterLines.rhythm.gapMean - 1.0) < 0.4, JSON.stringify(afterLines.rhythm));
+  check('the page says so', /learned from 5 lines/.test(afterLines.note), afterLines.note);
+  await page.screenshot({ path: path.join(OUT, '2b-teach-lines.png'), fullPage: true });
+  const totalWords = afterLines.words;
+
   console.log('Write');
   await page.click('#tab-write');
   await page.waitForTimeout(400);
+  check('Write tab explains the learned drift', await page.isVisible('#rhythmHint'));
   const ink1 = await inkPixels(page, '#paper');
   check('handwriting was drawn on the paper', ink1 > 3000, String(ink1));
   const sig1 = await page.evaluate(() => JSON.stringify(window.HW_APP.layout.strokes[3].pts.slice(0, 20)));
@@ -151,12 +185,12 @@ async function inkPixels(page, selector) {
   await page.reload();
   await page.waitForSelector('#pad', { state: 'attached' }); // it reopens on the Write tab
   await page.waitForTimeout(400);
-  check('samples survive a reload', (await page.evaluate(() => window.HW_APP.words.length)) === 30);
+  check('samples survive a reload', (await page.evaluate(() => window.HW_APP.words.length)) === totalWords);
   check('opens on the Write tab once it has learned enough', await page.evaluate(() => !document.querySelector('#write').hidden));
   await page.click('#tab-teach');
   const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('#btnExport')]);
   const exported = JSON.parse(fs.readFileSync(await dl2.path(), 'utf8'));
-  check('export contains every word', exported.words.length === 30);
+  check('export contains every word', exported.words.length === totalWords);
   await page.click('#btnReset');
   await page.waitForTimeout(300);
   check('reset clears everything', (await page.evaluate(() => window.HW_APP.words.length)) === 0);
@@ -164,7 +198,7 @@ async function inkPixels(page, selector) {
   fs.writeFileSync(file, JSON.stringify(exported));
   await page.setInputFiles('#fileImport', file);
   await page.waitForTimeout(600);
-  check('import brings the samples back', (await page.evaluate(() => window.HW_APP.words.length)) === 30);
+  check('import brings the samples back', (await page.evaluate(() => window.HW_APP.words.length)) === totalWords);
 
   console.log('Layout on iPad and phone sized screens');
   for (const [name, w, h] of [['ipad-portrait', 820, 1180], ['ipad-landscape', 1180, 820], ['phone', 390, 844]]) {

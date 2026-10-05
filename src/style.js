@@ -102,7 +102,7 @@
             res = { ok: false, reason: String(err && err.message ? err.message : err) };
           }
         }
-        e.aligned = Object.assign({ text: raw.text }, res);
+        e.aligned = Object.assign({ text: raw.text, ownSlant: own }, res);
         e.hk = hk;
       }
       return e.aligned;
@@ -173,6 +173,103 @@
     }
   }
 
+  // ---- rhythm: how this writer's lines behave -------------------------------------------
+
+  /** Robust standard deviation (median absolute deviation), 0 for fewer than 3 values. */
+  function robustSd(v) {
+    if (v.length < 3) return 0;
+    const m = A.median(v);
+    return 1.4826 * A.median(v.map((x) => Math.abs(x - m)));
+  }
+
+  /** Lag-1 correlation within lines, pooled; series is a list of arrays. */
+  function pooledRho(series) {
+    let num = 0;
+    let den = 0;
+    for (const s of series) {
+      for (let i = 0; i < s.length; i++) den += s[i] * s[i];
+      for (let i = 1; i < s.length; i++) num += s[i] * s[i - 1];
+    }
+    return den > 1e-12 ? Math.max(0, Math.min(0.9, num / den)) : 0;
+  }
+
+  /**
+   * Measure how the writer's full lines behave, from words written as part of a line:
+   * gaps between words, how the baseline wanders and slopes, how size and slant drift.
+   * Distances are in the writer's own x-heights. Returns {learned: false} until there are
+   * enough lines, in which case the synthesizer uses generic values.
+   */
+  function computeRhythm(rawWords, aligned) {
+    const lines = new Map();
+    rawWords.forEach((raw, i) => {
+      const a = aligned[i];
+      if (!raw.line || !a || !a.ok || !a.view) return;
+      let left = Infinity;
+      let right = -Infinity;
+      for (const st of raw.strokes) for (const p of st) {
+        if (p[0] < left) left = p[0];
+        if (p[0] > right) right = p[0];
+      }
+      if (!lines.has(raw.line)) lines.set(raw.line, []);
+      lines.get(raw.line).push({
+        pos: raw.pos || 0,
+        left,
+        right,
+        xh: raw.xh * a.view.s,
+        base: raw.baseline + a.view.dy * raw.xh,
+        slant: a.ownSlant,
+      });
+    });
+    const gaps = [];
+    const baseSeries = [];
+    const sizeSeries = [];
+    const slopes = [];
+    const slantDev = [];
+    let nLines = 0;
+    for (const words of lines.values()) {
+      if (words.length < 3) continue;
+      words.sort((p, q) => p.pos - q.pos);
+      nLines++;
+      const xhLine = A.median(words.map((w) => w.xh));
+      for (let k = 1; k < words.length; k++) gaps.push((words[k].left - words[k - 1].right) / xhLine);
+      // baseline: straight-line fit across the line, then what is left over
+      const cx = words.map((w) => (w.left + w.right) / 2);
+      const n = words.length;
+      const mx = cx.reduce((a, b) => a + b, 0) / n;
+      const my = words.reduce((a, w) => a + w.base, 0) / n;
+      let sxx = 0;
+      let sxy = 0;
+      cx.forEach((x, i) => {
+        sxx += (x - mx) * (x - mx);
+        sxy += (x - mx) * (words[i].base - my);
+      });
+      const slope = sxx > 1e-9 ? sxy / sxx : 0;
+      slopes.push(Math.atan(slope));
+      baseSeries.push(words.map((w, i) => (w.base - (my + slope * (cx[i] - mx))) / xhLine));
+      const logs = words.map((w) => Math.log(w.xh / xhLine));
+      const lm = logs.reduce((a, b) => a + b, 0) / n;
+      sizeSeries.push(logs.map((v) => v - lm));
+      const sl = words.filter((w) => w.slant !== null && w.slant !== undefined).map((w) => w.slant);
+      if (sl.length >= 3) {
+        const med = A.median(sl);
+        sl.forEach((v) => slantDev.push(v - med));
+      }
+    }
+    if (nLines < 3 || gaps.length < 10) return { learned: false, lines: nLines };
+    return {
+      learned: true,
+      lines: nLines,
+      gapMean: Math.max(0.2, A.median(gaps)),
+      gapSd: robustSd(gaps),
+      baseSd: robustSd(baseSeries.flat()),
+      baseRho: pooledRho(baseSeries),
+      sizeSd: robustSd(sizeSeries.flat()),
+      sizeRho: pooledRho(sizeSeries),
+      slopeSd: robustSd(slopes),
+      slantSd: robustSd(slantDev),
+    };
+  }
+
   function buildStyle(rawWords) {
     const words = rawWords.filter((w) => w && w.strokes && w.strokes.length && w.text);
     const stats = computeStats(words);
@@ -231,6 +328,7 @@
       words: aligned,
       byChar,
       profile,
+      rhythm: computeRhythm(words, aligned),
       slant: slants.length ? A.median(slants) : 0,
       liftGap,
       connectivity: joins ? joinsMid / joins : 0,
@@ -286,7 +384,7 @@
     return o.words;
   }
 
-  const api = { buildStyle, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats };
+  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

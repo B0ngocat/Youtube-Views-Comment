@@ -40,6 +40,24 @@
       chars: ['?', "'", '"', '-', ':', ';', '(', ')', '/', '&', '@', '#', '%', '+', '=', '$', '*'],
     },
     {
+      id: 'ln',
+      title: 'Full lines',
+      kind: 'line',
+      blurb: 'Write each sentence on one line, at your normal speed and size, with your normal gaps between words. This teaches the app your spacing and rhythm.',
+      sentences: [
+        'The old house was very quiet.',
+        'She said it would rain today.',
+        'Bring a pencil and your book.',
+        'He walked by the river daily.',
+        'My friends are visiting soon.',
+        'We finally arrived home late.',
+        'They could hardly believe it.',
+        'Please call me when you land.',
+        'Where is the nearest library?',
+        'Our team won the last game.',
+      ],
+    },
+    {
       id: 'more',
       title: 'More variety',
       blurb: 'Common words, so letter pairs look natural. The more you write, the less repetitive the result.',
@@ -57,6 +75,8 @@
   /** Flatten a round into the ordered list of things to write. */
   function tokens(round) {
     if (round.chars) return round.chars.map((c, i) => ({ text: c, si: 0, wi: i, key: round.id + '.0.' + i }));
+    // a whole sentence is one thing to write; it is split into words afterwards
+    if (round.kind === 'line') return round.sentences.map((s, si) => ({ text: s, si, wi: 0, key: round.id + '.' + si, kind: 'line' }));
     const out = [];
     round.sentences.forEach((s, si) => {
       s.split(/\s+/)
