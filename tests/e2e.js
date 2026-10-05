@@ -234,6 +234,38 @@ async function inkPixels(page, selector) {
   await page.waitForTimeout(400);
   check('tapping it again restores it', (await page.evaluate(() => window.HW_APP.style.byChar.get('o').length)) === nO);
 
+  console.log('Fix mode');
+  await page.click('#tab-write');
+  await page.uncheck('#mathMode');
+  await page.fill('#text', 'The quick brown fox jumps over the lazy dog.');
+  await page.waitForTimeout(500);
+  await page.check('#fixMode');
+  const tapAt = await page.evaluate(() => {
+    const lay = window.HW_APP.layout;
+    const wi = lay.words.findIndex((w) => w && w.choices.length >= 4);
+    const ci = 1;
+    const w = lay.words[wi];
+    const c = document.querySelector('#paper').getBoundingClientRect();
+    const x = (w.spans[ci][0] + w.spans[ci][1]) / 2;
+    const y = (w.top + w.bottom) / 2;
+    return { wi, ci, clientX: c.left + (x * c.width) / lay.width, clientY: c.top + (y * c.height) / Math.ceil(lay.height), ids: lay.words.map((v) => v && v.ids.slice()), tapped: w.ids[ci] };
+  });
+  check('a letter can be hit on the page', tapAt.wi >= 0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.mouse.click(tapAt.clientX, tapAt.clientY);
+  await page.waitForTimeout(700);
+  const after = await page.evaluate(() => ({ ids: window.HW_APP.layout.words.map((v) => v && v.ids.slice()), crossed: window.HW_APP.words.filter((w) => w.skip && w.skip.length).length, note: !document.querySelector('#fixNote').hidden }));
+  check('tapping a letter crosses that example out', after.crossed === 1, JSON.stringify(after.crossed));
+  check('that letter was replaced by another example', after.ids[tapAt.wi][tapAt.ci] !== tapAt.tapped);
+  const others = after.ids.every((ids, k) => !ids || k === tapAt.wi || ids.every((id, j) => id === tapAt.ids[k][j] || tapAt.ids[k][j] === tapAt.tapped));
+  check('every other letter on the page stayed as it was', others);
+  check('the note says what happened', after.note);
+  await page.click('#btnFixUndo');
+  await page.waitForTimeout(600);
+  const undone = await page.evaluate(() => ({ ids: window.HW_APP.layout.words.map((v) => v && v.ids.slice()), crossed: window.HW_APP.words.filter((w) => w.skip && w.skip.length).length }));
+  check('undo brings the letter back', undone.crossed === 0 && JSON.stringify(undone.ids) === JSON.stringify(tapAt.ids));
+  await page.uncheck('#fixMode');
+
   console.log('Math mode');
   await page.click('#tab-write');
   await page.fill('#text', String.raw`\frac{a}{b} + x^2 = \sqrt{x}`);

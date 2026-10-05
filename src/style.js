@@ -626,10 +626,13 @@
     const clearance = clears.length >= 20 ? { median: A.median(clears), sd: robustSd(clears) } : null;
 
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
+    const unitById = new Map();
+    for (const list of allByChar.values()) for (const u of list) unitById.set(u.id, u);
     return {
       words: aligned,
       byChar,
       allByChar,
+      unitById,
       profile,
       clearance,
       rhythm: computeRhythm(words, aligned),

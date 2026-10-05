@@ -10,7 +10,7 @@ The handwriting is theirs. Only they can write the samples, and only on a device
 
 1. Get the app in front of them on the iPad (see "Running it").
 2. Teach tab, rounds in this order: **Alphabet, Capitals, Numbers, Symbols, Single letters, Math, Tricky letters, Numbers in a row, Full lines**. Each is one word, letter or sentence at a time on the pad, then Next. Write at normal speed and size, on the solid line. About 25 to 30 minutes in total.
-3. Look at "What it learned". Tap any letter in the Coverage grid to see every example the app cut out for it, and tap the ones that do not look like the letter to leave them out. This is the most effective way to improve quality, especially for **a, e, o, r, u** and the digits. The Tricky letters round (those five at the start, middle and end of words) and Numbers in a row exist to give those a good supply of examples.
+3. In the Write tab, tick **Fix mode** and tap any letter on the page that looks wrong: it is replaced and that example is left out for good (Undo is right there). Or, in the Teach tab, look at "What it learned" and tap any letter in the Coverage grid to see every example the app cut out for it, and tap the ones that do not look like the letter to leave them out. This is the most effective way to improve quality, especially for **a, e, o, r, u** and the digits. The Tricky letters round (those five at the start, middle and end of words) and Numbers in a row exist to give those a good supply of examples.
 4. Export (Teach tab) saves `my-handwriting.json`. **That file is their handwriting. Do not commit it, do not paste it anywhere.** `.gitignore` already skips `my-handwriting*.json`.
 
 If a result looks wrong, ask which letters or words give it away, and fix those specifically. Guessing at "make it more natural" does not work; the fixes that mattered were all specific (a letter pool containing mis-cut examples, a symbol scaled wrongly, a single letter carrying a run-in stroke it only has when written alone).
@@ -55,6 +55,9 @@ Flags `style.js` puts on units (all consumed as costs in `synth.chooseUnits`): `
 Raw sample format (the export file): `{version: 1, words: [{text, xh, baseline, strokes: [[[x, y, t, pressure], ...]], iso?, line?, pos?, skip?}]}`. `skip` is `[{i, ch}]`, the letters the user crossed out.
 
 ## Things that bit us (do not repeat)
+
+- **Each word draws from its own random streams** (`synthWord` takes one number from the layout's `rng` and builds one stream for choosing letters and one for spacing/wobble). That is what lets Fix mode replace one letter without disturbing the page: `layout` takes `pins` (one unit id or null per letter per word) and a pinned letter uses exactly that example. Keep it that way; sharing one stream across words makes every edit reshuffle everything after it. `layout().words[i]` has `ids`, `choices` and `spans` (x range of each letter on the page) for tracing a tap back to its example.
+- A crossed-out example must never come back by any route. The "natural continuation" shortcut in `chooseUnits` used to add the next letter of the same recorded word without checking `skipped`.
 
 - **Never mutate a cached unit.** `align.js`/`style.js` cache per raw word, so a mutation compounds on every rebuild. Make a copy (see `shrinkSingleLetters`).
 - Symbol-only words (`(`, `+`, `=`) have no letters to size them by. They take the writer's usual scale from the profile (`profile.s`, `profile.dy`). Fitting each to its own height made every bracket the size of a lowercase letter.

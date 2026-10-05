@@ -150,6 +150,10 @@ textarea { resize: vertical; font-size: 1rem; }
 /* ---- write ---- */
 .paperhost { position: relative; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #fffdf7; margin-bottom: 10px; }
 .paperhost canvas { display: block; width: 100%; }
+.paperhost.fixing canvas { cursor: crosshair; }
+.paperhost.fixing { outline: 2px solid var(--accent, #4a63d8); outline-offset: -2px; }
+.fixrow { margin-bottom: 8px; }
+.fixrow .muted { margin: 4px 0 0; }
 .paperhost .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #666; padding: 20px; text-align: center; }
 .controls label { display: block; font-size: 0.9rem; margin: 10px 0; color: var(--text); }
 .controls output { float: right; color: var(--muted); font-variant-numeric: tabular-nums; }

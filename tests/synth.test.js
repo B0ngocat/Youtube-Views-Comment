@@ -194,3 +194,56 @@ test('the writer\'s own letter clearance is measured from their words', () => {
   const { style } = corpus('print');
   assert.ok(style.clearance && style.clearance.median > 0 && style.clearance.sd >= 0);
 });
+
+// ---- replacing one letter without touching the rest of the page ----------------------------
+
+const TEXT = 'the quick brown fox jumps over the lazy dog and the quick fox';
+const sigOfWord = (w) => w.ids.join(',') + '|' + w.spans.map((s) => s.map((v) => v.toFixed(2)).join('-')).join(',');
+// the same word, wherever it sits on the line (a wider letter earlier in the line pushes it along)
+const shapeOfWord = (w) => w.ids.join(',') + '|' + w.spans.map((s) => s.map((v) => (v - w.spans[0][0]).toFixed(1)).join('-')).join(',');
+
+test('every word spans and ids are reported, one span per letter', () => {
+  const { style } = corpus('cursive');
+  const lay = Y.layout(style, TEXT, { seed: 3, width: 4000 });
+  assert.equal(lay.words.length, TEXT.split(' ').length);
+  for (const w of lay.words) {
+    assert.equal(w.ids.length, w.text.length);
+    assert.equal(w.spans.length, w.text.length);
+    for (const [lo, hi] of w.spans) assert.ok(isFinite(lo) && isFinite(hi) && hi >= lo);
+    assert.ok(w.spans.every((s, i) => i === 0 || s[0] >= w.spans[0][0] - 1e-6));
+  }
+});
+
+test('pinning every letter reproduces the page exactly', () => {
+  const { style } = corpus('cursive');
+  const a = Y.layout(style, TEXT, { seed: 4, width: 900 });
+  const pins = a.words.map((w) => w.ids);
+  const b = Y.layout(style, TEXT, { seed: 4, width: 900, pins, variation: 0.9 }); // even with other settings
+  assert.deepEqual(b.words.map(sigOfWord), a.words.map(sigOfWord));
+  assert.equal(b.strokes.length, a.strokes.length);
+});
+
+test('replacing one letter changes that letter and nothing else', () => {
+  const { raws } = corpus('cursive');
+  const copy = raws.map((r) => ({ ...r })); // own copies, so the shared fixture keeps all its letters
+  const style = S.buildStyle(copy);
+  const a = Y.layout(style, TEXT, { seed: 5, width: 4000 });
+  const wi = a.words.findIndex((w) => w.text === 'quick');
+  const ci = 2; // the "i"
+  const tapped = a.words[wi].choices[ci];
+  // cross it out, rebuild, and lay the page out again with everything else pinned
+  copy[tapped.wid].skip = [{ i: tapped.idx, ch: tapped.ch }];
+  const style2 = S.buildStyle(copy);
+  const pins = a.words.map((w, k) => w.ids.map((id, j) => (k === wi && j === ci ? null : id)));
+  const b = Y.layout(style2, TEXT, { seed: 5, width: 4000, pins });
+  assert.notEqual(b.words[wi].ids[ci], tapped.id, 'the crossed-out example is not used again');
+  assert.equal(b.words[wi].choices[ci].ch, 'i');
+  assert.ok(!b.words[wi].choices[ci].skipped);
+  // a crossed-out example is gone from the whole page; every word that did not use it is exactly as it was
+  b.words.forEach((w, k) => {
+    assert.ok(!w.ids.includes(tapped.id), 'word ' + k + ' no longer uses the crossed-out example');
+    if (!a.words[k].ids.includes(tapped.id)) assert.equal(shapeOfWord(w), shapeOfWord(a.words[k]), 'word ' + w.text + ' is unchanged');
+  });
+  const keep = (w) => w.ids.filter((_, j) => j !== ci).join(',');
+  assert.equal(keep(b.words[wi]), keep(a.words[wi]), 'the other letters of that word are unchanged');
+});

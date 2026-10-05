@@ -22,6 +22,8 @@ The Full lines round has you write whole sentences on one line. From those the a
 
 Math mode (a checkbox under the text box in the Write tab) lays out math in your hand. It reads TeX-style input: `x^2`, `x_1`, `\frac{a}{b}`, `\sqrt{x}`, `\lim_{x \to 0}`, `\int_0^1 x\,dx`, `\sum_{i=1}^{n}`, and `->`, `<=`, `>=`, `!=` for the arrows and comparisons. Exponents and subscripts are smaller and shifted, fractions are stacked with a bar, and brackets stretch to fit what is inside. Letters and digits come from your samples. For symbols, the Math round in the Teach tab has you write each one on its own (the operators twice); a symbol you haven't written yet is drawn for you with a small wobble, and your own is used as soon as you have written it. Plain paper looks best for math.
 
+Fix mode (a checkbox above the page in the Write tab) is the quickest way to clean up wrong letters. Tick it, then tap any letter on the page that looks wrong. That letter is replaced by another example of the same letter, the example it came from is left out from then on, and every other letter on the page stays exactly as it was. Undo puts it back. It works in ordinary text, not in Math mode. It changes the same "left out" list as the letter check in the Teach tab.
+
 Export (in the Teach tab) saves your samples to a file, and Import loads them on another device.
 
 ## Looking like a note-taking app

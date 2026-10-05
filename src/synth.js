@@ -59,7 +59,11 @@
   }
 
   /** chars: array of single characters (already normalised). Returns [{unit, scale}] */
-  function chooseUnits(style, chars, rng, ctx) {
+  /**
+   * pins (optional): one unit id (or null) per character. A pinned character uses exactly that
+   * example, which is how a page keeps every letter it had when only one letter is replaced.
+   */
+  function chooseUnits(style, chars, rng, ctx, pins) {
     const variation = ctx.variation;
     let beams = [{ cost: 0, seq: [] }];
     const n = chars.length;
@@ -69,14 +73,16 @@
         ctx.missing.add(chars[j]);
         continue;
       }
-      const base = pickSubset(style.byChar.get(fb.ch), 24, rng);
+      const pinned = pins && pins[j] && style.unitById ? style.unitById.get(pins[j]) : null;
+      const usePin = !!pinned && pinned.ch === fb.ch && !pinned.skipped;
+      const base = usePin ? [pinned] : pickSubset(style.byChar.get(fb.ch), 24, rng);
       const next = [];
       for (const h of beams) {
         const prev = h.seq.length ? h.seq[h.seq.length - 1] : null;
         let list = base;
-        if (prev && prev.scale === 1 && fb.scale === 1) {
+        if (!usePin && prev && prev.scale === 1 && fb.scale === 1) {
           const nat = prev.unit.word.units[prev.unit.idx + 1];
-          if (nat && nat.ch === fb.ch && !list.includes(nat)) list = list.concat([nat]);
+          if (nat && nat.ch === fb.ch && !nat.skipped && !list.includes(nat)) list = list.concat([nat]); // never one the writer crossed out
         }
         for (const unit of list) {
           const cand = { unit, scale: fb.scale };
@@ -174,6 +180,7 @@
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
     const marks = [];
     let prev = null;
+    const spans = []; // where each letter's ink starts and ends, along the word
     for (const ch of choices) {
       const u = ch.unit;
       const sc = ch.scale;
@@ -231,6 +238,16 @@
         lastStroke = stroke;
       }
       for (const m of u.marks) marks.push({ pts: m.pts.map(T), taperStart: 0, taperEnd: 0, delayed: true });
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const piece of u.strokes.concat(u.marks)) {
+        for (const p of piece.pts) {
+          const x = tx + p.x * sc;
+          if (x < lo) lo = x;
+          if (x > hi) hi = x;
+        }
+      }
+      spans.push([lo, hi]);
       prev = { unit: u, sc, tx, lastStroke };
     }
     // a dangling connected tail at the very end of the word
@@ -268,6 +285,7 @@
       }
     }
     all.joins = joins;
+    all.spans = spans;
     return all;
   }
 
@@ -311,17 +329,25 @@
     return out;
   }
 
-  /** One word -> strokes in engine units (x from 0, baseline 0, x-height 1, no global slant). */
-  function synthWord(style, word, rng, ctx) {
+  /**
+   * One word -> strokes in engine units (x from 0, baseline 0, x-height 1, no global slant).
+   * A word takes one number from `rng` and makes its own streams from it, one for picking letters and
+   * one for everything after (spacing, wobble), so what happens to one word cannot change another.
+   * pins: see chooseUnits.
+   */
+  function synthWord(style, word, rng, ctx, pins) {
     const chars = expandChars(word).filter((c) => !/\s/.test(c));
+    const seed = Math.floor(rng() * 4294967296) >>> 0;
     if (!chars.length) return null;
-    const choices = chooseUnits(style, chars, rng, ctx);
+    const choices = chooseUnits(style, chars, G.mulberry32(seed), ctx, pins);
     if (!choices.length) return null;
-    const strokes = assemble(choices, style.liftGap, style.clearance, rng);
-    deform(strokes, rng, ctx.messiness, !ctx.rhythm);
+    const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
+    const strokes = assemble(choices, style.liftGap, style.clearance, arng);
+    const spans = strokes.spans;
+    deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
     for (const s of strokes) for (const p of s.pts) p.x -= b.minX;
-    return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices };
+    return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices, spans: spans.map(([lo, hi]) => [lo - b.minX, hi - b.minX]) };
   }
 
   // ---- page layout ----------------------------------------------------------------------
@@ -372,14 +398,19 @@
       baselines.push(firstBase + line * lineH);
     };
 
+    let wordNo = 0;
     const paragraphs = text.replace(/\r/g, '').split('\n');
     paragraphs.forEach((para, pi) => {
       if (pi > 0) newLine();
       const words = para.split(/[ \t]+/).filter(Boolean);
       for (const word of words) {
-        const w = synthWord(style, word, rng, ctx);
-        if (!w) continue;
-        wordsOut.push({ text: word, choices: w.choices.map((c) => c.unit) }); // which examples were used (for inspection)
+        const pinsForWord = o.pins ? o.pins[wordNo] : null;
+        wordNo++;
+        const w = synthWord(style, word, rng, ctx, pinsForWord);
+        if (!w) {
+          wordsOut.push(null); // keeps the numbering of words, so pins stay lined up
+          continue;
+        }
         // to pixels, with slant (and, from the writer's rhythm, this word's own size and slant)
         let sc = 1;
         let tanW = tanS;
@@ -407,6 +438,15 @@
           }
           strokesOut.push(s);
         }
+        // where each letter ended up on the page, so a tap can be traced back to the example that drew it
+        wordsOut.push({
+          text: word,
+          choices: w.choices.map((c) => c.unit),
+          ids: w.choices.map((c) => c.unit.id),
+          spans: w.spans.map(([lo, hi]) => [(lo + 0.5 * tanW) * xh * sc + dx, (hi + 0.5 * tanW) * xh * sc + dx]),
+          top: base - 2.7 * xh * sc,
+          bottom: base + 1.3 * xh * sc,
+        });
         // a gap is never tiny (it would read as one word), and a little wider after . , ! ? ; :
         const floor = /[.,!?;:]$/.test(word) ? 0.4 : 0.28;
         const gap = R ? Math.max(floor, R.gapMean + R.gapSd * k * G.gaussian(rng)) * xh * o.wordSpacing : spaceW * (0.85 + 0.3 * rng());

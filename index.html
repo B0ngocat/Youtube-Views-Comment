@@ -94,6 +94,11 @@ Pack my box with five dozen liquor jugs.</textarea>
             <p class="muted small" id="mathHelp" hidden>Write math like this: <code>x^2</code>, <code>x_1</code>, <code>\frac{a}{b}</code>, <code>\sqrt{x}</code>, <code>\lim_{x \to 0}</code>, <code>\int_0^1 x\,dx</code>, <code>\sum_{i=1}^{n}</code>. A new line starts a new row. Symbols you have not written yet are drawn for you. Plain paper looks best.</p>
             <p class="warn" id="warn" hidden></p>
           </div>
+          <div class="fixrow" id="fixRow">
+            <label class="check"><input type="checkbox" id="fixMode"> Fix mode: tap a letter that looks wrong</label>
+            <p class="muted small" id="fixHelp" hidden>Tap the letter. It is replaced by another example of the same letter, and the example is left out from then on. Nothing else on the page changes.</p>
+            <p class="muted small" id="fixNote" hidden><span id="fixText"></span> <button id="btnFixUndo" type="button" class="ghost" hidden>Undo</button></p>
+          </div>
           <div class="paperhost" id="paperhost">
             <canvas id="paper"></canvas>
             <div class="empty" id="empty" hidden>Teach it your handwriting first, then come back here.</div>

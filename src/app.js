@@ -72,7 +72,14 @@
     clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(rebuild, 120);
   }
+  // Fix mode: letters the writer has accepted on the page stay put when one is replaced. They are pinned
+  // by example id, which is only meaningful for the samples they were chosen from, hence the version.
+  let dataVersion = 0;
+  let pinState = null; // {text, version, ids: [[unit id | null per letter] per word]}
+  const fixStack = []; // what has been replaced, newest last, so it can be undone
+
   function persist() {
+    dataVersion++;
     const ok = store.set('hw.words.v1', words);
     if (!ok) $('#status').textContent = 'Could not save in this browser (storage full?). Use Export to keep a copy.';
   }
@@ -486,6 +493,7 @@
   $('#btnReset').addEventListener('click', () => {
     if (!confirm('Delete all your handwriting samples from this browser?')) return;
     words = [];
+    dataVersion++;
     customSentences = [];
     store.del('hw.words.v1');
     store.del('hw.custom.v1');
@@ -583,7 +591,10 @@
     let lay;
     if (empty) lay = { width: W, height: 260, xh: o.xh, strokes: [], baselines: [80], lineHeightPx: o.lineHeight * o.xh, missing: [] };
     else if (math) lay = HW.math.layout(style, text, Object.assign({}, o, { width: W, seed }));
-    else lay = HW.synth.layout(style, text, Object.assign({}, o, { width: W, seed }));
+    else {
+      const pins = pinState && pinState.version === dataVersion && pinState.text === text ? pinState.ids : undefined;
+      lay = HW.synth.layout(style, text, Object.assign({}, o, { width: W, seed, pins }));
+    }
     const missing = empty ? [] : math ? lay.missing : HW.style.missingChars(style, text);
     const warn = $('#warn');
     if (missing.length) {
@@ -613,21 +624,98 @@
     if (/^#[0-9a-f]{6}$/i.test($('#ink').value)) $('#inkPicker').value = $('#ink').value;
   });
   $('#mathMode').addEventListener('change', () => {
+    clearFixes();
+    syncFixMode();
     $('#mathHelp').hidden = !$('#mathMode').checked;
     saveSettings();
     queueRender();
   });
   $('#text').addEventListener('input', () => {
+    clearFixes();
     saveSettings();
     queueRender();
   });
   $('#btnAgain').addEventListener('click', () => {
+    clearFixes();
     seed = (seed * 48271 + 11) % 2147483647;
     queueRender();
   });
   window.addEventListener('resize', () => {
     if (!$('#write').hidden) queueRender();
   });
+
+  // ---- fix mode: tap a letter that looks wrong ---------------------------------------------------
+  function clearFixes() {
+    pinState = null;
+    fixStack.length = 0;
+    showFixNote('');
+  }
+
+  function showFixNote(text) {
+    $('#fixText').textContent = text;
+    $('#fixNote').hidden = !text;
+    $('#btnFixUndo').hidden = !fixStack.length;
+  }
+
+  function syncFixMode() {
+    const math = $('#mathMode').checked;
+    $('#fixRow').hidden = math; // letters of math are not traced back to examples (yet)
+    if (math) $('#fixMode').checked = false;
+    $('#paperhost').classList.toggle('fixing', $('#fixMode').checked);
+    $('#fixHelp').hidden = !$('#fixMode').checked;
+  }
+
+  /** The letter under a point of the page, as {wi, ci} (word and letter number), or null. */
+  function letterAt(lay, x, y) {
+    let best = null;
+    const tol = 0.15 * lay.xh;
+    (lay.words || []).forEach((w, wi) => {
+      if (!w || y < w.top || y > w.bottom) return;
+      w.spans.forEach(([lo, hi], ci) => {
+        if (x < lo - tol || x > hi + tol) return;
+        const d = Math.abs(x - (lo + hi) / 2) / Math.max(1, hi - lo);
+        if (!best || d < best.d) best = { wi, ci, d };
+      });
+    });
+    return best;
+  }
+
+  function replaceLetter(wi, ci) {
+    const lay = lastLayout;
+    const unit = lay.words[wi].choices[ci];
+    const raw = words[unit.wid];
+    if (!raw) return;
+    const idsNow = lay.words.map((w) => (w ? w.ids.slice() : null));
+    const pins = idsNow.map((ids, k) => (ids ? ids.map((id, j) => (k === wi && j === ci ? null : id)) : null));
+    raw.skip = (raw.skip || []).filter((c) => !(c.i === unit.idx && c.ch === unit.ch)).concat([{ i: unit.idx, ch: unit.ch }]);
+    persist(); // changes dataVersion, so the pins are set after it
+    pinState = { text: $('#text').value, version: dataVersion, ids: pins };
+    fixStack.push({ wid: unit.wid, idx: unit.idx, ch: unit.ch, ids: idsNow });
+    rebuild();
+    showFixNote('Replaced that “' + unit.ch + '” (it came from “' + unit.word.text + '”) and left out of what gets written. The rest of the page is as it was.');
+  }
+
+  function undoFix() {
+    const f = fixStack.pop();
+    if (!f) return;
+    const raw = words[f.wid];
+    if (raw) raw.skip = (raw.skip || []).filter((c) => !(c.i === f.idx && c.ch === f.ch));
+    persist();
+    pinState = { text: $('#text').value, version: dataVersion, ids: f.ids };
+    rebuild();
+    showFixNote('Put that letter back.');
+  }
+
+  $('#paper').addEventListener('click', (e) => {
+    if (!$('#fixMode').checked || !lastLayout || !lastLayout.words || $('#mathMode').checked) return;
+    const r = $('#paper').getBoundingClientRect();
+    const x = ((e.clientX - r.left) * lastLayout.width) / r.width;
+    const y = ((e.clientY - r.top) * Math.ceil(lastLayout.height)) / r.height;
+    const hit = letterAt(lastLayout, x, y);
+    if (hit) replaceLetter(hit.wi, hit.ci);
+  });
+  $('#fixMode').addEventListener('change', syncFixMode);
+  $('#btnFixUndo').addEventListener('click', undoFix);
 
   $('#btnSVG').addEventListener('click', () => {
     if (!lastLayout) return;
@@ -684,6 +772,7 @@
 
   // ---- boot -------------------------------------------------------------------------------------
   loadSettings();
+  syncFixMode();
   syncOutputs();
   goTo(0, firstOpen(0));
   const hash = (location.hash || '').replace('#', '');
@@ -712,5 +801,6 @@
     },
     tokensOf,
     rounds,
+    letterAt,
   };
 })();
