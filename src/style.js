@@ -352,6 +352,7 @@
     const { aligned, profile } = alignAll(words, stats);
 
     const byChar = new Map();
+    const allByChar = new Map();
     const slants = [];
     const gaps = [];
     let joinsMid = 0;
@@ -372,8 +373,15 @@
         u.word = w;
         u.iso = !!(words[wi] && words[wi].iso); // written on its own, so never mis-cut
         u.dev = A.deviation(u, profile);
-        if (!byChar.has(u.ch)) byChar.set(u.ch, []);
-        byChar.get(u.ch).push(u);
+        // letters the writer has crossed out in the letter check stay out of the pool
+        const crossed = words[wi] && words[wi].skip;
+        u.skipped = !!(crossed && crossed.some((c) => c.i === idx && c.ch === u.ch));
+        if (!allByChar.has(u.ch)) allByChar.set(u.ch, []);
+        allByChar.get(u.ch).push(u);
+        if (!u.skipped) {
+          if (!byChar.has(u.ch)) byChar.set(u.ch, []);
+          byChar.get(u.ch).push(u);
+        }
         if (idx > 0) {
           const p = w.units[idx - 1];
           joins++;
@@ -419,6 +427,7 @@
     return {
       words: aligned,
       byChar,
+      allByChar,
       profile,
       clearance,
       rhythm: computeRhythm(words, aligned),

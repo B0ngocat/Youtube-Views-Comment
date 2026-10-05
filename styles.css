@@ -124,10 +124,16 @@ textarea { resize: vertical; font-size: 1rem; }
   min-width: 30px; height: 30px; padding: 0 6px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
   background: var(--chip); color: var(--muted); font-size: 0.95rem; position: relative;
 }
+.chip { border: 0; cursor: pointer; font: inherit; }
+.chip.sel { outline: 2px solid var(--accent, #4a63d8); }
 .chip.on { background: color-mix(in srgb, var(--ok) 22%, var(--surface)); color: var(--text); }
 .chip sub { font-size: 0.6rem; margin-left: 2px; color: var(--muted); }
 .gtitle { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 6px 0 4px; }
 
+.inspect { margin: 6px 0 10px; }
+.thumb.unit { font: inherit; text-align: center; }
+.thumb.unit.out { opacity: 0.35; border-style: dashed; }
+.thumb.unit.out svg { filter: grayscale(1); }
 .gallery { display: flex; flex-wrap: wrap; gap: 8px; }
 .thumb {
   border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px 6px; background: #fffdf7; color: #333; position: relative;

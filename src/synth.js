@@ -346,6 +346,7 @@
     const firstBase = margin + 1.7 * xh;
 
     const strokesOut = [];
+    const wordsOut = [];
     const baselines = [];
     let line = 0;
     let x = margin;
@@ -373,6 +374,7 @@
       for (const word of words) {
         const w = synthWord(style, word, rng, ctx);
         if (!w) continue;
+        wordsOut.push({ text: word, choices: w.choices.map((c) => c.unit) }); // which examples were used (for inspection)
         // to pixels, with slant (and, from the writer's rhythm, this word's own size and slant)
         let sc = 1;
         let tanW = tanS;
@@ -406,7 +408,7 @@
     });
 
     const height = baselines[baselines.length - 1] + 1.5 * xh + margin * 0.5;
-    return { width: o.width, height, strokes: strokesOut, missing: Array.from(ctx.missing), baselines, xh, lineHeightPx: lineH };
+    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), baselines, xh, lineHeightPx: lineH };
   }
 
   const api = { layout, synthWord, chooseUnits, assemble, deform };

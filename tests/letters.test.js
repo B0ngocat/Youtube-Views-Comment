@@ -78,3 +78,18 @@ test('if the comparison would call lots of letters wrong, it switches itself off
   assert.ok(cut.length >= 30);
   assert.ok(cut.filter((u) => u.wrong).length === 0, 'nothing is acted on when the references are unreliable');
 });
+
+test('a letter crossed out in the letter check stays out of the pool but can be listed', () => {
+  const { words } = wordsAndLetters();
+  const before = S.buildStyle(words);
+  const nBefore = before.byChar.get('o').length;
+  const u = before.byChar.get('o')[0];
+  words[u.wid].skip = [{ i: u.idx, ch: 'o' }];
+  const after = S.buildStyle(words);
+  assert.equal(after.byChar.get('o').length, nBefore - 1);
+  assert.equal(after.allByChar.get('o').length, nBefore, 'still listed so it can be restored');
+  assert.equal(after.allByChar.get('o').filter((x) => x.skipped).length, 1);
+  // a stale mark (wrong letter at that position) is ignored
+  words[u.wid].skip = [{ i: u.idx, ch: 'z' }];
+  assert.equal(S.buildStyle(words).byChar.get('o').length, nBefore);
+});

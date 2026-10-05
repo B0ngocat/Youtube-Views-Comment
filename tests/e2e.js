@@ -219,6 +219,20 @@ async function inkPixels(page, selector) {
   await page.waitForTimeout(600);
   check('import brings the samples back', (await page.evaluate(() => window.HW_APP.words.length)) === totalWords);
 
+  console.log('Letter check');
+  await page.click('#tab-teach');
+  const nO = await page.evaluate(() => window.HW_APP.style.byChar.get('o').length);
+  await page.click('#coverage .chip:text-is("o")');
+  const tiles = await page.locator('#inspect .thumb.unit').count();
+  check('the letter check lists every example of the letter', tiles >= nO && tiles > 0, tiles + ' tiles, ' + nO + ' in use');
+  await page.locator('#inspect .thumb.unit').first().click();
+  await page.waitForTimeout(400);
+  check('crossing out an example removes it from the pool', (await page.evaluate(() => window.HW_APP.style.byChar.get('o').length)) === nO - 1);
+  check('the crossed-out example stays listed so it can be restored', (await page.locator('#inspect .thumb.unit.out').count()) === 1);
+  await page.locator('#inspect .thumb.unit.out').click();
+  await page.waitForTimeout(400);
+  check('tapping it again restores it', (await page.evaluate(() => window.HW_APP.style.byChar.get('o').length)) === nO);
+
   console.log('Layout on iPad and phone sized screens');
   for (const [name, w, h] of [['ipad-portrait', 820, 1180], ['ipad-landscape', 1180, 820], ['phone', 390, 844]]) {
     await page.setViewportSize({ width: w, height: h });

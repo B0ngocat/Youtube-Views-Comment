@@ -62,6 +62,7 @@
     updateStatus();
     updateRhythmNotes();
     renderCoverage();
+    renderInspect();
     renderGallery();
     renderRounds();
     renderPrompt();
@@ -292,6 +293,8 @@
   });
 
   // ---- teach: coverage & gallery -------------------------------------------------------------
+  let inspecting = null; // the letter being checked in the letter check
+
   function renderCoverage() {
     const host = $('#coverage');
     host.textContent = '';
@@ -301,8 +304,14 @@
       const grid = el('div', 'chipgrid');
       for (const ch of g.chars) {
         const n = cov[ch] || 0;
-        const chip = el('span', 'chip' + (n ? ' on' : ''), ch);
+        const chip = el('button', 'chip' + (n ? ' on' : '') + (ch === inspecting ? ' sel' : ''), ch);
+        chip.type = 'button';
         if (n) chip.appendChild(el('sub', '', String(n)));
+        chip.addEventListener('click', () => {
+          inspecting = inspecting === ch ? null : ch;
+          renderCoverage();
+          renderInspect();
+        });
         grid.appendChild(chip);
       }
       host.appendChild(grid);
@@ -334,6 +343,65 @@
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' +
       '<line x1="0" x2="' + W + '" y1="' + base + '" y2="' + base + '" stroke="#c9d3ee" stroke-width="1"/>' + paths + '</svg>'
     );
+  }
+
+  function unitSVG(u) {
+    const S = 40;
+    let minX = u.box.minX;
+    let maxX = u.box.maxX;
+    u.marks.forEach((m) => m.pts.forEach((p) => {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+    }));
+    const W = Math.max(40, Math.ceil((maxX - minX) * S + 16));
+    const H = Math.ceil(3.6 * S);
+    const base = 2.4 * S;
+    const conv = (p) => ({ x: (p.x - minX) * S + 8, y: (2.4 - p.y) * S, w: p.w });
+    let d = '';
+    u.strokes.forEach((s) => (d += HW.render.strokeToPath({ pts: s.pts.map(conv) }, 2.4, S)));
+    u.marks.forEach((m) => (d += HW.render.strokeToPath({ pts: m.pts.map(conv) }, 2.4, S)));
+    return (
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' +
+      '<line x1="0" x2="' + W + '" y1="' + base + '" y2="' + base + '" stroke="#c9d3ee"/>' +
+      '<line x1="0" x2="' + W + '" y1="' + (base - S) + '" y2="' + (base - S) + '" stroke="#e6ebf8" stroke-dasharray="3 3"/>' +
+      '<path d="' + d + '" fill="#1b1f3b"/></svg>'
+    );
+  }
+
+  /** Every example of one letter, so the ones that were cut wrongly can be crossed out. */
+  function renderInspect() {
+    const host = $('#inspect');
+    host.textContent = '';
+    if (!inspecting || !style) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    const list = style.allByChar.get(inspecting) || [];
+    const out = list.filter((u) => u.skipped).length;
+    host.appendChild(
+      el('p', 'muted small', list.length
+        ? 'All ' + list.length + ' examples of "' + inspecting + '". Tap one that does not look like the letter to leave it out' + (out ? ' (' + out + ' left out)' : '') + '.'
+        : 'No examples of "' + inspecting + '" yet.')
+    );
+    const grid = el('div', 'gallery');
+    list.forEach((u) => {
+      const tile = el('button', 'thumb unit' + (u.skipped ? ' out' : ''));
+      tile.type = 'button';
+      tile.innerHTML = unitSVG(u);
+      tile.appendChild(el('small', '', u.word.text));
+      tile.addEventListener('click', () => {
+        const raw = words[u.wid];
+        if (!raw) return;
+        const cur = (raw.skip || []).filter((c) => !(c.i === u.idx && c.ch === u.ch));
+        if (!u.skipped) cur.push({ i: u.idx, ch: u.ch });
+        raw.skip = cur;
+        persist();
+        rebuild();
+      });
+      grid.appendChild(tile);
+    });
+    host.appendChild(grid);
   }
 
   function renderGallery() {
