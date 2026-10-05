@@ -110,3 +110,27 @@ test('style building is fast enough to run on a tablet', () => {
   S.buildStyle(raws.map((r) => Object.assign({}, r))); // fresh objects: nothing cached
   assert.ok(Date.now() - t < 4000, 'builds ~94 words in well under 4 s');
 });
+
+// ---- spacing by nearest ink ------------------------------------------------------------
+
+/** a straight stroke sampled every 0.05, as real units are */
+const line = (x0, y0, x1, y1) => {
+  const n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / 0.05));
+  return Array.from({ length: n + 1 }, (_, i) => [x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n]);
+};
+const unit = (...strokes) => ({ strokes: strokes.map((pts) => ({ pts: pts.map(([x, y]) => ({ x, y })) })), marks: [] });
+
+test('nearest-ink gap sees the closest approach, not the bounding box', () => {
+  const left = unit(line(1, 0, 1, 1)); // a stem at x = 1
+  const right = unit(line(0, 0, 0, 1)); // a stem at x = 0
+  // shifting the right stem by (clearance - base) leaves exactly `clearance` between the two stems
+  assert.ok(Math.abs(A.inkBase(left, right) - -1) < 1e-6, 'base ' + A.inkBase(left, right));
+  // a long tail below the baseline does not stop the next letter coming close
+  const withTail = unit(line(1, 0, 1, 1), line(1, -1, 3, -1));
+  assert.ok(Math.abs(A.inkBase(withTail, right) - -1) < 1e-6, 'tail ignored: ' + A.inkBase(withTail, right));
+  // ...but a tail the next letter sits beside does count
+  const beside = unit(line(0, -1, 0, 0.5));
+  assert.ok(A.inkBase(withTail, beside) < -2, 'a letter beside the tail has to clear it: ' + A.inkBase(withTail, beside));
+  // letters that never overlap vertically have no nearest-ink relation
+  assert.equal(A.inkBase(unit(line(0, 1.6, 1, 1.9)), unit(line(0, 0, 1, 0.4))), null);
+});

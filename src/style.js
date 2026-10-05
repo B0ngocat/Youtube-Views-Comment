@@ -328,11 +328,26 @@
 
     markOddOnes(byChar);
 
+    // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
+    const clears = [];
+    for (const w of aligned) {
+      if (!w.ok) continue;
+      for (let i = 1; i < w.units.length; i++) {
+        const p = w.units[i - 1];
+        const u = w.units[i];
+        if (p.exit.mid || u.entry.mid || /[^a-zA-Z]/.test(p.ch + u.ch)) continue;
+        const c = A.inkBase(p, u);
+        if (c !== null) clears.push(c);
+      }
+    }
+    const clearance = clears.length >= 20 ? { median: A.median(clears), sd: robustSd(clears) } : null;
+
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     return {
       words: aligned,
       byChar,
       profile,
+      clearance,
       rhythm: computeRhythm(words, aligned),
       slant: slants.length ? A.median(slants) : 0,
       liftGap,

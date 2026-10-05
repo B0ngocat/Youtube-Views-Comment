@@ -189,3 +189,8 @@ test('export / import round trip keeps every stroke', () => {
   assert.deepEqual(back[3].strokes[0][0], raws[3].strokes[0][0]);
   assert.throws(() => S.fromJSON('{"nope":1}'));
 });
+
+test('the writer\'s own letter clearance is measured from their words', () => {
+  const { style } = corpus('print');
+  assert.ok(style.clearance && style.clearance.median > 0 && style.clearance.sd >= 0);
+});

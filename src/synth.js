@@ -162,7 +162,7 @@
     return { a, b, bridge };
   }
 
-  function assemble(choices, liftGap) {
+  function assemble(choices, liftGap, clearance, rng) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
     const marks = [];
@@ -182,7 +182,15 @@
           bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w })));
           if (!bridged) conn = false; // no clean join between these two: lift the pen
         }
-        if (!conn) tx = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
+        if (!conn) {
+          const base = prev.sc === 1 && sc === 1 ? A.inkBase(prev.unit, u) : null;
+          const byBox = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
+          if (clearance && base !== null) {
+            // nearest ink of the two letters ends up `want` apart, which varies a little like the writer's does
+            const want = Math.max(0.02, clearance.median + clearance.sd * 0.5 * G.gaussian(rng));
+            tx = prev.tx + want - base;
+          } else tx = byBox;
+        }
       }
 
       const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w });
@@ -302,7 +310,7 @@
     if (!chars.length) return null;
     const choices = chooseUnits(style, chars, rng, ctx);
     if (!choices.length) return null;
-    const strokes = assemble(choices, style.liftGap);
+    const strokes = assemble(choices, style.liftGap, style.clearance, rng);
     deform(strokes, rng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
     for (const s of strokes) for (const p of s.pts) p.x -= b.minX;

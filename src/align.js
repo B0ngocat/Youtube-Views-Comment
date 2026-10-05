@@ -258,6 +258,52 @@
     return { s: clamp(view.s * h, 0.2, 2), dy: view.dy - b * view.s };
   }
 
+  // Letter spacing is judged by nearest ink, like a writer does by eye, not by bounding boxes: a
+  // loop, tail or crossbar shouldn't push the next letter away. The ink of a letter is summarised
+  // as its rightmost and leftmost x in each horizontal band.
+  const PB = 0.1; // band height, x-heights
+  const PY0 = -1.4;
+  const PN = 40;
+
+  function inkProfile(u) {
+    if (u._prof) return u._prof;
+    const R = new Float64Array(PN).fill(-Infinity);
+    const L = new Float64Array(PN).fill(Infinity);
+    const add = (pts) => {
+      for (const p of pts) {
+        const b = Math.floor((p.y - PY0) / PB);
+        if (b < 0 || b >= PN) continue;
+        if (p.x > R[b]) R[b] = p.x;
+        if (p.x < L[b]) L[b] = p.x;
+      }
+    };
+    for (const s of u.strokes) add(s.pts);
+    for (const m of u.marks) add(m.pts);
+    u._prof = { R, L };
+    return u._prof;
+  }
+
+  /**
+   * How much the translation of B must exceed A's so the nearest ink of the two is exactly 0 apart;
+   * i.e. "base": placing B at tx_B = tx_A + clearance - base leaves `clearance` between them.
+   * Bands next to each other count, so a diagonal approach is seen. null if they never overlap
+   * vertically (a comma beside a t, say).
+   */
+  function inkBase(a, b) {
+    const pa = inkProfile(a);
+    const pb = inkProfile(b);
+    let base = Infinity;
+    for (let i = 0; i < PN; i++) {
+      if (!isFinite(pa.R[i])) continue;
+      for (let d = -1; d <= 1; d++) {
+        const j = i + d;
+        if (j < 0 || j >= PN || !isFinite(pb.L[j])) continue;
+        base = Math.min(base, pb.L[j] - pa.R[i]);
+      }
+    }
+    return isFinite(base) ? base : null;
+  }
+
   /** How far a letter's height is from this writer's usual for that letter (0 = typical). */
   function deviation(u, prof) {
     const k = heightClass(u.ch);
@@ -726,7 +772,7 @@
     best.marks.push({ pts: stroke });
   }
 
-  const api = { alignWord, preprocess, fitView, initialView, learnProfile, deviation, DEFAULT_PROFILE, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
+  const api = { alignWord, preprocess, fitView, initialView, learnProfile, deviation, inkBase, DEFAULT_PROFILE, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
   root.HW = root.HW || {};
   root.HW.align = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
