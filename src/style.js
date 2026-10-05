@@ -377,6 +377,59 @@
     }
   }
 
+  // ---- closed bowls -------------------------------------------------------------------------
+  function segCross(a, b, c, d) {
+    const o = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    return o(a, b, c) > 0 !== o(a, b, d) > 0 && o(c, d, a) > 0 !== o(c, d, b) > 0;
+  }
+
+  /** Does a pen stroke of this letter close on itself (cross itself, or come back to where it was)? */
+  function hasBowl(u) {
+    if (u._bowl !== undefined) return u._bowl;
+    let found = false;
+    for (const s of u.strokes) {
+      const p = s.pts;
+      const n = p.length;
+      if (n < 8 || found) continue;
+      const len = [0];
+      for (let i = 1; i < n; i++) len.push(len[i - 1] + Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y));
+      for (let i = 0; i < n - 1 && !found; i++) {
+        for (let j = i + 6; j < n - 1; j++) {
+          if (segCross(p[i], p[i + 1], p[j], p[j + 1])) {
+            found = true;
+            break;
+          }
+        }
+      }
+      for (let i = 0; i < n && !found; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (len[j] - len[i] > 0.9 && Math.hypot(p[i].x - p[j].x, p[i].y - p[j].y) < 0.1) {
+            found = true;
+            break;
+          }
+        }
+      }
+    }
+    u._bowl = found;
+    return found;
+  }
+
+  /**
+   * For letters this writer's single-letter version closes (a, e, o, d, ...) and which they close
+   * in most of their words too, a cut-out copy that stays open is probably cut wrongly (an "a" that
+   * reads as a "u"). Flag those.
+   */
+  function markOpenOnes(byChar) {
+    for (const list of byChar.values()) {
+      const iso = list.filter((u) => u.iso);
+      const cut = list.filter((u) => !u.iso);
+      const refsClosed = iso.length >= 2 && iso.every(hasBowl);
+      const closedShare = cut.length ? cut.filter(hasBowl).length / cut.length : 0;
+      const applies = refsClosed && cut.length >= 6 && closedShare >= 0.6;
+      for (const u of list) u.open = applies && !u.iso && !hasBowl(u) ? 1 : 0;
+    }
+  }
+
   function inkExtent(u) {
     let a = Infinity;
     let b = -Infinity;
@@ -523,6 +576,7 @@
     markOddOnes(byChar);
     markWrongOnes(byChar);
     markFarOnes(byChar);
+    markOpenOnes(byChar);
     shrinkSingleLetters(byChar, allByChar);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
@@ -602,7 +656,7 @@
     return o.words;
   }
 
-  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance };
+  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

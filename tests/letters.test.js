@@ -127,3 +127,17 @@ test('single letters are only used to start a word when the word letters exist, 
   }
   assert.ok(midIso <= 0.1 * mid, midIso + ' of ' + mid + ' mid-word letters were single letters');
 });
+
+test('a stroke that closes on itself counts as having a bowl, an open arc does not', () => {
+  const circle = [];
+  for (let i = 0; i <= 40; i++) circle.push({ x: 0.5 + 0.5 * Math.cos((i / 40) * 2 * Math.PI), y: 0.5 + 0.5 * Math.sin((i / 40) * 2 * Math.PI) });
+  const arc = circle.slice(0, 30);
+  assert.equal(S.hasBowl({ strokes: [{ pts: circle }] }), true);
+  assert.equal(S.hasBowl({ strokes: [{ pts: arc }] }), false);
+});
+
+test('cut-out letters that stay open are flagged only where the writer closes the letter', () => {
+  const { words, letters } = wordsAndLetters();
+  const st = S.buildStyle(words.concat(letters));
+  for (const list of st.byChar.values()) for (const u of list) assert.ok(u.open === 0 || u.open === 1 && !u.iso);
+});
