@@ -50,6 +50,7 @@
   // Words that use none of the writer's ascender / descender proportions (only a, c, e, m, n, o,
   // r, s, u, v, w, x, z) are sized from their own x-height alone, so a new profile can't change them.
   const needsProfile = (text) => /[^acemnorsuvwxz\s.,]/.test(text);
+  const symbolOnly = (text) => !/[A-Za-z0-9]/.test(text);
 
   function alignAll(rawWords, stats) {
     const sk = statsKey(stats);
@@ -75,12 +76,14 @@
     });
     const profile = A.learnProfile(entries.map((e) => e.fit1.res));
     // coarse key, so adding one word doesn't re-size every word that was already done
-    const pk = [profile.asc, profile.tee, profile.tall, profile.desc].map((v) => v.toFixed(1)).join('|');
+    const pk = [profile.asc, profile.tee, profile.tall, profile.desc].map((v) => v.toFixed(1)).join('|') + '|' + (profile.s === undefined ? 'x' : profile.s.toFixed(2) + '|' + profile.dy.toFixed(1));
 
     // Pass 2: re-size words that depend on those proportions.
     entries.forEach((e, i) => {
       if (e.pk !== pk) {
-        e.fit2 = needsProfile(rawWords[i].text) ? A.fitView(rawWords[i], stats, profile) : e.fit1;
+        const text = rawWords[i].text;
+        if (profile.s !== undefined && symbolOnly(text)) e.fit2 = A.fitFixed(rawWords[i], stats, { s: profile.s, dy: profile.dy });
+        else e.fit2 = needsProfile(text) ? A.fitView(rawWords[i], stats, profile) : e.fit1;
         e.pk = pk;
         e.aligned = null;
       }
@@ -430,6 +433,34 @@
     }
   }
 
+  // ---- stray scraps ---------------------------------------------------------------------------
+  function pieceLength(piece) {
+    let n = 0;
+    for (let i = 1; i < piece.pts.length; i++) n += Math.hypot(piece.pts[i].x - piece.pts[i - 1].x, piece.pts[i].y - piece.pts[i - 1].y);
+    return n;
+  }
+
+  /**
+   * A cut-out letter that has more pen pieces than this writer's single-letter version, where the extra
+   * ones are tiny, has picked up a scrap of its neighbour (the dot of an i, the end of a comma): the
+   * "or" that turns into "ori". Flag those.
+   */
+  function markStrayOnes(byChar) {
+    for (const list of byChar.values()) {
+      const iso = list.filter((u) => u.iso).map((u) => u.strokes.length + u.marks.length);
+      const k = iso.length >= 2 && iso.every((n) => n === iso[0]) ? iso[0] : 0;
+      for (const u of list) {
+        u.stray = 0;
+        if (!k || u.iso) continue;
+        const pieces = u.strokes.concat(u.marks);
+        if (pieces.length <= k) continue;
+        const lens = pieces.map(pieceLength).sort((a, b) => a - b);
+        const extra = lens.slice(0, pieces.length - k).reduce((a, b) => a + b, 0);
+        if (extra < 0.6) u.stray = 1;
+      }
+    }
+  }
+
   function inkExtent(u) {
     let a = Infinity;
     let b = -Infinity;
@@ -577,6 +608,7 @@
     markWrongOnes(byChar);
     markFarOnes(byChar);
     markOpenOnes(byChar);
+    markStrayOnes(byChar);
     shrinkSingleLetters(byChar, allByChar);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink

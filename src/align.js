@@ -335,6 +335,12 @@
     const tee = pick((c) => c === 't', (u) => u.box.maxY);
     const tall = pick((c) => heightClass(c).tall, (u) => u.box.maxY);
     const desc = pick((c) => heightClass(c).desc, (u) => u.box.minY);
+    // how big, and where on the pad's baseline, this writer's x-height is (read off the same words)
+    const views = aligned.filter((w) => w.ok && w.view && w.units.filter((u) => heightClass(u.ch).low).length >= 3).map((w) => w.view);
+    if (views.length >= 5) {
+      P.s = median(views.map((v) => v.s));
+      P.dy = median(views.map((v) => v.dy));
+    }
     if (asc) P.asc = clamp(asc, 1.3, 2.6);
     if (tee) P.tee = clamp(tee, 1.0, 2.0);
     if (tall) P.tall = clamp(tall, 1.3, 2.6);
@@ -369,6 +375,18 @@
     }
     if (best) return { prep: best.prep, res: best.res };
     return { prep: preprocess(raw, stats, initialView(raw, prof)), res: { ok: false } };
+  }
+
+  /** Words made only of symbols have nothing to size them by, so they take the writer's usual size and baseline. */
+  function fitFixed(raw, stats, view) {
+    const prep = preprocess(raw, stats, view);
+    let res;
+    try {
+      res = alignWord(raw, { stats, prepared: prep });
+    } catch {
+      res = { ok: false };
+    }
+    return { prep, res };
   }
 
   function strokeInfo(s) {
@@ -772,7 +790,7 @@
     best.marks.push({ pts: stroke });
   }
 
-  const api = { alignWord, preprocess, fitView, initialView, learnProfile, deviation, inkBase, DEFAULT_PROFILE, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
+  const api = { alignWord, preprocess, fitView, fitFixed, initialView, learnProfile, deviation, inkBase, DEFAULT_PROFILE, heightCost, defaultWidth, normalize, cleanStroke, estimateSlant, splitDelayed, median, STEP };
   root.HW = root.HW || {};
   root.HW.align = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

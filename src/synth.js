@@ -90,6 +90,7 @@
           // A letter written on its own is clean, but it carries the little run-in stroke the writer
           // only makes when a letter stands alone, so keep it to the start of a word.
           if (unit.iso) c += j === 0 || n === 1 ? -0.5 : /[a-z]/.test(chars[j]) ? 1.5 : 0;
+          if (unit.stray) c += 3; // carries a scrap of a neighbouring letter
           if (unit.open) c += 2.5; // the writer closes this letter, this copy stays open (cut wrongly?)
           c += 1.5 * (unit.far || 0); // unlike the writer's own single-letter version of it
           c += 4 * Math.min(Math.max(0, (unit.dev || 0) - 0.25), 1.5); // much taller / deeper than this writer usually writes it

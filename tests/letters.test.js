@@ -141,3 +141,21 @@ test('cut-out letters that stay open are flagged only where the writer closes th
   const st = S.buildStyle(words.concat(letters));
   for (const list of st.byChar.values()) for (const u of list) assert.ok(u.open === 0 || u.open === 1 && !u.iso);
 });
+
+test('a word made only of symbols is sized by the writer\'s usual size, so a bracket stays tall', () => {
+  const { words, letters } = wordsAndLetters();
+  // a "(" about twice as tall as a lowercase letter, hanging a little below the baseline
+  const pts = [];
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30;
+    pts.push([60 + 18 * Math.sin(Math.PI * t), 230 - 120 * t, 1000 + i * 8, 0.5]); // bulges left-to-right like a "("
+  }
+  const paren = { text: '(', xh: 50, baseline: 210, strokes: [pts], truth: {} };
+  const st = S.buildStyle(words.concat(letters, [paren]));
+  const u = st.byChar.get('(')[0];
+  const h = u.box.maxY - u.box.minY;
+  const x = st.byChar.get('x')[0];
+  const xh = x.box.maxY - x.box.minY;
+  assert.ok(h > 0.5 * xh && h < 4, 'bracket height ' + h.toFixed(2) + ' against an x of ' + xh.toFixed(2));
+  assert.ok(st.profile.s > 0, 'the writer\'s scale was learned');
+});
