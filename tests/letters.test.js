@@ -93,3 +93,11 @@ test('a letter crossed out in the letter check stays out of the pool but can be 
   words[u.wid].skip = [{ i: u.idx, ch: 'z' }];
   assert.equal(S.buildStyle(words).byChar.get('o').length, nBefore);
 });
+
+test('stems and punctuation are never called wrong by shape, and look-alike letters do not flag each other', () => {
+  const { words, letters } = wordsAndLetters();
+  const st = S.buildStyle(words.concat(letters));
+  for (const ch of 'il1|!jI.,\'`:;') {
+    for (const u of st.byChar.get(ch) || []) assert.equal(u.wrong, 0, ch + ' must not be flagged');
+  }
+});

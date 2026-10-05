@@ -177,6 +177,17 @@
    * *different* letter's reference than its own was probably cut in the wrong place, and gets
    * u.wrong = 1. Only letters with at least two references can be judged.
    */
+  // Letters that have the same shape once size is removed (a stem is a stem at any height), so a
+  // letter that looks like one of these is not a sign it was cut wrongly.
+  const LOOKALIKES = ['il1|!jI', 'oO0', ".,'`"];
+  // Plain strokes and punctuation: their shape alone says too little (and two isolated examples
+  // can't show how they look when written in a word), so they are never called wrong.
+  const NO_SHAPE_CHECK = "il1|!jI.,'`:;";
+  function lookAlike(a, b) {
+    if (a.toLowerCase() === b.toLowerCase()) return true;
+    return LOOKALIKES.some((g) => g.includes(a) && g.includes(b));
+  }
+
   function markWrongOnes(byChar) {
     const refs = [];
     for (const [ch, list] of byChar) {
@@ -192,7 +203,7 @@
     for (const [ch, list] of byChar) {
       const own = refs.find((r) => r.ch === ch);
       for (const u of list) {
-        if (u.iso || !own) {
+        if (u.iso || !own || NO_SHAPE_CHECK.includes(ch)) {
           u.wrong = 0;
           continue;
         }
@@ -201,7 +212,7 @@
         const dist = (units) => (units.length ? Math.min(...units.map((v) => lookDistance(u, v))) : Infinity);
         const dOwn = dist(own.units);
         let dOther = Infinity;
-        for (const r of refs) if (r.ch !== ch) dOther = Math.min(dOther, dist(r.units));
+        for (const r of refs) if (!lookAlike(ch, r.ch)) dOther = Math.min(dOther, dist(r.units));
         u.wrong = dOther < 0.6 * dOwn && dOwn - dOther > 0.03 ? 1 : 0;
       }
     }
@@ -486,7 +497,7 @@
     return o.words;
   }
 
-  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats };
+  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
