@@ -133,14 +133,14 @@
     const keys = capturedKeys();
     const tok = toks[cur.i];
     $('#roundBlurb').textContent = round.blurb || '';
-    $('#wordCount').textContent = (tok.kind === 'line' ? 'Line ' : 'Word ') + (cur.i + 1) + ' of ' + toks.length;
-    setHint(tok.kind === 'line' ? LINE_HINT : WORD_HINT, false);
+    $('#wordCount').textContent = (tok.kind === 'line' ? 'Line ' : tok.iso ? 'Letter ' : 'Word ') + (cur.i + 1) + ' of ' + toks.length;
+    setHint(tok.kind === 'line' ? LINE_HINT : tok.iso ? LETTER_HINT : WORD_HINT, false);
     const host = $('#prompt');
     host.textContent = '';
     if (tok.kind === 'line') {
       host.appendChild(el('span', 'w cur', tok.text));
     } else if (round.chars) {
-      host.append(el('span', 'muted small', 'Write this mark: '), el('span', 'big', tok.text));
+      host.append(el('span', 'muted small', tok.iso ? 'Write this letter: ' : 'Write this mark: '), el('span', 'big', tok.text));
     } else {
       const sentence = round.sentences[tok.si];
       sentence
@@ -156,6 +156,7 @@
   }
 
   const WORD_HINT = $('#padHint').textContent;
+  const LETTER_HINT = 'Write just this letter, a little bigger and clearer than usual, sitting on the solid line.';
   const LINE_HINT = 'Write the whole sentence on one line, at your normal size and speed, with normal gaps between words.';
   function setHint(text, problem) {
     const h = $('#padHint');
@@ -167,7 +168,7 @@
     const empty = !pad.strokes.length;
     if ($('#padHint').classList.contains('problem')) {
       const tok = tokensOf(cur.r)[cur.i];
-      setHint(tok.kind === 'line' ? LINE_HINT : WORD_HINT, false); // writing again clears the warning
+      setHint(tok.kind === 'line' ? LINE_HINT : tok.iso ? LETTER_HINT : WORD_HINT, false); // writing again clears the warning
     }
     const toks = tokensOf(cur.r);
     const last = cur.r === rounds().length - 1 && cur.i === toks.length - 1;
@@ -232,6 +233,7 @@
       return 'saved';
     }
     snap.key = tok.key;
+    if (tok.iso) snap.iso = true; // a letter written on its own: no cutting needed
     const at = words.findIndex((w) => w.key === tok.key);
     if (at >= 0) words[at] = snap;
     else words.push(snap);

@@ -147,7 +147,26 @@ async function inkPixels(page, selector) {
   check('the rhythm was learned from them', afterLines.rhythm.learned === true && Math.abs(afterLines.rhythm.gapMean - 1.0) < 0.4, JSON.stringify(afterLines.rhythm));
   check('the page says so', /learned from 5 lines/.test(afterLines.note), afterLines.note);
   await page.screenshot({ path: path.join(OUT, '2b-teach-lines.png'), fullPage: true });
-  const totalWords = afterLines.words;
+  let totalWords = afterLines.words;
+
+  console.log('Single letters: each letter written on its own');
+  const isoRound = await page.evaluate(() => window.HW_APP.rounds().findIndex((r) => r.id === 'iso'));
+  check('the Single letters round exists', isoRound > 0, String(isoRound));
+  await page.evaluate((r) => window.HW_APP.goTo(r, 0), isoRound);
+  check('hint asks for just this letter', /just this letter/.test(await page.textContent('#padHint')));
+  check('the prompt shows the letter to write', (await page.textContent('#prompt')).includes('a'));
+  const isoBefore = await page.evaluate(() => window.HW_APP.words.length);
+  for (const [i, ch] of ['a', 'b', 'c'].entries()) {
+    await drawOnPad(page, writeWord(ch, { style: 'print', seed: 300 + i, xh: g.xh, baseline: g.baseline, x0: 200 }), 'pen');
+    await page.click('#btnNext');
+    await page.waitForTimeout(60);
+  }
+  await page.waitForTimeout(400);
+  const isoWords = await page.evaluate(() => window.HW_APP.words.filter((w) => w.iso).map((w) => w.text));
+  check('three letters were saved as single-letter examples', isoWords.join('') === 'abc', isoWords.join(','));
+  check('they count towards what was learned', (await page.evaluate(() => window.HW_APP.style.byChar.get('b').some((u) => u.iso))) === true);
+  totalWords = await page.evaluate(() => window.HW_APP.words.length);
+  check('and only those were added', totalWords === isoBefore + 3);
 
   console.log('Write');
   await page.click('#tab-write');

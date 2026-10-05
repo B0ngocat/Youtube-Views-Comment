@@ -142,6 +142,77 @@
     return 0.5 * (oneWay(a, b) + oneWay(b, a));
   }
 
+  /** The shape of a unit alone: its ink stretched to fill a 1 x 1 box, so size doesn't matter. */
+  function shapeOnly(u) {
+    if (u._shapeOnly) return u._shapeOnly;
+    const pts = shapeSample(u);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const w = Math.max(maxX - minX, 0.15);
+    const h = Math.max(maxY - minY, 0.15);
+    u._shapeOnly = pts.map(([x, y]) => [(x - minX) / w, (y - minY) / h]);
+    return u._shapeOnly;
+  }
+
+  /** How different two units look: shape first, then how far apart their sizes are. */
+  function lookDistance(a, b) {
+    const ha = Math.max(a.box.maxY - a.box.minY, 0.15);
+    const hb = Math.max(b.box.maxY - b.box.minY, 0.15);
+    const wa = Math.max(a.box.maxX - a.box.minX, 0.15);
+    const wb = Math.max(b.box.maxX - b.box.minX, 0.15);
+    return shapeDistance(shapeOnly(a), shapeOnly(b)) + 0.1 * Math.abs(Math.log(ha / hb)) + 0.06 * Math.abs(Math.log(wa / wb));
+  }
+
+  /**
+   * Letters written on their own are always cut correctly, so they are a clean reference for what
+   * each letter looks like. A cut-out letter (from a word) that looks clearly more like a
+   * *different* letter's reference than its own was probably cut in the wrong place, and gets
+   * u.wrong = 1. Only letters with at least two references can be judged.
+   */
+  function markWrongOnes(byChar) {
+    const refs = [];
+    for (const [ch, list] of byChar) {
+      const iso = list.filter((u) => u.iso);
+      if (iso.length >= 2) refs.push({ ch, units: iso });
+    }
+    // recompute only when a new letter gets references, or every few more references, not for each one added
+    const sig = refs.map((r) => r.ch).join('') + ':' + Math.floor(refs.reduce((n, r) => n + r.units.length, 0) / 6);
+    if (refs.length < 6) {
+      for (const list of byChar.values()) for (const u of list) u.wrong = 0;
+      return;
+    }
+    for (const [ch, list] of byChar) {
+      const own = refs.find((r) => r.ch === ch);
+      for (const u of list) {
+        if (u.iso || !own) {
+          u.wrong = 0;
+          continue;
+        }
+        if (u._wrongSig === sig) continue;
+        u._wrongSig = sig;
+        const dist = (units) => (units.length ? Math.min(...units.map((v) => lookDistance(u, v))) : Infinity);
+        const dOwn = dist(own.units);
+        let dOther = Infinity;
+        for (const r of refs) if (r.ch !== ch) dOther = Math.min(dOther, dist(r.units));
+        u.wrong = dOther < 0.6 * dOwn && dOwn - dOther > 0.03 ? 1 : 0;
+      }
+    }
+    // Safety valve: if this would call more than one letter in ten wrong, the references and the
+    // words probably look too different (neat single letters against quick writing) for the
+    // comparison to mean anything for this writer, so don't act on it.
+    const cut = [];
+    for (const list of byChar.values()) for (const u of list) if (!u.iso) cut.push(u);
+    if (cut.length >= 30 && cut.filter((u) => u.wrong).length > 0.1 * cut.length) for (const u of cut) u.wrong = 0;
+  }
+
   const oddCache = new Map(); // char -> the units it was last computed for
 
   /**
@@ -299,6 +370,7 @@
         u.idx = idx;
         u.id = wi + ':' + idx;
         u.word = w;
+        u.iso = !!(words[wi] && words[wi].iso); // written on its own, so never mis-cut
         u.dev = A.deviation(u, profile);
         if (!byChar.has(u.ch)) byChar.set(u.ch, []);
         byChar.get(u.ch).push(u);
@@ -327,6 +399,7 @@
     });
 
     markOddOnes(byChar);
+    markWrongOnes(byChar);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
     const clears = [];

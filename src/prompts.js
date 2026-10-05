@@ -40,6 +40,13 @@
       chars: ['?', "'", '"', '-', ':', ';', '(', ')', '/', '&', '@', '#', '%', '+', '=', '$', '*'],
     },
     {
+      id: 'iso',
+      title: 'Single letters',
+      kind: 'letter',
+      blurb: 'Write each letter on its own, a little bigger and clearer than usual. These need no cutting, so they are the cleanest examples the app gets, and it uses them to catch letters it cut out wrongly.',
+      chars: ('abcdefghijklmnopqrstuvwxyz' + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' + 'abcdefghijklmnopqrstuvwxyz').split(''),
+    },
+    {
       id: 'ln',
       title: 'Full lines',
       kind: 'line',
@@ -74,7 +81,7 @@
 
   /** Flatten a round into the ordered list of things to write. */
   function tokens(round) {
-    if (round.chars) return round.chars.map((c, i) => ({ text: c, si: 0, wi: i, key: round.id + '.0.' + i }));
+    if (round.chars) return round.chars.map((c, i) => ({ text: c, si: 0, wi: i, key: round.id + '.0.' + i, iso: round.kind === 'letter' }));
     // a whole sentence is one thing to write; it is split into words afterwards
     if (round.kind === 'line') return round.sentences.map((s, si) => ({ text: s, si, wi: 0, key: round.id + '.' + si, kind: 'line' }));
     const out = [];
