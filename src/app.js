@@ -514,10 +514,12 @@
   // ---- boot -------------------------------------------------------------------------------------
   loadSettings();
   syncOutputs();
-  rebuild();
   goTo(0, firstOpen(0));
   const hash = (location.hash || '').replace('#', '');
   showTab(hash === 'write' || hash === 'teach' ? hash : words.length >= 20 ? 'write' : 'teach');
+  // The first build of a large saved set takes a few seconds. Let the page paint first so it never looks frozen.
+  if (words.length) $('#status').textContent = 'Loading your handwriting';
+  requestAnimationFrame(() => setTimeout(rebuild, 30));
 
   window.HW_APP = {
     pad,

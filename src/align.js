@@ -299,7 +299,8 @@
   /**
    * Find the baseline and x-height of a word: start from the text-based guess, align, measure
    * the result against what the letters should look like, and repeat until it settles.
-   * Returns the prepared word (strokes normalised to that baseline and x-height).
+   * Returns {prep, res}: the prepared word (strokes normalised to that baseline and x-height)
+   * and its alignment.
    */
   function fitView(raw, stats, prof) {
     let view = initialView(raw, prof);
@@ -313,14 +314,15 @@
         res = { ok: false };
       }
       const q = res.ok ? res.quality : Infinity;
-      if (!best || q < best.q) best = { prep, q };
+      if (!best || q < best.q) best = { prep, res, q };
       if (!res.ok) break;
       const next = refinedView(view, res.units, prof);
       const moved = Math.abs(next.s / view.s - 1) + Math.abs(next.dy - view.dy) / view.s;
       view = next;
       if (moved < 0.04) break;
     }
-    return best ? best.prep : preprocess(raw, stats, initialView(raw, prof));
+    if (best) return { prep: best.prep, res: best.res };
+    return { prep: preprocess(raw, stats, initialView(raw, prof)), res: { ok: false } };
   }
 
   function strokeInfo(s) {
