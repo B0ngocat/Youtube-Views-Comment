@@ -9,8 +9,8 @@ Plain JavaScript, no build step, no framework. Node 18+ for the tests and script
 The handwriting is theirs. Only they can write the samples, and only on a device with a Pencil (or a finger/mouse, which works but looks worse). Walk them through it:
 
 1. Get the app in front of them on the iPad (see "Running it").
-2. Teach tab, rounds in this order: **Alphabet, Capitals, Numbers, Symbols, Single letters, Full lines, Math**. Each is one word, letter or sentence at a time on the pad, then Next. Write at normal speed and size, on the solid line. About 25 to 30 minutes in total.
-3. Look at "What it learned". Tap any letter in the Coverage grid to see every example the app cut out for it, and tap the ones that do not look like the letter to leave them out. This is the most effective way to improve quality, especially for **a, e, o, r, u** and the digits.
+2. Teach tab, rounds in this order: **Alphabet, Capitals, Numbers, Symbols, Single letters, Math, Tricky letters, Numbers in a row, Full lines**. Each is one word, letter or sentence at a time on the pad, then Next. Write at normal speed and size, on the solid line. About 25 to 30 minutes in total.
+3. Look at "What it learned". Tap any letter in the Coverage grid to see every example the app cut out for it, and tap the ones that do not look like the letter to leave them out. This is the most effective way to improve quality, especially for **a, e, o, r, u** and the digits. The Tricky letters round (those five at the start, middle and end of words) and Numbers in a row exist to give those a good supply of examples.
 4. Export (Teach tab) saves `my-handwriting.json`. **That file is their handwriting. Do not commit it, do not paste it anywhere.** `.gitignore` already skips `my-handwriting*.json`.
 
 If a result looks wrong, ask which letters or words give it away, and fix those specifically. Guessing at "make it more natural" does not work; the fixes that mattered were all specific (a letter pool containing mis-cut examples, a symbol scaled wrongly, a single letter carrying a run-in stroke it only has when written alone).

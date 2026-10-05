@@ -159,3 +159,23 @@ test('a word made only of symbols is sized by the writer\'s usual size, so a bra
   assert.ok(h > 0.5 * xh && h < 4, 'bracket height ' + h.toFixed(2) + ' against an x of ' + xh.toFixed(2));
   assert.ok(st.profile.s > 0, 'the writer\'s scale was learned');
 });
+
+test('Tricky letters has a, e, o, r and u at the start, middle and end of words, two words each', () => {
+  const words = P.tokens(P.ROUNDS.find((r) => r.id === 'tricky')).map((t) => t.text);
+  for (const c of 'aeoru') {
+    const has = words.filter((w) => w.includes(c));
+    const at = (test) => has.filter((w) => w.split(c).length === 2 && test(w)).length; // the letter occurs once
+    assert.equal(at((w) => w[0] === c), 2, c + ' at the start');
+    assert.equal(at((w) => w[0] !== c && w[w.length - 1] !== c), 2, c + ' in the middle');
+    assert.equal(at((w) => w[w.length - 1] === c), 2, c + ' at the end');
+  }
+});
+
+test('the Math and Numbers in a row rounds give every digit clean examples', () => {
+  const math = P.tokens(P.ROUNDS.find((r) => r.id === 'math'));
+  assert.ok(math.every((t) => t.iso === true));
+  for (const d of '0123456789') assert.ok(math.filter((t) => t.text === d).length >= 2, d + ' twice on its own');
+  for (const op of '+-=×÷±<>≤≥≠≈→') assert.ok(math.filter((t) => t.text === op).length >= 2, op + ' twice');
+  const rows = P.tokens(P.ROUNDS.find((r) => r.id === 'nums2')).map((t) => t.text).join('');
+  for (const d of '0123456789') assert.ok(rows.split(d).length - 1 >= 3, d + ' at least three times in number words');
+});
