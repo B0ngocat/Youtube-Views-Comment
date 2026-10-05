@@ -29,9 +29,9 @@ test('a constant pen draws a dot as a disc of the same size as the line is wide'
 
 test('SVG export carries the constant pen, the ink colour and a white page', () => {
   const layout = { width: 100, height: 60, xh: 34, lineHeightPx: 100, baselines: [40], strokes: [stroke(1)] };
-  const svg = R.toSVG(layout, { ink: '#0f55e6', constant: true, paper: 'white' });
-  assert.ok(svg.includes('fill="#0f55e6"'));
+  const svg = R.toSVG(layout, { ink: '#1749b3', constant: true, paper: 'white' });
+  assert.ok(svg.includes('fill="#1749b3"'));
   assert.ok(svg.includes('fill="#ffffff"'));
-  const loose = R.toSVG({ ...layout, strokes: [stroke(2, 0.4)] }, { ink: '#0f55e6', constant: true, paper: 'white' });
+  const loose = R.toSVG({ ...layout, strokes: [stroke(2, 0.4)] }, { ink: '#1749b3', constant: true, paper: 'white' });
   assert.equal(svg, loose, 'with a constant pen the page does not depend on stroke widths');
 });

@@ -20,7 +20,7 @@ Export (in the Teach tab) saves your samples to a file, and Import loads them on
 
 ## Looking like a note-taking app
 
-The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in a blue ink on white paper. Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.
+The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in Notability's blue (`#1749b3`) on white paper. Its width, at the default 1.00, matches Notability's thickness 3 for handwriting of about 10 pt x-height on a letter page (measured from an exported sample page; 0.4 is thickness 1). Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.
 
 ## Apple Pencil
 

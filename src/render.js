@@ -16,8 +16,9 @@
     return `M${f2(x - r)} ${f2(y)}a${f2(r)} ${f2(r)} 0 1 0 ${f2(2 * r)} 0a${f2(r)} ${f2(r)} 0 1 0 ${f2(-2 * r)} 0Z`;
   }
 
-  // width of the constant pen, in the same units as a stroke's own w (a typical w is a bit over 1)
-  const CONSTANT_W = 1.15;
+  // The constant pen is 0.12 x-heights wide at a pen thickness of 1. That is a Notability pen at
+  // thickness 3 (1.2 pt wide) against a lowercase x-height of about 10 pt, measured from a sample page.
+  const CONSTANT_W = 0.12 / 0.085;
 
   /**
    * stroke: {pts:[{x,y,w}], taperStart, taperEnd} in px; taper values are in x-heights.
