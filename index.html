@@ -117,19 +117,27 @@ Pack my box with five dozen liquor jugs.</textarea>
             <label>Word spacing <output id="o-wordSpacing"></output><input type="range" id="wordSpacing" min="0.5" max="1.8" step="0.05" value="1"></label>
             <label>Line spacing <output id="o-lineHeight"></output><input type="range" id="lineHeight" min="2" max="4.5" step="0.1" value="3.1"></label>
             <label>Pen thickness <output id="o-pen"></output><input type="range" id="pen" min="0.5" max="2.5" step="0.05" value="1"></label>
+            <label>Pen
+              <select id="penStyle">
+                <option value="constant">Constant width (like a note-taking pen)</option>
+                <option value="speed">Varies with speed</option>
+              </select>
+            </label>
           </div>
           <div class="card controls">
             <h2>Paper &amp; ink</h2>
             <label>Paper
               <select id="paperKind">
+                <option value="white">White</option>
                 <option value="lined">Lined</option>
-                <option value="plain">Plain</option>
+                <option value="plain">Cream</option>
                 <option value="grid">Grid</option>
                 <option value="none">Transparent</option>
               </select>
             </label>
             <label>Ink
               <select id="ink">
+                <option value="#0f55e6">Blue pen (approx.)</option>
                 <option value="#1b1f3b">Blue-black</option>
                 <option value="#111111">Black</option>
                 <option value="#1c3fa8">Blue</option>
@@ -137,6 +145,7 @@ Pack my box with five dozen liquor jugs.</textarea>
                 <option value="#2c5a3a">Green</option>
               </select>
             </label>
+            <label>Exact ink colour <input type="color" id="inkPicker" value="#0f55e6"></label>
           </div>
         </aside>
       </div>

@@ -517,9 +517,26 @@
   }
 
   function saveSettings() {
-    const s = { text: $('#text').value, paperKind: $('#paperKind').value, ink: $('#ink').value, mathMode: $('#mathMode').checked };
+    const s = { text: $('#text').value, paperKind: $('#paperKind').value, ink: $('#ink').value, penStyle: $('#penStyle').value, mathMode: $('#mathMode').checked };
     CONTROLS.forEach((k) => (s[k] = $('#' + k).value));
     store.set('hw.settings.v1', s);
+  }
+
+  /** Select an ink colour; one that is not in the list becomes a "Custom" entry. */
+  function setInk(hex) {
+    const sel = $('#ink');
+    if (!Array.from(sel.options).some((op) => op.value === hex)) {
+      let c = Array.from(sel.options).find((op) => op.dataset.custom);
+      if (!c) {
+        c = document.createElement('option');
+        c.dataset.custom = '1';
+        c.textContent = 'Custom';
+        sel.appendChild(c);
+      }
+      c.value = hex;
+    }
+    sel.value = hex;
+    if (/^#[0-9a-f]{6}$/i.test(hex)) $('#inkPicker').value = hex;
   }
 
   function loadSettings() {
@@ -528,9 +545,10 @@
     if (typeof s.text === 'string') $('#text').value = s.text;
     $('#mathMode').checked = !!s.mathMode;
     $('#mathHelp').hidden = !s.mathMode;
-    ['paperKind', 'ink'].forEach((k) => {
+    ['paperKind', 'penStyle'].forEach((k) => {
       if (s[k]) $('#' + k).value = s[k];
     });
+    if (s.ink) setInk(s.ink);
     CONTROLS.forEach((k) => {
       if (s[k] !== undefined) $('#' + k).value = s[k];
     });
@@ -547,7 +565,7 @@
 
   function paperOptions() {
     const o = readOpts();
-    return { ink: $('#ink').value, pen: o.pen, paper: $('#paperKind').value };
+    return { ink: $('#ink').value, pen: o.pen, constant: $('#penStyle').value === 'constant', paper: $('#paperKind').value };
   }
 
   function renderOutput() {
@@ -579,12 +597,20 @@
     HW.render.drawToCanvas(canvas.getContext('2d'), lay, paperOptions(), dpr);
   }
 
-  CONTROLS.concat(['paperKind', 'ink']).forEach((k) => {
+  CONTROLS.concat(['paperKind', 'ink', 'penStyle']).forEach((k) => {
     $('#' + k).addEventListener('input', () => {
       syncOutputs();
       saveSettings();
       queueRender();
     });
+  });
+  $('#inkPicker').addEventListener('input', () => {
+    setInk($('#inkPicker').value);
+    saveSettings();
+    queueRender();
+  });
+  $('#ink').addEventListener('change', () => {
+    if (/^#[0-9a-f]{6}$/i.test($('#ink').value)) $('#inkPicker').value = $('#ink').value;
   });
   $('#mathMode').addEventListener('change', () => {
     $('#mathHelp').hidden = !$('#mathMode').checked;

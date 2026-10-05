@@ -18,6 +18,10 @@ Math mode (a checkbox under the text box in the Write tab) lays out math in your
 
 Export (in the Teach tab) saves your samples to a file, and Import loads them on another device.
 
+## Looking like a note-taking app
+
+The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in a blue ink on white paper. Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.
+
 ## Apple Pencil
 
 Once the Pencil has been used on the pad, finger and palm touches are ignored (there is a checkbox to turn that off). If the Pencil reports pressure, it sets the line weight. If it doesn't (the USB-C Pencil has no pressure sensor), line weight follows pen speed instead.

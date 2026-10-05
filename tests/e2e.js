@@ -58,7 +58,8 @@ async function inkPixels(page, selector) {
     const c = document.querySelector(sel);
     const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     let n = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i] < 90 && d[i + 1] < 90 && d[i + 2] < 120) n++;
+    // ink is whatever is clearly darker than the paper and its ruled lines, whatever colour the pen is
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 140) n++;
     return n;
   }, selector);
 }

@@ -407,7 +407,9 @@
           }
           strokesOut.push(s);
         }
-        const gap = R ? Math.max(0.15, R.gapMean + R.gapSd * k * G.gaussian(rng)) * xh * o.wordSpacing : spaceW * (0.85 + 0.3 * rng());
+        // a gap is never tiny (it would read as one word), and a little wider after . , ! ? ; :
+        const floor = /[.,!?;:]$/.test(word) ? 0.4 : 0.28;
+        const gap = R ? Math.max(floor, R.gapMean + R.gapSd * k * G.gaussian(rng)) * xh * o.wordSpacing : spaceW * (0.85 + 0.3 * rng());
         x += wpx + gap;
       }
     });

@@ -16,15 +16,21 @@
     return `M${f2(x - r)} ${f2(y)}a${f2(r)} ${f2(r)} 0 1 0 ${f2(2 * r)} 0a${f2(r)} ${f2(r)} 0 1 0 ${f2(-2 * r)} 0Z`;
   }
 
-  /** stroke: {pts:[{x,y,w}], taperStart, taperEnd} in px; taper values are in x-heights. */
-  function strokeToPath(stroke, penPx, xh) {
+  // width of the constant pen, in the same units as a stroke's own w (a typical w is a bit over 1)
+  const CONSTANT_W = 1.15;
+
+  /**
+   * stroke: {pts:[{x,y,w}], taperStart, taperEnd} in px; taper values are in x-heights.
+   * constant: one width all along with round ends, like a ballpoint in a note-taking app, ignoring w and the tapers.
+   */
+  function strokeToPath(stroke, penPx, xh, constant) {
     let pts = stroke.pts;
     if (!pts.length) return '';
     const len0 = G.pathLength(pts);
     const w0 = pts[0].w || 1;
     if (pts.length < 2 || len0 < 0.25 * penPx) {
       const c = pts[Math.floor(pts.length / 2)];
-      return dotPath(c.x, c.y, 0.5 * penPx * (c.w || 1) * 1.05);
+      return dotPath(c.x, c.y, 0.5 * penPx * (constant ? CONSTANT_W : (c.w || 1) * 1.05));
     }
     const spacing = len0 / (pts.length - 1);
     if (spacing > 1.4) pts = G.catmull(pts, Math.ceil(spacing / 1.2));
@@ -40,6 +46,10 @@
 
     const hw = new Array(n);
     for (let i = 0; i < n; i++) {
+      if (constant) {
+        hw[i] = 0.5 * penPx * CONSTANT_W;
+        continue;
+      }
       const w = pts[i].w !== undefined ? pts[i].w : w0;
       const a = tsMin + (1 - tsMin) * smoothstep(s[i] / tsLen);
       const b = teMin + (1 - teMin) * smoothstep((total - s[i]) / teLen);
@@ -107,11 +117,11 @@
     return d.join('') + 'Z' + discs;
   }
 
-  function layoutToPath(layout, penMult) {
+  function layoutToPath(layout, penMult, constant) {
     const xh = layout.xh;
     const penPx = 0.085 * xh * (penMult || 1);
     const parts = [];
-    for (const s of layout.strokes) parts.push(strokeToPath(s, penPx, xh));
+    for (const s of layout.strokes) parts.push(strokeToPath(s, penPx, xh, constant));
     return parts.join('');
   }
 
@@ -139,13 +149,23 @@
   }
 
   /**
-   * opts: {ink, pen (thickness multiplier), paper: 'plain'|'lined'|'grid'|'none', paperColor, lineColor}
+   * opts: {ink, pen (thickness multiplier), constant (one pen width all along), paper: 'white'|'plain'|'lined'|'grid'|'none',
+   *        paperColor, lineColor}
    */
+  function withDefaults(opts) {
+    const o = Object.assign({ ink: '#1b1f3b', pen: 1, constant: false, paper: 'plain', paperColor: '#fffdf7', lineColor: '#b9c7e6' }, opts || {});
+    if (o.paper === 'white') {
+      o.paper = 'plain';
+      o.paperColor = '#ffffff';
+    }
+    return o;
+  }
+
   function toSVG(layout, opts) {
-    const o = Object.assign({ ink: '#1b1f3b', pen: 1, paper: 'plain', paperColor: '#fffdf7', lineColor: '#b9c7e6' }, opts || {});
+    const o = withDefaults(opts);
     const W = layout.width;
     const H = Math.ceil(layout.height);
-    const d = layoutToPath(layout, o.pen);
+    const d = layoutToPath(layout, o.pen, o.constant);
     let body = '';
     if (o.paper !== 'none') body += `<rect width="${W}" height="${H}" fill="${o.paperColor}"/>`;
     body += paperMarkup(layout, o.paper, o.lineColor);
@@ -154,7 +174,7 @@
   }
 
   function drawToCanvas(ctx, layout, opts, scale) {
-    const o = Object.assign({ ink: '#1b1f3b', pen: 1, paper: 'plain', paperColor: '#fffdf7', lineColor: '#b9c7e6' }, opts || {});
+    const o = withDefaults(opts);
     const sc = scale || 1;
     const W = layout.width;
     const H = Math.ceil(layout.height);
@@ -202,7 +222,7 @@
       ctx.globalAlpha = 1;
     }
     ctx.fillStyle = o.ink;
-    ctx.fill(new Path2D(layoutToPath(layout, o.pen)));
+    ctx.fill(new Path2D(layoutToPath(layout, o.pen, o.constant)));
     ctx.restore();
   }
 
