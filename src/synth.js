@@ -87,7 +87,10 @@
           c += 2 * (unit.odd || 0); // looks unlike the writer's other examples of this letter
           if (unit.word.suspect) c += 1.5; // taken from a word the aligner was unsure about
           if (unit.wrong) c += 2; // looks more like a different letter than this one (probably cut in the wrong place)
-          if (unit.iso) c -= 0.5; // written on its own: clean
+          // A letter written on its own is clean, but it carries the little run-in stroke the writer
+          // only makes when a letter stands alone, so keep it to the start of a word.
+          if (unit.iso) c += j === 0 || n === 1 ? -0.5 : /[a-z]/.test(chars[j]) ? 1.5 : 0;
+          c += 1.5 * (unit.far || 0); // unlike the writer's own single-letter version of it
           c += 4 * Math.min(Math.max(0, (unit.dev || 0) - 0.25), 1.5); // much taller / deeper than this writer usually writes it
           let rep = 0;
           for (const s of h.seq) if (s.unit === unit) rep++;

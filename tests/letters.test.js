@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const { writeWord } = require('./synth-writer');
 const S = require('../src/style');
 const P = require('../src/prompts');
+const Y = require('../src/synth');
+const G = require('../src/geometry');
 
 const LOWER = 'abcdefghijklmnopqrstuvwxyz'.split('');
 const WORDS = 'the quick brown fox jumps over lazy dog pack my box with five dozen liquor jugs how vexingly daft zebras jump sphinx of black quartz judge vow'.split(' ');
@@ -100,4 +102,28 @@ test('stems and punctuation are never called wrong by shape, and look-alike lett
   for (const ch of 'il1|!jI.,\'`:;') {
     for (const u of st.byChar.get(ch) || []) assert.equal(u.wrong, 0, ch + ' must not be flagged');
   }
+});
+
+test('single letters are only used to start a word when the word letters exist, and are never enlarged', () => {
+  const { words, letters } = wordsAndLetters();
+  const st = S.buildStyle(words.concat(letters));
+  const width = (u) => u.box.maxX - u.box.minX;
+  // rebuilding must not compound the shrinking
+  const again = S.buildStyle(words.concat(letters));
+  const isoW = (style, c) => style.byChar.get(c).filter((u) => u.iso).map(width);
+  assert.deepEqual(isoW(st, 'o'), isoW(again, 'o'));
+  const raw = letters.filter((l) => l.text === 'o').length;
+  assert.ok(raw >= 2);
+  // mid-word the cut-out letters win over single letters for letters that have enough of them
+  const ctx = { variation: 0.4, messiness: 0, usage: new Map(), missing: new Set() };
+  let midIso = 0;
+  let mid = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const w = Y.synthWord(st, 'ohoho', G.mulberry32(seed), ctx);
+    w.choices.slice(1).forEach((c) => {
+      mid++;
+      if (c.unit.iso) midIso++;
+    });
+  }
+  assert.ok(midIso <= 0.1 * mid, midIso + ' of ' + mid + ' mid-word letters were single letters');
 });

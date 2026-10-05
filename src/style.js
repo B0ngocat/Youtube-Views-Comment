@@ -213,6 +213,7 @@
         const dOwn = dist(own.units);
         let dOther = Infinity;
         for (const r of refs) if (!lookAlike(ch, r.ch)) dOther = Math.min(dOther, dist(r.units));
+        u._dOwn = dOwn;
         u.wrong = dOther < 0.6 * dOwn && dOwn - dOther > 0.03 ? 1 : 0;
       }
     }
@@ -357,6 +358,108 @@
     };
   }
 
+  /**
+   * 0..1 for how far a cut-out letter is from this writer's own single-letter version of it,
+   * relative to the other cut-outs of that letter (0 = typical, 1 = among the furthest).
+   */
+  function markFarOnes(byChar) {
+    for (const list of byChar.values()) {
+      const cut = list.filter((u) => !u.iso && typeof u._dOwn === 'number' && isFinite(u._dOwn));
+      if (cut.length < 6) {
+        for (const u of list) u.far = 0;
+        continue;
+      }
+      const d = cut.map((u) => u._dOwn).sort((a, b) => a - b);
+      const q50 = d[d.length >> 1];
+      const q90 = d[Math.floor(d.length * 0.9)];
+      const span = Math.max(q90 - q50, 1e-6);
+      for (const u of list) u.far = u.iso || typeof u._dOwn !== 'number' ? 0 : Math.min(1, Math.max(0, (u._dOwn - q50) / span));
+    }
+  }
+
+  function inkExtent(u) {
+    let a = Infinity;
+    let b = -Infinity;
+    let c = Infinity;
+    let d = -Infinity;
+    for (const s of u.strokes) {
+      for (const p of s.pts) {
+        if (p.x < a) a = p.x;
+        if (p.x > b) b = p.x;
+        if (p.y < c) c = p.y;
+        if (p.y > d) d = p.y;
+      }
+    }
+    return { w: b - a, h: d - c };
+  }
+
+  /**
+   * Letters written on their own come out wider and taller than the same letters inside a word.
+   * Replace each single letter by a copy shrunk by how this writer's in-word versions compare
+   * (never enlarged). The originals are left alone, so this can run on every rebuild.
+   */
+  function shrinkSingleLetters(byChar, allByChar) {
+    const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
+    const kind = (ch) => (/[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null);
+    const per = new Map();
+    const pooled = { l: { x: [], y: [] }, u: { x: [], y: [] }, d: { x: [], y: [] } };
+    for (const [ch, list] of allByChar) {
+      const k = kind(ch);
+      if (!k) continue;
+      const iso = list.filter((u) => u.iso && !u.skipped).map(inkExtent);
+      const cut = list.filter((u) => !u.iso && !u.skipped).map(inkExtent);
+      if (!iso.length || cut.length < 3) continue;
+      const fx = med(cut.map((e) => e.w)) / med(iso.map((e) => e.w));
+      const fy = med(cut.map((e) => e.h)) / med(iso.map((e) => e.h));
+      if (!isFinite(fx) || !isFinite(fy)) continue;
+      per.set(ch, { fx, fy, n: cut.length });
+      pooled[k].x.push(fx);
+      pooled[k].y.push(fy);
+    }
+    const clamp = (v) => Math.min(1, Math.max(0.6, v));
+    const factorFor = (ch) => {
+      const k = kind(ch);
+      if (!k || pooled[k].x.length < 3) return null;
+      const px = med(pooled[k].x);
+      const py = med(pooled[k].y);
+      const own = per.get(ch);
+      if (!own) return { fx: clamp(px), fy: clamp(py) };
+      const wgt = own.n / (own.n + 1); // a few examples are enough to go on; none at all falls back to the pooled ratio
+      return { fx: clamp(wgt * own.fx + (1 - wgt) * px), fy: clamp(wgt * own.fy + (1 - wgt) * py) };
+    };
+    const shrink = (u, f) => {
+      const x0 = u.box.minX;
+      const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy });
+      const dir = (e) => {
+        const dx = e.dx * f.fx;
+        const dy = e.dy * f.fy;
+        const l = Math.hypot(dx, dy) || 1;
+        return { ...e, x: x0 + (e.x - x0) * f.fx, y: e.y * f.fy, dx: dx / l, dy: dy / l };
+      };
+      return {
+        ...u,
+        strokes: u.strokes.map((s) => ({ ...s, pts: s.pts.map(mapPt) })),
+        marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(mapPt) })),
+        entry: dir(u.entry),
+        exit: dir(u.exit),
+        box: { minX: x0, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
+      };
+    };
+    for (const [ch, list] of allByChar) {
+      const f = factorFor(ch);
+      if (!f || (f.fx > 0.98 && f.fy > 0.98)) continue;
+      const swap = new Map();
+      list.forEach((u, i) => {
+        if (!u.iso) return;
+        const c = shrink(u, f);
+        swap.set(u, c);
+        list[i] = c;
+      });
+      const inPool = byChar.get(ch);
+      if (inPool) inPool.forEach((u, i) => swap.has(u) && (inPool[i] = swap.get(u)));
+    }
+  }
+
   function buildStyle(rawWords) {
     const words = rawWords.filter((w) => w && w.strokes && w.strokes.length && w.text);
     const stats = computeStats(words);
@@ -419,6 +522,8 @@
 
     markOddOnes(byChar);
     markWrongOnes(byChar);
+    markFarOnes(byChar);
+    shrinkSingleLetters(byChar, allByChar);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
     const clears = [];
