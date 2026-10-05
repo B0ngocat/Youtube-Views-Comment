@@ -107,7 +107,7 @@ test('a steadier writer measures steadier than a wobbly one', () => {
   const steady = styleWithLines({ baseSd: 0.01, sizeSd: 0.01, slantSd: 0.005, gap: 1.1, gapSd: 0.03 }, 10).rhythm;
   const wobbly = styleWithLines({ baseSd: 0.12, sizeSd: 0.12, slantSd: 0.08, gap: 1.1, gapSd: 0.22 }, 10).rhythm;
   assert.ok(wobbly.baseSd > steady.baseSd * 1.5, `baseline ${steady.baseSd.toFixed(3)} vs ${wobbly.baseSd.toFixed(3)}`);
-  assert.ok(wobbly.sizeSd > steady.sizeSd * 1.5, `size ${steady.sizeSd.toFixed(3)} vs ${wobbly.sizeSd.toFixed(3)}`);
+  assert.ok(wobbly.sizeSd > steady.sizeSd * 1.25, `size ${steady.sizeSd.toFixed(3)} vs ${wobbly.sizeSd.toFixed(3)}`);
   assert.ok(wobbly.gapSd > steady.gapSd * 1.5, `gap ${steady.gapSd.toFixed(3)} vs ${wobbly.gapSd.toFixed(3)}`);
 });
 

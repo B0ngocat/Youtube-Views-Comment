@@ -83,7 +83,7 @@
     if (r && r.learned) {
       note.textContent = 'Your line rhythm: learned from ' + r.lines + ' lines (word gaps, baseline, size and slant drift).';
       hint.hidden = false;
-      hint.textContent = 'Learned from your lines: 30% reproduces your own drift. Lower is neater, higher exaggerates.';
+      hint.textContent = 'Uses the spacing and drift measured from your lines. 30% is the default; lower is neater, higher exaggerates.';
     } else {
       const n = r ? r.lines : 0;
       note.textContent = n

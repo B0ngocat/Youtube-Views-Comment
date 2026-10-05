@@ -256,17 +256,22 @@
       }
     }
     if (nLines < 3 || gaps.length < 10) return { learned: false, lines: nLines };
+    // Each word's size / baseline / slant is itself an estimate, and a noisy one for short words
+    // or ambiguous letters, so measured drift is partly measurement noise (on real handwriting it
+    // comes out several times larger than people actually vary). Keep it within human ranges,
+    // and assume drift is smooth along a line, since noise also hides the correlation.
+    const gapMean = Math.max(0.2, A.median(gaps));
     return {
       learned: true,
       lines: nLines,
-      gapMean: Math.max(0.2, A.median(gaps)),
-      gapSd: robustSd(gaps),
-      baseSd: robustSd(baseSeries.flat()),
-      baseRho: pooledRho(baseSeries),
-      sizeSd: robustSd(sizeSeries.flat()),
-      sizeRho: pooledRho(sizeSeries),
-      slopeSd: robustSd(slopes),
-      slantSd: robustSd(slantDev),
+      gapMean,
+      gapSd: Math.min(robustSd(gaps), 0.35 * gapMean),
+      baseSd: Math.min(robustSd(baseSeries.flat()), 0.1),
+      baseRho: Math.max(0.4, pooledRho(baseSeries)),
+      sizeSd: Math.min(robustSd(sizeSeries.flat()), 0.1),
+      sizeRho: Math.max(0.4, pooledRho(sizeSeries)),
+      slopeSd: Math.min(robustSd(slopes), 0.03),
+      slantSd: Math.min(robustSd(slantDev), 0.07),
     };
   }
 
