@@ -4,6 +4,10 @@ Write a few sentences with an Apple Pencil and the app learns your handwriting. 
 
 It runs in the browser. Nothing is uploaded; your samples stay in the browser's local storage.
 
+## Getting started with Claude Code
+
+Unzip the folder, open it in Claude Code, and say: "Read CLAUDE.md and get me set up." `CLAUDE.md` explains how the app works, what you need to write yourself, how to run and publish it, and the mistakes to avoid. You need Node 18 or newer. To use the Pencil, the app has to be open on the iPad (same Wi-Fi with `npm run serve`, or published with a password, see below).
+
 ## Using it
 
 1. Open the Teach tab and write each highlighted word on the solid line of the pad, then tap Next. The first round covers every lowercase letter. The later rounds add capitals, numbers and symbols, plus a round of common words so letter pairs look natural.
@@ -41,6 +45,8 @@ The encrypted file is public, so a short or guessable password can be cracked of
 ## How it works
 
 Each captured word is cut into letters along the pen path, so joins and loops stay attached to the right letter. To write new text it picks from your recorded letters (reusing real letter pairs when it has them), joins them with smooth curves and adds a little drift so the result doesn't look copy-pasted.
+
+`tools/` has a script that writes text or math in your hand onto a PDF (see `CLAUDE.md`).
 
 The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses and joins them, `math.js` lays out math, `render.js` draws the ink and `capture.js` is the pad.
 
