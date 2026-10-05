@@ -161,14 +161,15 @@ test('a word made only of symbols is sized by the writer\'s usual size, so a bra
 });
 
 test('Tricky letters has a, e, o, r and u at the start, middle and end of words, two words each', () => {
-  const words = P.tokens(P.ROUNDS.find((r) => r.id === 'tricky')).map((t) => t.text);
-  for (const c of 'aeoru') {
-    const has = words.filter((w) => w.includes(c));
-    const at = (test) => has.filter((w) => w.split(c).length === 2 && test(w)).length; // the letter occurs once
-    assert.equal(at((w) => w[0] === c), 2, c + ' at the start');
-    assert.equal(at((w) => w[0] !== c && w[w.length - 1] !== c), 2, c + ' in the middle');
-    assert.equal(at((w) => w[w.length - 1] === c), 2, c + ' at the end');
-  }
+  const toks = P.tokens(P.ROUNDS.find((r) => r.id === 'tricky'));
+  'aeoru'.split('').forEach((c, si) => {
+    const words = toks.filter((t) => t.si === si).map((t) => t.text); // this letter's own sentence
+    assert.equal(words.length, 6, c + ' has six words');
+    for (const w of words) assert.equal(w.split(c).length, 2, w + ' has ' + c + ' exactly once');
+    assert.equal(words.filter((w) => w[0] === c).length, 2, c + ' at the start');
+    assert.equal(words.filter((w) => w[0] !== c && w[w.length - 1] !== c).length, 2, c + ' in the middle');
+    assert.equal(words.filter((w) => w[w.length - 1] === c).length, 2, c + ' at the end');
+  });
 });
 
 test('the Math and Numbers in a row rounds give every digit clean examples', () => {
