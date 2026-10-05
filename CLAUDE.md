@@ -28,6 +28,8 @@ The Pencil needs the app on the iPad itself. Two ways:
 - **Same Wi-Fi:** `npm run serve`, then open `http://<computer's address>:8080` in Safari on the iPad.
 - **Published, password protected:** `SITE_PASSWORD='...' npm run deploy:pages` builds one encrypted page (AES-256-GCM, PBKDF2) and adds a normal commit on a `gh-pages` branch. In the GitHub repo settings, set Pages to deploy from `gh-pages`. The build refuses passwords under 12 characters unless `ALLOW_SHORT_PASSWORD=1`; a short password can be cracked offline because the encrypted file is public, so only set that if the user understands and says so. Never force-push `gh-pages`; the script does not. Never write the password into a file or commit it.
 
+After `deploy:pages`, "Published to gh-pages" only means the branch was pushed. The site is not updated until GitHub's "pages build and deployment" workflow finishes, and that can stall (a GitHub Actions incident once left it queued for over an hour, and every newer push cancelled the waiting run). Check the run (Actions tab, or the GitHub MCP `actions_list`) and confirm the live page changed (`curl -sI <site>` and look at `last-modified` and `content-length`) before telling the user it is live. While a run is pending, do not push to `gh-pages` again; that cancels it. Browsers also keep the old page for about 10 minutes, and an iPad home-screen app may need to be closed and reopened.
+
 Samples live in the browser's localStorage, per origin. Use Export/Import to move them between devices.
 
 ## How it works
