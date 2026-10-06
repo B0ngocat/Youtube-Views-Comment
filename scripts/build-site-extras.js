@@ -1,32 +1,50 @@
 #!/usr/bin/env node
 /*
- * The plain files published next to the protected page, so an AI assistant can fetch the MCP server by address instead of
- * the user uploading it each time:
+ * The plain files published next to the protected page, so an AI assistant can fetch the MCP server (and, locked with the
+ * password, the handwriting) by address instead of the user uploading them each time:
  *
  *   handwriting-mcp.js        the server, one file, no dependencies          (+ .sha256)
  *   handwriting-mcp-pdf.js    the same with inspect_pdf and fill_pdf          (+ .sha256)
- *   mcp.txt                   how to fetch and run it, in plain text
+ *   handwriting.enc.json      the user's samples, sealed with the password (only when there is one to publish)
+ *   mcp.txt                   how to fetch and run it all, in plain text
  *
- * These hold the program only. They contain none of the user's handwriting, which stays in their own samples file.
+ * The program files hold none of the user's handwriting. The samples are only ever published sealed (mcp/sealed.js).
+ * When a sealed file is there, the published servers know its address, so they need only the password.
  *
- *   node scripts/build-site-extras.js <outDir> [site address]
+ *   SITE_PASSWORD=... HANDWRITING_FILE=my-handwriting.json node scripts/build-site-extras.js <outDir> [site address]
+ *
+ * Without HANDWRITING_FILE, a handwriting.enc.json already in <outDir> is kept and used.
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { build } = require('./build-mcp');
+const { seal, unseal } = require('../mcp/sealed');
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const ENC = 'handwriting.enc.json';
 
-function instructions(base, hashes) {
+function instructions(base, hashes, hasSamples) {
   const url = (f) => (base ? base.replace(/\/?$/, '/') + f : f);
+  const run = hasSamples
+    ? `Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
+already knows where it is, so all it needs is the password, which the owner gives you:
+  HANDWRITING_PASSWORD='<the password>' node handwriting-mcp.js
+  (put the password in the environment, not on the command line, so it stays out of process lists and logs)
+If this computer cannot reach the site from Node (a proxy), download the sealed file with curl and point at it:
+  curl -fsSLO ${url(ENC)}
+  HANDWRITING_PASSWORD='<the password>' node handwriting-mcp.js --samples handwriting.enc.json
+If the owner gives you an unlocked my-handwriting.json instead:  node handwriting-mcp.js --samples my-handwriting.json`
+    : `Run it (speaks MCP over stdin/stdout). It needs the owner's samples file:
+  node handwriting-mcp.js --samples /path/to/my-handwriting.json
+  (without --samples it looks for my-handwriting.json in the current folder, then next to the file)`;
   return `Handwriting MCP server
 ======================
 
-Writes text or math in the owner's own handwriting and returns a PNG. One file of plain Node.js (18 or newer),
-no npm packages. It does not contain any handwriting: that is in a separate samples file the owner exports from
-the Teach tab of the app (my-handwriting.json), which this server reads from disk and never sends anywhere.
+Writes text or math in the owner's own handwriting and returns it as a PNG or an SVG. One file of plain Node.js (18 or newer),
+no npm packages. The program contains no handwriting. ${hasSamples ? "The handwriting is in a separate sealed file on this site (AES-256, password needed) or in the owner's own unlocked export." : 'The handwriting is in a separate file the owner exports from the Teach tab of the app.'}
+It is read into memory and never sent anywhere.
 
 Get it
   curl -fsSLO ${url('handwriting-mcp.js')}
@@ -35,13 +53,11 @@ Get it
 A version that can also read and fill PDFs (2 MB) is ${url('handwriting-mcp-pdf.js')}
   sha256 ${hashes['handwriting-mcp-pdf.js']}
 
-Run it (speaks MCP over stdin/stdout)
-  node handwriting-mcp.js --samples /path/to/my-handwriting.json
-  (without --samples it looks for my-handwriting.json in the current folder, then next to the file)
+${run}
 
-As a web address instead
-  node handwriting-mcp.js --samples my-handwriting.json --http 8787 --token <a secret of 16+ characters>
-  POST http://127.0.0.1:8787/mcp with the header  Authorization: Bearer <token>
+As a web address instead of a program (add to the command above)
+  --http 8787 --token <a secret of 16+ characters>
+  then POST http://127.0.0.1:8787/mcp with the header  Authorization: Bearer <token>
 
 Tools
   handwriting_status   is the handwriting loaded, which characters have no sample
@@ -53,23 +69,34 @@ Tools
   inspect_pdf, fill_pdf   (PDF version only) find where answers go on a PDF, and write them in
 
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},
-\\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX).
+\\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
+check numbers by looking at the picture. Write only what the owner asked for.
 
 The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
-folder next to the samples file, so later starts take under half a second.
+folder (next to the samples file, or in the current folder when it came from the site), so later starts take under
+half a second. That cache holds the handwriting unlocked, so keep it private and do not commit it.
 `;
 }
 
-function buildExtras(outDir, base) {
+function buildExtras(outDir, base, opts) {
+  const o = opts || {};
   fs.mkdirSync(outDir, { recursive: true });
+  if (o.sealFrom) {
+    const plain = fs.readFileSync(o.sealFrom);
+    const sealed = seal(plain, o.password, { allowShort: o.allowShort });
+    if (!unseal(Buffer.from(sealed), o.password).equals(plain)) throw new Error('the sealed file did not open back to the original, so it was not written'); // prove it opens before publishing it
+    fs.writeFileSync(path.join(outDir, ENC), sealed);
+  }
+  const hasSamples = fs.existsSync(path.join(outDir, ENC));
+  const samplesUrl = hasSamples && base ? base.replace(/\/?$/, '/') + ENC : undefined;
   const hashes = {};
   for (const [name, pdf] of [['handwriting-mcp.js', false], ['handwriting-mcp-pdf.js', true]]) {
-    const code = build({ pdf });
+    const code = build({ pdf, samplesUrl });
     hashes[name] = sha(code);
     fs.writeFileSync(path.join(outDir, name), code);
     fs.writeFileSync(path.join(outDir, name + '.sha256'), `${hashes[name]}  ${name}\n`);
   }
-  fs.writeFileSync(path.join(outDir, 'mcp.txt'), instructions(base, hashes));
+  fs.writeFileSync(path.join(outDir, 'mcp.txt'), instructions(base, hashes, hasSamples));
   return hashes;
 }
 
@@ -79,8 +106,13 @@ if (require.main === module) {
     console.error('usage: node scripts/build-site-extras.js <outDir> [site address]');
     process.exit(2);
   }
-  const h = buildExtras(path.resolve(out), base);
-  console.log('Wrote ' + Object.keys(h).join(', ') + ', mcp.txt');
+  try {
+    const h = buildExtras(path.resolve(out), base, { sealFrom: process.env.HANDWRITING_FILE, password: process.env.SITE_PASSWORD, allowShort: process.env.ALLOW_SHORT_PASSWORD === '1' });
+    console.log('Wrote ' + Object.keys(h).join(', ') + ', mcp.txt' + (fs.existsSync(path.join(out, ENC)) ? ', ' + ENC : ''));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
 }
 
-module.exports = { buildExtras };
+module.exports = { buildExtras, ENC };

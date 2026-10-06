@@ -263,3 +263,57 @@ test('seal-samples.js locks a file and refuses a short password', () => {
   assert.match(bad.stderr.toString(), /under 12/);
   assert.ok(!fs.existsSync(path.join(dir, 'x.enc.json')));
 });
+
+test('publishing with samples seals them, bakes their address into the servers, and a kept file is used without them', () => {
+  const { buildExtras, ENC } = require('../scripts/build-site-extras');
+  const { unseal } = require('../mcp/sealed');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-site2-'));
+  const src = path.join(dir, 'my-handwriting.json');
+  fs.writeFileSync(src, samplesJson);
+  const out = path.join(dir, 'site');
+  buildExtras(out, 'https://example.github.io/repo/', { sealFrom: src, password: 'a-long-enough-password' });
+  const enc = fs.readFileSync(path.join(out, ENC));
+  assert.ok(unseal(enc, 'a-long-enough-password').equals(Buffer.from(samplesJson)));
+  assert.ok(!enc.includes(Buffer.from('quick')), 'nothing readable in the published file');
+  for (const f of ['handwriting-mcp.js', 'handwriting-mcp-pdf.js']) assert.match(fs.readFileSync(path.join(out, f), 'utf8'), /__HW_DEFAULT_SAMPLES_URL__ = "https:\/\/example\.github\.io\/repo\/handwriting\.enc\.json"/);
+  const txt = fs.readFileSync(path.join(out, 'mcp.txt'), 'utf8');
+  assert.match(txt, /HANDWRITING_PASSWORD=/);
+  assert.ok(!txt.includes('a-long-enough-password'), 'the password is never written down');
+  // a later publish without a new file keeps the sealed one and still points at it
+  buildExtras(out, 'https://example.github.io/repo/', {});
+  assert.ok(fs.existsSync(path.join(out, ENC)));
+  assert.match(fs.readFileSync(path.join(out, 'handwriting-mcp.js'), 'utf8'), /handwriting\.enc\.json/);
+  // a short password is refused, and nothing is written
+  const out2 = path.join(dir, 'site2');
+  assert.throws(() => buildExtras(out2, 'https://x/', { sealFrom: src, password: 'short' }), /under 12/);
+  assert.ok(!fs.existsSync(path.join(out2, ENC)));
+});
+
+test('the published program with a baked address fetches the sealed file by itself, with only the password', async () => {
+  const { buildExtras, ENC } = require('../scripts/build-site-extras');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-site3-'));
+  const src = path.join(dir, 'my-handwriting.json');
+  fs.writeFileSync(src, samplesJson);
+  const web = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end(fs.readFileSync(path.join(dir, 'site', req.url.slice(req.url.lastIndexOf('/') + 1))));
+  });
+  await new Promise((r) => web.listen(0, '127.0.0.1', r));
+  try {
+    buildExtras(path.join(dir, 'site'), `http://127.0.0.1:${web.address().port}/`, { sealFrom: src, password: 'a-long-enough-password' });
+    const work = path.join(dir, 'client'); // a folder with nothing else in it
+    fs.mkdirSync(work);
+    fs.copyFileSync(path.join(dir, 'site', 'handwriting-mcp.js'), path.join(work, 'handwriting-mcp.js'));
+    const child = spawn(process.execPath, [path.join(work, 'handwriting-mcp.js')], { cwd: work, env: Object.assign({}, process.env, { HANDWRITING_PASSWORD: 'a-long-enough-password' }), stdio: ['pipe', 'pipe', 'pipe'] });
+    const reply = await new Promise((resolve) => {
+      child.stdout.once('data', (d) => resolve(JSON.parse(String(d).split('\n')[0])));
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write_text', arguments: { text: 'the quick fox' } } }) + '\n');
+    });
+    child.kill();
+    assert.equal(reply.result.content[0].type, 'image', JSON.stringify(reply).slice(0, 200));
+    assert.ok(fs.existsSync(path.join(work, '.handwriting-cache')), 'the cache goes in the folder it runs from');
+    assert.ok(ENC);
+  } finally {
+    web.close();
+  }
+});
