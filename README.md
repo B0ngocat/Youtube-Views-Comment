@@ -94,9 +94,9 @@ The assistant can look at the PDF itself as well as read `inspect_pdf`, which on
 
 On the published (password-protected) site there is a **Download everything** button at the bottom left. It gives one `handwriting-engine.zip` with the app's code, the MCP server (`handwriting-mcp.js`, and the PDF version), and the setup guide as a PDF. Tick the box in its panel to add your own `my-handwriting.json` as well; it is off by default so a zip you send to someone does not carry your handwriting. The package is built into the encrypted page by `scripts/pack.js` and put together as a zip in the browser (`src/download.js`), so it works offline once the page has loaded. It is not there when you run the app locally with `npm run serve`.
 
-### A second password, for someone whose AI cannot host a site
+### More passwords, each with its own part of the site
 
-`GUEST_PASSWORD='...' SITE_PASSWORD='...' npm run deploy:pages` puts a second part behind the same login page. A person who types the guest password gets the same app with their own front page (three steps), their own saved data (it never mixes with yours, even in one browser), and a button, **Download for my AI**, that saves a small zip: their handwriting, the two MCP servers, the guide and `FOR-THE-AI.txt`, plain instructions for an assistant that can run a program but cannot host a website or use GitHub. Nothing of the main part is in it. The two passwords must differ, and neither opens the other's part.
+`SITE_PASSWORD='...' NIKO_PASSWORD='...' SEBA_PASSWORD='...' npm run deploy:pages` puts more parts behind the same login page, one per password (the names are in `PROFILES` in `scripts/pack.js`). Each person gets the same app with their own saved data (it never mixes with anyone else's, even in one browser). **Niko's** part has the full **Download everything** button. **Seba's** is for someone whose AI cannot host a site: it has a front page with three steps and a button, **Download for my AI**, that saves a small zip: their handwriting, the two MCP servers, the guide and `FOR-THE-AI.txt`, plain instructions for an assistant that can run a program but cannot host a website or use GitHub. Nothing of the main part is in it. The two passwords must differ, and neither opens the other's part.
 
 ## Looking like a note-taking app
 

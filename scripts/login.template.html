@@ -39,9 +39,8 @@
 <script>
 (function () {
   'use strict';
-  var P = __PAYLOAD__;
-  var X = __EXTRA__; // other passwords, each opening its own part of the site
-  var ALL = [P].concat(X);
+  var B = __BLOBS__;   // the app, locked with a random key (one per kind of package)
+  var S = __SLOTS__;   // one per password: opens that key, and says which part of the site it is
   var STORE = 'hwp.k';
   var f = document.getElementById('f');
   var err = document.getElementById('err');
@@ -53,30 +52,37 @@
   function put(v) { try { localStorage.setItem(STORE, JSON.stringify(v)); } catch (e) { /* private mode */ } }
   function forget() { try { localStorage.removeItem(STORE); } catch (e) { /* ignore */ } }
 
-  async function deriveKey(pw, Q) {
-    var base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw.normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
-    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(Q.salt), iterations: Q.iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+  async function gcmDecrypt(rawKey, iv, data) {
+    var key = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['decrypt']);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(iv) }, key, b64(data)));
   }
-  async function decrypt(key, Q) {
-    var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(Q.iv) }, key, b64(Q.data));
-    return new TextDecoder().decode(pt);
+  /** The blob's key, unlocked with a password (or throws). */
+  async function unwrap(pw, slot) {
+    var base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw.normalize('NFKC')), 'PBKDF2', false, ['deriveBits']);
+    var bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: b64(slot.salt), iterations: slot.iter, hash: 'SHA-256' }, base, 256);
+    return gcmDecrypt(new Uint8Array(bits), slot.wrapIv, slot.wrapped);
   }
-  function open(html) {
+  function open(html, slot) {
     window.HW_LOCK = function () { forget(); location.reload(); };
+    // which part of the site this is, ahead of the app's own scripts: it decides where the app keeps its data and what its button downloads
+    if (slot.profile) {
+      html = html.replace('<body>', function () {
+        return '<body>\n<script>window.HW_PROFILE = ' + JSON.stringify(slot.profile) + '; window.HW_PROFILE_KIND = ' + JSON.stringify(slot.kind) + ';<\/script>';
+      });
+    }
     document.open();
     document.write(html);
     document.close();
   }
+  async function show(rawKey, slot) {
+    open(new TextDecoder().decode(await gcmDecrypt(rawKey, B[slot.blob].iv, B[slot.blob].data)), slot);
+  }
 
   async function tryRemembered() {
     var r = get();
-    var Q = r && ALL.filter(function (q) { return q.id === r.id; })[0];
-    if (!Q) { forget(); return false; }
-    try {
-      var key = await crypto.subtle.importKey('raw', b64(r.k), 'AES-GCM', false, ['decrypt']);
-      open(await decrypt(key, Q));
-      return true;
-    } catch (e) { forget(); return false; }
+    var slot = r && S.filter(function (q) { return q.id === r.id; })[0];
+    if (!slot) { forget(); return false; }
+    try { await show(b64(r.k), slot); return true; } catch (e) { forget(); return false; }
   }
 
   f.addEventListener('submit', async function (ev) {
@@ -85,13 +91,13 @@
     go.disabled = true; go.textContent = 'Unlocking';
     try {
       var pw = document.getElementById('pw').value;
-      var html = null, key = null, Q = null;
-      for (var i = 0; i < ALL.length && html === null; i++) { // the password belongs to at most one part of the site
-        try { key = await deriveKey(pw, ALL[i]); html = await decrypt(key, ALL[i]); Q = ALL[i]; } catch (e2) { html = null; }
+      var found = null, rawKey = null;
+      for (var i = 0; i < S.length && !found; i++) { // a password belongs to at most one part of the site
+        try { rawKey = await unwrap(pw, S[i]); found = S[i]; } catch (e2) { found = null; }
       }
-      if (html === null) throw new Error('wrong password');
-      if (document.getElementById('rem').checked) put({ id: Q.id, k: b64enc(await crypto.subtle.exportKey('raw', key)) });
-      open(html);
+      if (!found) throw new Error('wrong password');
+      if (document.getElementById('rem').checked) put({ id: found.id, k: b64enc(rawKey) });
+      await show(rawKey, found);
     } catch (e) {
       go.disabled = false; go.textContent = 'Unlock';
       err.textContent = window.isSecureContext ? 'Wrong password.' : 'This page must be opened over https.';

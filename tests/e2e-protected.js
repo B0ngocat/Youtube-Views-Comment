@@ -12,7 +12,8 @@ const { chromium } = require('playwright');
 const { buildProtected } = require('../scripts/build-protected');
 
 const PASSWORD = 'e2e-password-correct-horse';
-const GUEST = 'e2e-guest-password-battery';
+const NIKO = 'e2e-niko-password-battery';
+const SEBA = 'e2e-seba-password-battery';
 let failed = 0;
 const check = (name, ok, detail) => {
   console.log((ok ? '  ok   ' : '  FAIL ') + name + (!ok && detail ? '  -> ' + detail : ''));
@@ -20,7 +21,7 @@ const check = (name, ok, detail) => {
 };
 
 (async () => {
-  const page = buildProtected(PASSWORD, { extra: [{ password: GUEST, profile: 'guest' }] });
+  const page = buildProtected(PASSWORD, { extra: [{ password: NIKO, profile: 'niko' }, { password: SEBA, profile: 'seba' }] });
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'text/html');
     res.end(page);
@@ -126,16 +127,17 @@ const check = (name, ok, detail) => {
   await tab.waitForSelector('#pw');
   check('unticking "Remember" means it asks again', true);
 
-  // the second password opens the guest part: its own front page, its own data, and a small zip for the person's AI
+  // the third password opens the small part: its own front page, its own data, and a small zip for the person's AI
   await tab.waitForSelector('#pw');
   await tab.fill('#pw', 'not-either-password');
   await tab.click('#go');
   await tab.waitForFunction(() => document.querySelector('#err').textContent.length > 0);
   check('a password that is neither one is still rejected', /Wrong password/.test(await tab.textContent('#err')));
-  await tab.fill('#pw', GUEST);
+  await tab.fill('#pw', SEBA);
   await tab.click('#go');
   await tab.waitForSelector('#pad', { timeout: 20000 });
-  check('the guest password opens the guest part', await tab.evaluate(() => window.HW_PROFILE === 'guest'));
+  check('the third password opens the small part', await tab.evaluate(() => !!window.HW_PROFILE && window.HW_PROFILE_KIND === 'ai'));
+  const sebaNs = await tab.evaluate(() => window.HW_PROFILE);
   check('which starts with three steps', await tab.isVisible('#guestNote'));
   check('and the button says what it gives', (await tab.textContent('#btnDownloadAll')) === 'Download for my AI');
   await tab.click('#btnDownloadAll');
@@ -158,7 +160,7 @@ const check = (name, ok, detail) => {
   check('the note for the AI names the tools and the rules', /write_text/.test(String(gfiles.get(gtop + 'FOR-THE-AI.txt'))) && /PRIVATE/.test(String(gfiles.get(gtop + 'FOR-THE-AI.txt'))));
   // the guest part keeps its data apart: lock, log in as the main user in the same browser, and the guest's words are not there
   await tab.evaluate(() => window.HW_APP.words.pop());
-  await tab.evaluate(() => localStorage.setItem('guest:hw.words.v1', JSON.stringify([{ text: 'kept', xh: 30, baseline: 0, strokes: [[[0, 0, 0, 0.5], [5, 5, 10, 0.5]]] }])));
+  await tab.evaluate((ns) => localStorage.setItem(`${ns}:hw.words.v1`, JSON.stringify([{ text: 'kept', xh: 30, baseline: 0, strokes: [[[0, 0, 0, 0.5], [5, 5, 10, 0.5]]] }])), sebaNs);
   await tab.click('#btnLock');
   await tab.waitForSelector('#pw');
   await tab.fill('#pw', PASSWORD);
@@ -167,6 +169,26 @@ const check = (name, ok, detail) => {
   check('the main part is the main part again', await tab.evaluate(() => window.HW_PROFILE === undefined && document.querySelector('#guestNote').hidden));
   check('and does not see the guest\'s handwriting', await tab.evaluate(() => window.HW_APP.words.length === 0 && !localStorage.getItem('hw.words.v1')));
   check('its button is the full one again', (await tab.textContent('#btnDownloadAll')) === 'Download everything');
+
+  // the second password opens a part of its own, with the full package and data that is only its own
+  await tab.click('#btnLock');
+  await tab.waitForSelector('#pw');
+  await tab.fill('#pw', NIKO);
+  await tab.click('#go');
+  await tab.waitForSelector('#pad', { timeout: 20000 });
+  check('the second password opens its own part', await tab.evaluate(() => !!window.HW_PROFILE && window.HW_PROFILE_KIND === 'full'));
+  check('which has the full download and no three-step box', (await tab.textContent('#btnDownloadAll')) === 'Download everything' && (await tab.evaluate(() => document.querySelector('#guestNote').hidden)));
+  check('and sees neither of the others\' handwriting', await tab.evaluate(() => window.HW_APP.words.length === 0 && true));
+  await tab.click('#btnDownloadAll');
+  const [ndl] = await Promise.all([tab.waitForEvent('download'), tab.click('#dlGo')]);
+  const nfiles = readZip((await (async () => { const pth = path.join(shot || require('os').tmpdir(), 'niko.zip'); await ndl.saveAs(pth); return fs.readFileSync(pth); })()));
+  check('its zip is the full package', nfiles.has('handwriting-engine/src/synth.js') && nfiles.has('handwriting-engine/CLAUDE.md'));
+  await tab.click('#btnLock');
+  await tab.waitForSelector('#pw');
+  await tab.fill('#pw', PASSWORD);
+  await tab.click('#go');
+  await tab.waitForSelector('#pad', { timeout: 20000 });
+  check('the main password still opens the main part', await tab.evaluate(() => window.HW_PROFILE === undefined));
 
   check('no script errors', errors.length === 0, errors.join(' | '));
   await browser.close();

@@ -89,7 +89,7 @@
     return makeZip(entries);
   }
 
-  const guest = window.HW_PROFILE === 'guest'; // the guest part hands over a small zip for the person's AI, with their handwriting in it
+  const guest = window.HW_PROFILE_KIND === 'ai'; // the small part hands over a small zip for the person's AI, with their handwriting in it
   const top = guest ? 'handwriting-for-ai/' : 'handwriting-engine/';
   const panel = $('#dlPanel');
   const have = () => (window.HW_APP && window.HW_APP.words ? window.HW_APP.words.length : 0);

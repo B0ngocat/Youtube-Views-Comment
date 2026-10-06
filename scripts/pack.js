@@ -33,17 +33,19 @@ function tracked() {
 }
 
 /**
- * What each part of the site's Download button gives. The main part gets the whole project. The guest part is for someone
+ * What each part of the site's Download button gives. The main part gets the whole project, and so does a "full" part. An "ai" part is for someone
  * whose AI can run a program but cannot host a site or use GitHub: just the two servers, the guide and a plain note for the
  * AI, with the person's own handwriting added by the page (src/download.js).
  */
 const PROFILES = {
-  guest: { top: 'handwriting-for-ai/', zip: 'handwriting-for-ai.zip', keep: ['docs/handwriting-engine-guide.pdf'], rename: { 'docs/FOR-THE-AI.txt': 'FOR-THE-AI.txt' } },
+  niko: { kind: 'full' }, // a person who can run and host everything: the full package, data of their own
+  seba: { kind: 'ai' }, // a person whose AI can only run a program: the small zip
 };
+const AI_PACK = { top: 'handwriting-for-ai/', keep: ['docs/handwriting-engine-guide.pdf'], rename: { 'docs/FOR-THE-AI.txt': 'FOR-THE-AI.txt' } };
 
 /** [{name, size, crc, deflated}] with names under the top folder. */
-function buildPack(extra, profile) {
-  const prof = profile && PROFILES[profile];
+function buildPack(extra, kind) {
+  const prof = kind === 'ai' ? AI_PACK : null; // 'full' (or nothing) is the whole project
   const top = prof ? prof.top : TOP;
   const files = (prof ? [...prof.keep, 'docs/FOR-THE-AI.txt'] : tracked())
     .filter((f) => !NEVER.test(f))
@@ -106,8 +108,8 @@ function buildZip(extra) {
 }
 
 /** The pack as the one line of script the page carries: window.HW_PACK = [[name, size, crc, base64], ...]. */
-function packScript(profile, extra) {
-  const rows = buildPack(extra, profile).map((e) => `[${JSON.stringify(e.name)},${e.size},${e.crc},${JSON.stringify(e.deflated.toString('base64'))}]`);
+function packScript(kind, extra) {
+  const rows = buildPack(extra, kind).map((e) => `[${JSON.stringify(e.name)},${e.size},${e.crc},${JSON.stringify(e.deflated.toString('base64'))}]`);
   return `window.HW_PACK = [${rows.join(',\n')}];`;
 }
 

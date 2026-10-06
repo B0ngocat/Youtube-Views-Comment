@@ -2,30 +2,41 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { buildProtected, inlineApp } = require('../scripts/build-protected');
+const { buildProtected, inlineApp, partId } = require('../scripts/build-protected');
 
 const PASSWORD = 'unit-test-password-12345';
 
-function payloadOf(page) {
-  const m = page.match(/var P = (\{[^;]*\});/);
-  assert.ok(m, 'payload present');
-  return JSON.parse(m[1]);
+/** The blobs and slots in the published page. */
+function partsOf(page) {
+  const b = page.match(/var B = (\[.*?\]);\s+\/\//s);
+  const sl = page.match(/var S = (\[.*?\]);\s+\/\//s);
+  assert.ok(b && sl, 'payload present');
+  return { blobs: JSON.parse(b[1]), slots: JSON.parse(sl[1]) };
 }
 
-/** Decrypt the way the browser does (PBKDF2 -> AES-GCM over ciphertext||tag). */
-function decrypt(payload, password) {
-  const salt = Buffer.from(payload.salt, 'base64');
-  const iv = Buffer.from(payload.iv, 'base64');
-  const data = Buffer.from(payload.data, 'base64');
-  const key = crypto.pbkdf2Sync(Buffer.from(password.normalize('NFKC'), 'utf8'), salt, payload.iter, 32, 'sha256');
-  const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+const gcmOpen = (key, iv, data) => {
+  data = Buffer.from(data, 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
   d.setAuthTag(data.subarray(data.length - 16));
-  return Buffer.concat([d.update(data.subarray(0, data.length - 16)), d.final()]).toString('utf8');
+  return Buffer.concat([d.update(data.subarray(0, data.length - 16)), d.final()]);
+};
+
+/** Open the way the browser does: PBKDF2 unlocks the blob's key (AES-GCM over key||tag), the key unlocks the page. Throws on a wrong password. */
+function decryptSlot(parts, slot, password) {
+  const key = crypto.pbkdf2Sync(Buffer.from(password.normalize('NFKC'), 'utf8'), Buffer.from(slot.salt, 'base64'), slot.iter, 32, 'sha256');
+  const blobKey = gcmOpen(key, slot.wrapIv, slot.wrapped);
+  const blob = parts.blobs[slot.blob];
+  return gcmOpen(blobKey, blob.iv, blob.data).toString('utf8');
 }
+/** The main part's page, for the password given. */
+const decrypt = (page, password) => {
+  const parts = partsOf(page);
+  return decryptSlot(parts, parts.slots[0], password);
+};
 
 test('the right password decrypts to the complete, self-contained app', () => {
   const page = buildProtected(PASSWORD);
-  const html = decrypt(payloadOf(page), PASSWORD);
+  const html = decrypt(page, PASSWORD);
   assert.ok(html.includes('id="btnNext"') && html.includes('HW_APP') && html.includes('function mulberry32'));
   assert.ok(!/<script src=|<link rel="stylesheet"/.test(html), 'everything is inlined');
   assert.equal(html, inlineApp());
@@ -33,7 +44,7 @@ test('the right password decrypts to the complete, self-contained app', () => {
 
 test('a wrong password cannot decrypt', () => {
   const page = buildProtected(PASSWORD);
-  assert.throws(() => decrypt(payloadOf(page), PASSWORD + 'x'));
+  assert.throws(() => decrypt(page, PASSWORD + 'x'));
 });
 
 test('the published page reveals nothing about the app or the password', () => {
@@ -44,12 +55,13 @@ test('the published page reveals nothing about the app or the password', () => {
   assert.match(page, /noindex/);
 });
 
-test('every build uses a fresh salt and iv', () => {
-  const a = payloadOf(buildProtected(PASSWORD));
-  const b = payloadOf(buildProtected(PASSWORD));
-  assert.notEqual(a.salt, b.salt);
-  assert.notEqual(a.iv, b.iv);
-  assert.notEqual(a.data, b.data);
+test('every build uses a fresh salt, iv and key', () => {
+  const a = partsOf(buildProtected(PASSWORD));
+  const b = partsOf(buildProtected(PASSWORD));
+  assert.notEqual(a.slots[0].salt, b.slots[0].salt);
+  assert.notEqual(a.slots[0].wrapped, b.slots[0].wrapped);
+  assert.notEqual(a.blobs[0].iv, b.blobs[0].iv);
+  assert.notEqual(a.blobs[0].data, b.blobs[0].data);
 });
 
 test('short or missing passwords are refused unless explicitly allowed', () => {
@@ -57,7 +69,41 @@ test('short or missing passwords are refused unless explicitly allowed', () => {
   assert.throws(() => buildProtected(undefined), /Set SITE_PASSWORD/);
   assert.throws(() => buildProtected('short'), /under 12/);
   const page = buildProtected('short-pw', { allowShort: true });
-  assert.equal(decrypt(payloadOf(page), 'short-pw').includes('HW_APP'), true);
+  assert.equal(decrypt(page, 'short-pw').includes('HW_APP'), true);
+});
+
+test('three passwords open three parts of the site, and none opens another', () => {
+  const NIKO = 'niko-password-12345';
+  const SEBA = 'seba-password-12345';
+  const page = buildProtected(PASSWORD, { extra: [{ password: NIKO, profile: 'niko' }, { password: SEBA, profile: 'seba' }] });
+  const parts = partsOf(page);
+  assert.equal(parts.slots.length, 3);
+  assert.equal(new Set(parts.slots.map((q) => q.id)).size, 3, 'told apart by id, for "remember on this device"');
+  assert.equal(parts.blobs.length, 2, 'the main and the full part share one locked copy; the small part has its own');
+  assert.deepEqual(parts.slots.map((q) => [q.profile, q.kind, q.blob]), [[null, 'full', 0], [partId('niko'), 'full', 0], [partId('seba'), 'ai', 1]]);
+  assert.ok(partId('niko') !== partId('seba') && /^[0-9a-f]{6}$/.test(partId('niko')));
+  const [main, niko, seba] = parts.slots;
+  const mainHtml = decryptSlot(parts, main, PASSWORD);
+  assert.equal(decryptSlot(parts, niko, NIKO), mainHtml, 'the same full app');
+  const sebaHtml = decryptSlot(parts, seba, SEBA);
+  assert.ok(sebaHtml.includes('id="guestNote"') && sebaHtml.includes('HW_APP'));
+  assert.notEqual(sebaHtml, mainHtml, 'the small part carries the small package');
+  assert.ok(sebaHtml.length < mainHtml.length);
+  const all = [[main, PASSWORD], [niko, NIKO], [seba, SEBA]];
+  for (const [i, [slot]] of all.entries()) for (const [j, [, pw]] of all.entries()) if (i !== j) assert.throws(() => decryptSlot(parts, slot, pw), `password ${j} must not open part ${i}`);
+  for (const secret of [PASSWORD, NIKO, SEBA, 'btnNext']) assert.ok(!page.includes(secret), 'page leaks: ' + secret);
+  // the people's names are not in the page either (checked outside the base64, where four letters can match by chance)
+  const meta = page.replace(/"(data|wrapped|iv|wrapIv|salt)":"[^"]*"/g, '');
+  for (const name of ['niko', 'seba']) assert.ok(!meta.toLowerCase().includes(name), 'page names ' + name);
+  assert.ok(page.length < 1.2 * buildProtected(PASSWORD).length + 6e6, 'a part that shares the full app adds almost nothing');
+  // the button of the small part gives the small zip, with no project source
+  const { buildPack } = require('../scripts/pack');
+  assert.deepEqual(buildPack([], 'ai').map((e) => e.name), ['handwriting-for-ai/FOR-THE-AI.txt', 'handwriting-for-ai/docs/handwriting-engine-guide.pdf', 'handwriting-for-ai/handwriting-mcp-pdf.js', 'handwriting-for-ai/handwriting-mcp.js']);
+  assert.ok(buildPack([], 'full').some((e) => e.name === 'handwriting-engine/src/synth.js'), 'a full part gets the full package');
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: PASSWORD, profile: 'niko' }] }), /cannot share a password/);
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: NIKO, profile: 'niko' }, { password: NIKO, profile: 'seba' }] }), /cannot share a password/);
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: 'short', profile: 'seba' }] }), /SEBA_PASSWORD is under 12/);
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: NIKO, profile: 'nobody' }] }), /Unknown part/);
 });
 
 test('the pack for the Download button holds the project, the servers and the guide, and never samples or secrets', () => {
@@ -85,23 +131,3 @@ test('the pack for the Download button holds the project, the servers and the gu
   assert.ok(readZip); // the reader is exercised against the real zip in the browser test
 });
 
-test('a second password opens its own part of the site, and neither password opens the other', () => {
-  const GUEST = 'guest-password-12345';
-  const page = buildProtected(PASSWORD, { extra: [{ password: GUEST, profile: 'guest' }] });
-  const main = payloadOf(page);
-  const extra = JSON.parse(page.match(/var X = (\[[\s\S]*?\]); \/\/ other/)[1]);
-  assert.equal(extra.length, 1);
-  assert.notEqual(extra[0].id, main.id, 'told apart by id, for "remember on this device"');
-  const mainHtml = decrypt(main, PASSWORD);
-  const guestHtml = decrypt(extra[0], GUEST);
-  assert.ok(guestHtml.includes('window.HW_PROFILE = "guest"') && !mainHtml.includes('HW_PROFILE = '));
-  assert.ok(guestHtml.includes('id="guestNote"') && guestHtml.includes('HW_APP'), 'the same app, with its own front');
-  assert.throws(() => decrypt(extra[0], PASSWORD), 'the main password does not open the guest part');
-  assert.throws(() => decrypt(main, GUEST), 'the guest password does not open the main part');
-  for (const secret of [PASSWORD, GUEST, 'btnNext', 'HW_PROFILE']) assert.ok(!page.includes(secret), 'page leaks: ' + secret);
-  // the pack behind the guest button is the small one, with no project source
-  const names = require('../scripts/pack').buildPack([], 'guest').map((e) => e.name);
-  assert.deepEqual(names, ['handwriting-for-ai/FOR-THE-AI.txt', 'handwriting-for-ai/docs/handwriting-engine-guide.pdf', 'handwriting-for-ai/handwriting-mcp-pdf.js', 'handwriting-for-ai/handwriting-mcp.js']);
-  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: PASSWORD, profile: 'guest' }] }), /cannot share a password/);
-  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: 'short', profile: 'guest' }] }), /GUEST_PASSWORD is under 12/);
-});

@@ -746,7 +746,7 @@
     download(blob, 'handwriting.png');
   });
 
-  if (window.HW_PROFILE === 'guest') $('#guestNote').hidden = false;
+  if (window.HW_PROFILE_KIND === 'ai') $('#guestNote').hidden = false; // the small part: three steps at the top
 
   // ---- tabs -------------------------------------------------------------------------------------
   const TABS = ['teach', 'write', 'sheet'];

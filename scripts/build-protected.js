@@ -12,7 +12,7 @@
  */
 'use strict';
 const fs = require('fs');
-const { packScript } = require('./pack');
+const { packScript, PROFILES } = require('./pack');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -26,7 +26,7 @@ function read(rel) {
 
 /** index.html with its stylesheet and scripts inlined, so it is one self-contained document. */
 function inlineApp(opts) {
-  const profile = opts && opts.profile; // another part of the site (see PROFILES in pack.js); none for the main one
+  const kind = (opts && opts.kind) || 'full'; // 'ai' is the small part of the site (see PROFILES in pack.js)
   let html = read('index.html');
   html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, href) => `<style>\n${read(href)}\n</style>`);
   // Big libraries (vendor/) go in as plain text and only run when the app asks for them (loadLib in src/sheetui.js), so
@@ -35,11 +35,9 @@ function inlineApp(opts) {
   const table = libs.map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
   // The Download button's package (project files, the servers, the guide): deflated here, put into a .zip by src/download.js
   // (it goes just before download.js, which looks for it when it starts)
-  const pack = opts && opts.pack === false ? '' : `<script>${packScript(profile)}</script>\n`;
+  const pack = opts && opts.pack === false ? '' : `<script>${packScript(kind)}</script>\n`;
   html = html.replace('</body>', () => `<script>window.HW_LIBS = {${table.join(',\n')}};</script>\n</body>`);
   html = html.replace('<script src="src/download.js"></script>', () => `${pack}<script src="src/download.js"></script>`);
-  // which part of the site this is, before anything else runs: it decides where the app keeps its data and what the button downloads
-  if (profile) html = html.replace('<body>', () => `<body>\n<script>window.HW_PROFILE = ${JSON.stringify(profile)};</script>`);
   html = html.replace(/<script src="([^"]+)"><\/script>/g, (_, src) => `<script>\n${read(src).replace(/<\/script/gi, '<\\/script')}\n</script>`);
   if (/<(link|script)[^>]+(href|src)="[^"]+"/.test(html.replace(/<script>[\s\S]*?<\/script>/g, '').replace(/<style>[\s\S]*?<\/style>/g, ''))) {
     throw new Error('index.html still references an external file after inlining');
@@ -47,22 +45,37 @@ function inlineApp(opts) {
   return html;
 }
 
-function encrypt(plaintext, password) {
-  const salt = crypto.randomBytes(16);
+const pbkdf2 = (password, salt, iter) => crypto.pbkdf2Sync(Buffer.from(password.normalize('NFKC'), 'utf8'), salt, iter, 32, 'sha256');
+
+/** AES-256-GCM, WebCrypto style: the tag goes on the end of the ciphertext. Returns {iv, data} as base64. */
+function gcm(key, plaintext) {
   const iv = crypto.randomBytes(12);
-  const key = crypto.pbkdf2Sync(Buffer.from(password.normalize('NFKC'), 'utf8'), salt, ITERATIONS, 32, 'sha256');
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag(); // WebCrypto expects ciphertext || tag
+  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return { iv: iv.toString('base64'), data: Buffer.concat([ct, cipher.getAuthTag()]).toString('base64') };
+}
+
+/** The page's contents, locked once with a random key. Several passwords can then each unlock that one key (wrap). */
+function sealBlob(plaintext) {
+  const key = crypto.randomBytes(32);
+  return { key, blob: gcm(key, Buffer.from(plaintext, 'utf8')) };
+}
+
+/** A password's way to the blob's key: PBKDF2(password) locks the key. */
+function wrap(key, password) {
+  const salt = crypto.randomBytes(16);
+  const locked = gcm(pbkdf2(password, salt, ITERATIONS), key);
   return {
-    v: 1,
     id: salt.toString('base64').slice(0, 8), // lets a browser tell "remembered key is for an older password"
     iter: ITERATIONS,
     salt: salt.toString('base64'),
-    iv: iv.toString('base64'),
-    data: Buffer.concat([ct, tag]).toString('base64'),
+    wrapIv: locked.iv,
+    wrapped: locked.data,
   };
 }
+
+/** What the page calls a part: a stable, meaningless id (it names the part's data in the browser), so a name is never in the page. */
+const partId = (name) => crypto.createHash('sha256').update('hw-part:' + name).digest('hex').slice(0, 6);
 
 function checkPassword(password, what, allowShort) {
   if (!password) throw new Error(`Set ${what}.`);
@@ -74,21 +87,25 @@ function checkPassword(password, what, allowShort) {
 
 /**
  * Returns the protected page as a string. Throws on a missing or short password.
- * opts.extra: [{password, profile}], more passwords, each opening its own part of the site (a different copy of the app).
+ * opts.extra: [{password, profile}], more passwords, each opening its own part of the site (see PROFILES in pack.js). They
+ * share the main app's locked contents when their package is the same, so the page does not grow with each one.
  */
 function buildProtected(password, opts) {
   const allowShort = !!(opts && opts.allowShort);
   checkPassword(password, 'SITE_PASSWORD', allowShort);
-  const extra = (opts && opts.extra) || [];
+  const parts = [{ password, profile: null, kind: 'full' }];
   const seen = new Set([password]);
-  for (const e of extra) {
+  for (const e of (opts && opts.extra) || []) {
+    if (!PROFILES[e.profile]) throw new Error('Unknown part of the site: ' + e.profile);
     checkPassword(e.password, e.profile.toUpperCase() + '_PASSWORD', allowShort);
     if (seen.has(e.password)) throw new Error('Two parts of the site cannot share a password.');
     seen.add(e.password);
+    parts.push({ password: e.password, profile: e.profile, kind: PROFILES[e.profile].kind });
   }
-  const payload = encrypt(inlineApp(), password);
-  const others = extra.map((e) => encrypt(inlineApp({ profile: e.profile }), e.password));
-  const page = read('scripts/login.template.html').replace('__PAYLOAD__', JSON.stringify(payload)).replace('__EXTRA__', JSON.stringify(others));
+  const blobs = []; // one per package kind: [{kind, key, blob}]
+  for (const kind of new Set(parts.map((p) => p.kind))) blobs.push(Object.assign({ kind }, sealBlob(inlineApp({ kind }))));
+  const slots = parts.map((p) => Object.assign(wrap(blobs.find((b) => b.kind === p.kind).key, p.password), { blob: blobs.findIndex((b) => b.kind === p.kind), profile: p.profile && partId(p.profile), kind: p.kind }));
+  const page = read('scripts/login.template.html').replace('__BLOBS__', () => JSON.stringify(blobs.map((b) => b.blob))).replace('__SLOTS__', () => JSON.stringify(slots));
   for (const pw of seen) if (page.includes(pw)) throw new Error('refusing to write a page that contains a password');
   return page;
 }
@@ -96,7 +113,8 @@ function buildProtected(password, opts) {
 if (require.main === module) {
   try {
     const out = path.resolve(process.argv[2] || path.join(ROOT, 'dist'));
-    const extra = process.env.GUEST_PASSWORD ? [{ password: process.env.GUEST_PASSWORD, profile: 'guest' }] : [];
+    // other people's parts of the site, each with its own password from the environment: NIKO_PASSWORD, SEBA_PASSWORD
+    const extra = Object.keys(PROFILES).filter((name) => process.env[name.toUpperCase() + '_PASSWORD']).map((name) => ({ password: process.env[name.toUpperCase() + '_PASSWORD'], profile: name }));
     const page = buildProtected(process.env.SITE_PASSWORD, { allowShort: process.env.ALLOW_SHORT_PASSWORD === '1', extra });
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'index.html'), page);
@@ -108,4 +126,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildProtected, inlineApp, ITERATIONS, MIN_LENGTH };
+module.exports = { buildProtected, inlineApp, partId, ITERATIONS, MIN_LENGTH };
