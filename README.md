@@ -44,6 +44,33 @@ The boxes and answers are remembered on this device for that file, so you can cl
 
 The PDF code (`vendor/`, pdf.js and pdf-lib) is only loaded the first time a worksheet is opened.
 
+## Letting an AI assistant use it (MCP)
+
+`mcp/server.js` is an MCP server, so an assistant such as Claude Code or Claude Desktop can write in your hand and fill in worksheets when you ask it to ("fill in the answers on homework.pdf in my handwriting"). It runs the same engine as the web app on your computer, from the file the Export button in the Teach tab saves. It does not open the website, and the handwriting file never leaves your computer: the assistant only gets the pictures and text the tools return.
+
+You need Node 18 or newer and your `my-handwriting.json`.
+
+    # Claude Code
+    claude mcp add handwriting -- node /full/path/to/mcp/server.js --samples /full/path/to/my-handwriting.json
+
+For Claude Desktop, add this to its config file (`mcpServers` section) and restart it:
+
+    "handwriting": {
+      "command": "node",
+      "args": ["/full/path/to/mcp/server.js", "--samples", "/full/path/to/my-handwriting.json", "--out", "/full/path/to/results"]
+    }
+
+`--out` is where it saves what it makes (default: a `handwriting-out` folder in the directory the server starts in).
+
+Tools:
+
+- `handwriting_status`: is your handwriting loaded, and which characters have no sample yet.
+- `write_text`: writes text or TeX-style math and returns a picture of it, so the assistant can check it. Also saves a PNG and a transparent SVG.
+- `inspect_pdf`: for each page, the printed text and the ruled lines, with positions in points from the top-left corner. This is how the assistant finds where an answer goes.
+- `fill_pdf`: writes answers onto a PDF and saves a new file (the original is never changed). Each answer has a page, an x position, a width, and either a y (top of the box) or the y of the printed line it should sit on. Long answers are written smaller to fit, and the reply says which ones were.
+
+The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.
+
 ## Looking like a note-taking app
 
 The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in Notability's blue (`#1749b3`) on white paper. Its width, at the default 1.00, matches Notability's thickness 3 for handwriting of about 10 pt x-height on a letter page (measured from an exported sample page; 0.4 is thickness 1). Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.

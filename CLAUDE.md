@@ -48,6 +48,7 @@ Data flow: `capture.js` records strokes -> `align.js` cuts each word into letter
 | `src/prompts.js` | The Teach rounds. |
 | `src/sheet.js`, `src/sheetui.js` | The Sheet tab: open a PDF or photo, drag answer boxes onto it, type answers, save the PDF with the ink drawn in. `sheet.js` is the part without a screen (fitting an answer to its box, writing ink into a PDF with pdf-lib); `sheetui.js` is the page (pdf.js to show it). |
 | `vendor/` | pdf.js and pdf-lib, unmodified, only for the Sheet tab. `loadLib` in `sheetui.js` loads them on first use; the protected build carries them as text in `window.HW_LIBS`. See `vendor/README.md`. |
+| `mcp/server.js`, `mcp/tools.js`, `mcp/pdfinfo.js`, `mcp/raster.js` | An MCP server over stdio (hand-written JSON-RPC, no dependencies) so an assistant can call the engine: `handwriting_status`, `write_text` (returns a PNG, drawn by `raster.js`), `inspect_pdf` (page text and ruled lines through pdf.js in Node), `fill_pdf` (same `sheet.js` code as the Sheet tab). Reads the exported handwriting file from `--samples` / `HANDWRITING_FILE`. stdout is the protocol, so anything a library prints is sent to stderr. |
 | `src/app.js`, `index.html`, `styles.css` | The UI. `window.HW_APP` exposes `style`, `words`, `layout` for debugging. |
 | `scripts/build-protected.js`, `deploy-pages.sh`, `login.template.html` | The password-protected site. |
 | `tools/handwrite-blocks.js`, `tools/place_on_pdf.py` | Write text or math in the user's hand onto a PDF (see below). |
@@ -80,7 +81,7 @@ Raw sample format (the export file): `{version: 1, words: [{text, xh, baseline, 
 
 ## Writing answers onto a PDF (homework, forms)
 
-The easy way, for the user to do themselves: the Sheet tab (open the PDF, drag a box per answer, type, Save PDF). Boxes are `{page, x, y, w, h, text, kind, xhPt, seed, auto}` in points from the page's top-left corner. If you are doing it for them with a script, use the tools below, which put the same ink on the same kind of page.
+The easy way, for the user to do themselves: the Sheet tab (open the PDF, drag a box per answer, type, Save PDF). Boxes are `{page, x, y, w, h, text, kind, xhPt, seed, auto}` in points from the page's top-left corner. If you have the MCP server connected (`mcp/`), `inspect_pdf` then `fill_pdf` do this without scripts. Otherwise use the tools below, which put the same ink on the same kind of page.
 
     pip install pymupdf
     node tools/handwrite-blocks.js my-handwriting.json blocks.json out/
