@@ -69,6 +69,14 @@ Tools:
 - `inspect_pdf`: for each page, the printed text and the ruled lines, with positions in points from the top-left corner. This is how the assistant finds where an answer goes.
 - `fill_pdf`: writes answers onto a PDF and saves a new file (the original is never changed). Each answer has a page, an x position, a width, and either a y (top of the box) or the y of the printed line it should sit on. Long answers are written smaller to fit, and the reply says which ones were.
 
+### One file, and a web address
+
+`npm run build:mcp` folds the server and the whole engine into one file, `dist/handwriting-mcp.js` (about 150 KB), that needs nothing else: no npm packages, no project folder. Copy it anywhere next to your `my-handwriting.json` and run `node handwriting-mcp.js` (it looks for `my-handwriting.json` in the folder it is started in, then next to itself, or use `--samples`). That file has `handwriting_status` and `write_text`. `node scripts/build-mcp.js --pdf --out dist/handwriting-mcp-pdf.js` also adds `inspect_pdf` and `fill_pdf`, and makes the file about 2 MB.
+
+`write_text` returns the picture as an MCP image (a base64 PNG). A client that cannot show images can ask for the base64 as text too with `include_base64: true`.
+
+To use it as a web address instead of a program, add `--http 8787 --token <a secret of 16 or more characters>`. It then answers MCP requests at `http://127.0.0.1:8787/mcp` (POST, header `Authorization: Bearer <token>`). It listens on your computer only. To reach it from another device, put a tunnel or an HTTPS proxy in front of it; the token is the only thing stopping other people from writing in your hand, so keep it private.
+
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.
 
 ## Looking like a note-taking app

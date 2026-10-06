@@ -6,13 +6,15 @@
  */
 const fs = require('fs');
 const path = require('path');
-const root = path.resolve(__dirname, '..');
-const S = require(path.join(root, 'src/style'));
-const R = require(path.join(root, 'src/render'));
-const Sheet = require(path.join(root, 'src/sheet'));
-const PDFLib = require(path.join(root, 'vendor/pdf-lib.min.js'));
+// Plain relative requires, so scripts/build-mcp.js can fold everything into one file. The PDF parts are required only
+// when a PDF tool is used, and a build without PDF support (globalThis.__HW_NO_PDF__) leaves them out altogether.
+const S = require('../src/style');
+const R = require('../src/render');
+const Sheet = require('../src/sheet');
 const { renderPng } = require('./raster');
-const { inspect } = require('./pdfinfo');
+const PDF = !globalThis.__HW_NO_PDF__;
+const pdfLib = () => require('../vendor/pdf-lib.min.js');
+const inspectPdf = (bytes, o) => require('./pdfinfo').inspect(bytes, o);
 
 const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, slantDelta: 0, wordSpacing: 1 }; // the Write tab's defaults
 const DEFAULT_INK = '#1749b3';
@@ -80,6 +82,7 @@ function createTools(config) {
           seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
+          include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
       run(a) {
@@ -99,7 +102,8 @@ function createTools(config) {
         fs.writeFileSync(svgPath, R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }));
         const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. PNG: ${pngPath}  SVG: ${svgPath}`];
         if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
-        return [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }, text(notes.join('\n'))];
+        const b64 = png.toString('base64');
+        return [{ type: 'image', data: b64, mimeType: 'image/png' }, text(notes.join('\n')), ...(a.include_base64 ? [text('image/png base64:\n' + b64)] : [])];
       },
     },
     {
@@ -108,7 +112,7 @@ function createTools(config) {
       inputSchema: { type: 'object', required: ['pdf'], properties: { pdf: { type: 'string', description: 'Path to the PDF.' }, min_rule_pt: { type: 'number', description: 'Shortest line to report, in points. Default 36.' } } },
       async run(a) {
         const bytes = readPdf(a.pdf);
-        const pages = await inspect(bytes, { minRule: clampNum(a.min_rule_pt, 5, 600, 36) });
+        const pages = await inspectPdf(bytes, { minRule: clampNum(a.min_rule_pt, 5, 600, 36) });
         const lines = [];
         for (const p of pages) {
           lines.push(`Page ${p.page}: ${p.width} x ${p.height} pt${p.rotated ? ' (rotated: fill_pdf cannot write on it)' : ''}`);
@@ -155,6 +159,7 @@ function createTools(config) {
         const { style } = load();
         const bytes = readPdf(a.pdf);
         if (!Array.isArray(a.answers) || !a.answers.length) throw new Error('answers must be a list with at least one answer.');
+        const PDFLib = pdfLib();
         const probe = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
         const sizes = probe.getPages().map((p) => {
           const v = p.getCropBox ? p.getCropBox() : p.getMediaBox();
@@ -192,6 +197,8 @@ function createTools(config) {
     },
   ];
 
+  const available = PDF ? defs : defs.filter((d) => d.name !== 'inspect_pdf' && d.name !== 'fill_pdf');
+
   function readPdf(p) {
     if (typeof p !== 'string' || !p) throw new Error('pdf (a path) is required.');
     let b;
@@ -205,9 +212,9 @@ function createTools(config) {
   }
 
   return {
-    list: () => defs.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+    list: () => available.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     async call(name, args) {
-      const t = defs.find((d) => d.name === name);
+      const t = available.find((d) => d.name === name);
       if (!t) throw new Error('Unknown tool ' + name);
       return t.run(args || {});
     },

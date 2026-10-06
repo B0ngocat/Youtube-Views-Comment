@@ -6,6 +6,7 @@
  * go back to the assistant.
  *
  *   node mcp/server.js --samples /path/to/my-handwriting.json [--out /folder/for/results]
+ *   node mcp/server.js --samples ... --http 8787 --token <secret>      (a web address instead of stdin/stdout)
  *
  * (or HANDWRITING_FILE and HANDWRITING_OUT in the environment). No dependencies: the protocol is a few lines of JSON-RPC.
  */
@@ -52,14 +53,17 @@ function createServer(config) {
   };
 }
 
-function main() {
-  // stdout carries the protocol; anything a library prints must go to stderr
-  console.log = console.info = console.warn = (...a) => console.error(...a);
-  const argv = process.argv.slice(2);
-  const handle = createServer({
-    samples: argValue(argv, '--samples') || process.env.HANDWRITING_FILE,
-    out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
-  });
+const fs = require('fs');
+const path = require('path');
+
+/** The handwriting file: --samples, then HANDWRITING_FILE, then my-handwriting.json in the current folder or next to this script. */
+function findSamples(argv) {
+  const given = argValue(argv, '--samples') || process.env.HANDWRITING_FILE;
+  if (given) return given;
+  return [path.resolve('my-handwriting.json'), path.join(__dirname, 'my-handwriting.json')].find((p) => fs.existsSync(p));
+}
+
+function serveStdio(handle) {
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
@@ -85,5 +89,57 @@ function main() {
   process.stdin.on('end', () => process.exit(0));
 }
 
+/**
+ * MCP over HTTP (the "streamable HTTP" transport, JSON replies only): POST /mcp with a JSON-RPC message. Needs a bearer
+ * token, because anyone who can reach the port could otherwise write in the user's hand. Listens on this computer only
+ * unless --host says otherwise; to use it from elsewhere, put a tunnel or a reverse proxy with HTTPS in front.
+ */
+function serveHttp(handle, port, host, token) {
+  const http = require('http');
+  const server = http.createServer((req, res) => {
+    const send = (code, obj) => {
+      res.writeHead(code, { 'content-type': 'application/json' });
+      res.end(obj === undefined ? '' : JSON.stringify(obj));
+    };
+    if (req.url.split('?')[0] !== '/mcp') return send(404, { error: 'not found' });
+    if (req.headers.authorization !== 'Bearer ' + token) return send(401, { error: 'missing or wrong token' });
+    if (req.method !== 'POST') return send(405, { error: 'POST only' });
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > 20e6) req.destroy();
+    });
+    req.on('end', async () => {
+      let msg;
+      try {
+        msg = JSON.parse(body);
+      } catch {
+        return send(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      }
+      const batch = Array.isArray(msg);
+      const replies = (await Promise.all((batch ? msg : [msg]).map((m) => handle(m).catch((e) => ({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: e.message } }))))).filter(Boolean);
+      if (!replies.length) return send(202);
+      send(200, batch ? replies : replies[0]);
+    });
+  });
+  server.listen(port, host, () => console.error(`Handwriting MCP server on http://${host}:${server.address().port}/mcp (send the header "Authorization: Bearer <token>")`));
+  return server;
+}
+
+function main() {
+  // stdout carries the protocol; anything a library prints must go to stderr
+  console.log = console.info = console.warn = (...a) => console.error(...a);
+  const argv = process.argv.slice(2);
+  const handle = createServer({ samples: findSamples(argv), out: argValue(argv, '--out') || process.env.HANDWRITING_OUT });
+  const port = argValue(argv, '--http');
+  if (port === undefined) return serveStdio(handle);
+  const token = argValue(argv, '--token') || process.env.HANDWRITING_TOKEN;
+  if (!token || token.length < 16) {
+    console.error('--http needs a secret of at least 16 characters: --token <secret> (or HANDWRITING_TOKEN). For example: ' + require('crypto').randomBytes(18).toString('base64url'));
+    process.exit(2);
+  }
+  serveHttp(handle, Number(port), argValue(argv, '--host') || '127.0.0.1', token);
+}
+
 if (require.main === module) main();
-module.exports = { createServer, PROTOCOLS };
+module.exports = { createServer, PROTOCOLS, serveHttp };

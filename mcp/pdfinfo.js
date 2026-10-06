@@ -4,14 +4,12 @@
  * and the ruled lines (the lines or boxes an answer is written on). Everything is in points from the page's top-left
  * corner, the same way the answer boxes are given to fill_pdf.
  */
-const path = require('path');
-const vendor = path.resolve(__dirname, '..', 'vendor');
 
 let pdfjs = null;
 function lib() {
   if (!pdfjs) {
-    require(path.join(vendor, 'pdf.worker.min.js')); // sets globalThis.pdfjsWorker, so pdf.js needs no worker thread
-    pdfjs = require(path.join(vendor, 'pdf.min.js'));
+    require('../vendor/pdf.worker.min.js'); // sets globalThis.pdfjsWorker, so pdf.js needs no worker thread
+    pdfjs = require('../vendor/pdf.min.js');
     pdfjs.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
   }
   return pdfjs;
