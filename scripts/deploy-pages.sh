@@ -4,7 +4,8 @@
 #   SITE_PASSWORD='...' npm run deploy:pages
 #
 # Adds a normal commit on top of gh-pages (no force push). The branch only ever contains the
-# login page and the encrypted app. In the repo settings, set Pages to deploy from gh-pages.
+# login page, the encrypted app, and the MCP server files (the program only, nothing of the user's
+# handwriting) with their instructions in mcp.txt. In the repo settings, set Pages to deploy from gh-pages.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${SITE_PASSWORD:?Set SITE_PASSWORD}"
@@ -12,6 +13,10 @@ cd "$(dirname "$0")/.."
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 node scripts/build-protected.js "$WORK/site"
+# the address Pages serves this repo at, for the links in mcp.txt
+SLUG="$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+)/([^/]+)$#\1 \2#; s#\.git$##')"
+OWNER="${SLUG% *}"; REPO="${SLUG#* }"
+node scripts/build-site-extras.js "$WORK/site" "https://$(echo "$OWNER" | tr 'A-Z' 'a-z').github.io/$REPO/"
 
 REMOTE="$(git remote get-url origin)"
 NAME="$(git config user.name || true)"

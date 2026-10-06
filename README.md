@@ -78,6 +78,8 @@ Tools:
 
 `write_text` returns the picture as an MCP image (a base64 PNG). A client that cannot show images can ask for the base64 as text too with `include_base64: true`.
 
+Deploying the site also publishes the server next to the login page, so an assistant can fetch it instead of you uploading it each time: `https://<you>.github.io/<repo>/handwriting-mcp.js` (and `handwriting-mcp-pdf.js`), each with a `.sha256` file, and `mcp.txt`, a plain-text page of instructions an assistant can read. These files are only the program. Your handwriting is not in them and is not on the site: it stays in your own `my-handwriting.json`, which still has to be given to wherever the server runs.
+
 To use it as a web address instead of a program, add `--http 8787 --token <a secret of 16 or more characters>`. It then answers MCP requests at `http://127.0.0.1:8787/mcp` (POST, header `Authorization: Bearer <token>`). It listens on your computer only. To reach it from another device, put a tunnel or an HTTPS proxy in front of it; the token is the only thing stopping other people from writing in your hand, so keep it private.
 
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.

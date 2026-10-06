@@ -137,3 +137,21 @@ test('--http refuses to start without a real token', async () => {
   const code = await new Promise((r) => child.on('exit', r));
   assert.equal(code, 2);
 });
+
+test('the files published on the site are the program only, with hashes and instructions that match', () => {
+  const { buildExtras } = require('../scripts/build-site-extras');
+  const crypto = require('crypto');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-site-'));
+  const hashes = buildExtras(dir, 'https://example.github.io/repo/');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['handwriting-mcp-pdf.js', 'handwriting-mcp-pdf.js.sha256', 'handwriting-mcp.js', 'handwriting-mcp.js.sha256', 'mcp.txt']);
+  for (const name of ['handwriting-mcp.js', 'handwriting-mcp-pdf.js']) {
+    const code = fs.readFileSync(path.join(dir, name));
+    assert.equal(crypto.createHash('sha256').update(code).digest('hex'), hashes[name]);
+    assert.equal(fs.readFileSync(path.join(dir, name + '.sha256'), 'utf8'), `${hashes[name]}  ${name}\n`, 'sha256sum -c format');
+    assert.ok(!code.includes('"strokes":[['), 'no samples inside');
+  }
+  const txt = fs.readFileSync(path.join(dir, 'mcp.txt'), 'utf8');
+  assert.match(txt, /curl -fsSLO https:\/\/example\.github\.io\/repo\/handwriting-mcp\.js/);
+  assert.ok(txt.includes(hashes['handwriting-mcp.js']) && txt.includes(hashes['handwriting-mcp-pdf.js']));
+  for (const tool of ['write_text', 'write_batch', 'handwriting_status', 'fill_pdf']) assert.ok(txt.includes(tool), tool);
+});
