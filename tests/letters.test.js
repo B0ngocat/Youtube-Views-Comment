@@ -180,3 +180,18 @@ test('the Math and Numbers in a row rounds give every digit clean examples', () 
   const rows = P.tokens(P.ROUNDS.find((r) => r.id === 'nums2')).map((t) => t.text).join('');
   for (const d of '0123456789') assert.ok(rows.split(d).length - 1 >= 3, d + ' at least three times in number words');
 });
+
+test('a slash written much taller than the writer\'s letters is scaled down to their ascender height', () => {
+  const { words, letters } = wordsAndLetters();
+  // a straight line three x-heights tall, written on its own like a symbol
+  const pts = [];
+  for (let i = 0; i <= 30; i++) pts.push([60 + (i / 30) * 40, 250 - (i / 30) * 150, 1000 + i * 8, 0.5]);
+  const slash = { text: '/', xh: 50, baseline: 210, strokes: [pts], truth: {} };
+  const st = S.buildStyle(words.concat(letters, [slash]));
+  const u = st.byChar.get('/')[0];
+  const height = u.box.maxY - u.box.minY;
+  const top = st.profile.asc + 0.25;
+  assert.ok(height <= top + 0.05, 'slash height ' + height.toFixed(2) + ' against a cap of ' + top.toFixed(2));
+  assert.ok(height > 1, 'still a tall slash');
+  assert.equal(S.buildStyle(words.concat(letters, [slash])).byChar.get('/')[0].box.maxY, u.box.maxY, 'rebuilding does not shrink it again');
+});

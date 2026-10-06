@@ -482,6 +482,47 @@
    * Replace each single letter by a copy shrunk by how this writer's in-word versions compare
    * (never enlarged). The originals are left alone, so this can run on every rebuild.
    */
+  /** A copy of a unit scaled by f.fx across and f.fy up, from its left edge and the baseline. The original is untouched. */
+  function scaleUnit(u, f) {
+    const x0 = u.box.minX;
+    const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy });
+    const dir = (e) => {
+      const dx = e.dx * f.fx;
+      const dy = e.dy * f.fy;
+      const l = Math.hypot(dx, dy) || 1;
+      return { ...e, x: x0 + (e.x - x0) * f.fx, y: e.y * f.fy, dx: dx / l, dy: dy / l };
+    };
+    return {
+      ...u,
+      strokes: u.strokes.map((st) => ({ ...st, pts: st.pts.map(mapPt) })),
+      marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(mapPt) })),
+      entry: dir(u.entry),
+      exit: dir(u.exit),
+      box: { minX: x0, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
+    };
+  }
+
+  /**
+   * A slash written on the pad is often far taller than anything else the writer makes (three x-heights against
+   * letters that top out around two), which looks wrong in "9/5". Scale it down, evenly, to the writer's own
+   * ascender height. Copies replace the originals, so this can run on every rebuild.
+   */
+  function tidyTallSymbols(byChar, allByChar, profile) {
+    const top = (profile && profile.asc ? profile.asc : 1.85) + 0.25;
+    for (const ch of ['/']) {
+      const list = allByChar.get(ch);
+      if (!list) continue;
+      const pool = byChar.get(ch);
+      list.forEach((u, i) => {
+        const h = u.box.maxY - Math.min(0, u.box.minY);
+        if (h <= top) return;
+        const c = scaleUnit(u, { fx: top / h, fy: top / h });
+        list[i] = c;
+        if (pool) pool.forEach((p, k) => p === u && (pool[k] = c));
+      });
+    }
+  }
+
   function shrinkSingleLetters(byChar, allByChar) {
     const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
     const kind = (ch) => (/[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null);
@@ -511,31 +552,13 @@
       const wgt = own.n / (own.n + 1); // a few examples are enough to go on; none at all falls back to the pooled ratio
       return { fx: clamp(wgt * own.fx + (1 - wgt) * px), fy: clamp(wgt * own.fy + (1 - wgt) * py) };
     };
-    const shrink = (u, f) => {
-      const x0 = u.box.minX;
-      const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy });
-      const dir = (e) => {
-        const dx = e.dx * f.fx;
-        const dy = e.dy * f.fy;
-        const l = Math.hypot(dx, dy) || 1;
-        return { ...e, x: x0 + (e.x - x0) * f.fx, y: e.y * f.fy, dx: dx / l, dy: dy / l };
-      };
-      return {
-        ...u,
-        strokes: u.strokes.map((s) => ({ ...s, pts: s.pts.map(mapPt) })),
-        marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(mapPt) })),
-        entry: dir(u.entry),
-        exit: dir(u.exit),
-        box: { minX: x0, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
-      };
-    };
     for (const [ch, list] of allByChar) {
       const f = factorFor(ch);
       if (!f || (f.fx > 0.98 && f.fy > 0.98)) continue;
       const swap = new Map();
       list.forEach((u, i) => {
         if (!u.iso) return;
-        const c = shrink(u, f);
+        const c = scaleUnit(u, f);
         swap.set(u, c);
         list[i] = c;
       });
@@ -610,6 +633,7 @@
     markOpenOnes(byChar);
     markStrayOnes(byChar);
     shrinkSingleLetters(byChar, allByChar);
+    tidyTallSymbols(byChar, allByChar, profile);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
     const clears = [];
