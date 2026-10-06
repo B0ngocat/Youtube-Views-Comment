@@ -278,6 +278,7 @@ async function inkPixels(page, selector) {
   await page.waitForTimeout(300);
   check('switching math mode off goes back to ordinary text', (await page.evaluate(() => document.querySelector('#mathHelp').hidden)) === true);
   check('the Teach tab lists a Common words round', await page.evaluate(() => window.HW_APP.rounds().some((r) => r.id === 'common')));
+  check('the Write tab has a Neatness slider', (await page.locator('#neatness').count()) === 1);
   check('the Write tab has a Use my real words slider', (await page.locator('#wordReuse').count()) === 1);
   check('the Teach tab lists a Math round', await page.evaluate(() => window.HW_APP.rounds().some((r) => r.id === 'math')));
 

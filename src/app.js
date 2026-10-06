@@ -503,11 +503,12 @@
   });
 
   // ---- write ------------------------------------------------------------------------------------
-  const CONTROLS = ['xh', 'messiness', 'variation', 'wordReuse', 'slantDelta', 'wordSpacing', 'lineHeight', 'pen'];
+  const CONTROLS = ['xh', 'messiness', 'variation', 'neatness', 'wordReuse', 'slantDelta', 'wordSpacing', 'lineHeight', 'pen'];
   const fmt = {
     xh: (v) => v + ' px',
     messiness: (v) => Math.round(v * 100) + '%',
     variation: (v) => Math.round(v * 100) + '%',
+    neatness: (v) => Math.round(v * 100) + '%',
     wordReuse: (v) => Math.round(v * 100) + '%',
     slantDelta: (v) => (v > 0 ? '+' : '') + v + '°',
     wordSpacing: (v) => Number(v).toFixed(2) + '×',

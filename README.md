@@ -18,7 +18,9 @@ The Single letters round has you write each letter on its own (lowercase twice, 
 
 The Math round has you write each digit and math symbol on its own (digits and operators twice), and Numbers in a row has numbers with decimal points, so the app has clean digits. Tricky letters has words with a, e, o, r and u at the start, middle and end, two of each; those letters are the hardest to cut out of words cleanly, so this gives the app plenty of good examples of them.
 
-Common words has about 90 everyday words. When the text you type contains a word you wrote, the app writes it back from your own strokes instead of building it letter by letter (the "Use my real words" slider sets how willingly; a word used again and again on a page is varied, not pasted). So every common word you write improves every page.
+Neatness (a slider in the Write tab) sets how much the page leans on your clean single letters instead of letters cut out of your fast writing. At 0% it is the usual mix; higher is easier to read and a little more like print. A short flat run-in stroke on a single letter (the little tail on an "m") is trimmed off, so those letters work anywhere in a word.
+
+Common words has about 90 everyday words. When the text you type contains a word you wrote, the app writes it back from your own strokes instead of building it letter by letter (the "Use my real words" slider sets how willingly, 25% by default; a word used again and again on a page is varied, not pasted). So every common word you write improves every page.
 
 The Full lines round has you write whole sentences on one line. From those the app learns how you really space words and how your baseline, size and slant drift along a line, and uses that when it writes. The words in each line also count as extra samples. At least 3 lines are needed. Word gaps are taken as measured; baseline, size and slant drift are measured less reliably from short lines, so they are kept within ordinary human ranges. The Natural variation slider scales the drift (30% is the default, lower is neater).
 

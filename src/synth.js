@@ -98,9 +98,10 @@
             // than letters (a 9 comes out as a hook, a 1 picks up a stroke from its neighbour) and a single digit has
             // no run-in stroke to give it away, so the writer's own are strongly preferred. A lowercase letter carries
             // a run-in stroke the writer only makes when it stands alone, so it is kept to the start of a word.
+            const neat = ctx.neat || 0; // 0..3: how much cleaner single letters are preferred over cut-out ones
             if (!/[A-Za-z]/.test(chars[j])) c -= 2.5;
-            else if (j === 0 || n === 1) c -= 0.5;
-            else if (/[a-z]/.test(chars[j])) c += 1.5;
+            else if (j === 0 || n === 1) c -= 0.5 + 0.3 * neat;
+            else if (/[a-z]/.test(chars[j])) c += 1.5 - neat;
           }
           if (unit.stray) c += 3; // carries a scrap of a neighbouring letter
           if (unit.open) c += 2.5; // the writer closes this letter, this copy stays open (cut wrongly?)
@@ -388,12 +389,13 @@
 
   /**
    * opts: {xh (px), width (px), lineHeight (x-heights), wordSpacing, messiness 0..1,
+   *        neatness 0..1 (how much the writer's clean single letters are preferred over letters cut out of words),
    *        wordReuse 0..1 (how willingly a word the writer wrote is written back from their real strokes), variation 0..1, slantDelta (deg), seed, margin (px)}
    * returns {width, height, strokes:[{pts:[{x,y,w}], taperStart, taperEnd}], missing:[...], baselines:[...]}
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.8 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5 },
       opts || {}
     );
     const rng = G.mulberry32(o.seed);
@@ -402,7 +404,7 @@
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map() };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;

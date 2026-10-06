@@ -204,3 +204,45 @@ test('Common words gives only words, each at least two letters, and no duplicate
   assert.equal(new Set(words).size, words.length);
   assert.equal(new Set(toks.map((t) => t.key)).size, toks.length);
 });
+
+test('a short flat run-in stroke on a single letter is trimmed off, and a letter without one is left alone', () => {
+  const pt = (x, y) => ({ x, y, w: 1 });
+  const line = (x0, y0, x1, y1, n) => Array.from({ length: n + 1 }, (_, i) => pt(x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n));
+  const unitOf = (pts) => ({
+    ch: 'm', iso: true, marks: [], strokes: [{ pts }],
+    entry: { x: pts[0].x, y: pts[0].y, dx: 1, dy: 0, mid: false }, exit: { x: 1, y: 0, dx: 0, dy: -1, mid: false },
+    box: { minX: 0, maxX: 1, minY: 0, maxY: 1 },
+  });
+  // a tail running right for 0.2, then a stem straight down
+  const tailed = unitOf(line(0, 0.9, 0.2, 0.9, 5).concat(line(0.2, 0.9, 0.22, 0, 20)));
+  const before = tailed.strokes[0].pts.length;
+  const trimmed = S.trimRunIn(tailed);
+  assert.ok(trimmed.trimmed);
+  assert.ok(trimmed.strokes[0].pts.length < tailed.strokes[0].pts.length);
+  assert.ok(trimmed.box.minX >= 0.19, 'the unit now starts at the stem');
+  assert.ok(trimmed.entry.dy < -0.9, 'and enters heading down');
+  assert.equal(tailed.strokes[0].pts.length, before, 'the original is untouched');
+  // a stem that starts going down has no run-in
+  const plain = unitOf(line(0.2, 1, 0.22, 0, 20));
+  assert.equal(S.trimRunIn(plain), plain);
+});
+
+test('the neatness setting moves how much the writer\'s single letters are used, from the usual mix to mostly single letters', () => {
+  const { words, letters } = wordsAndLetters();
+  const st = S.buildStyle(words.concat(letters));
+  const text = 'the quick brown fox jumps over the lazy dog and the five dozen liquor jugs';
+  const share = (neatness) => {
+    let iso = 0;
+    let n = 0;
+    for (let seed = 1; seed <= 4; seed++) {
+      const lay = Y.layout(st, text, { seed, width: 4000, wordReuse: 0, neatness });
+      for (const w of lay.words) for (const u of w.choices) if (/[A-Za-z]/.test(u.ch)) { n++; if (u.iso) iso++; }
+    }
+    return iso / n;
+  };
+  const low = share(0);
+  const mid = share(0.5);
+  const high = share(1);
+  assert.ok(mid > low + 0.1, 'half neatness uses more single letters: ' + low.toFixed(2) + ' -> ' + mid.toFixed(2));
+  assert.ok(high >= mid, 'full neatness uses at least as many: ' + high.toFixed(2));
+});

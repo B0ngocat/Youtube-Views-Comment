@@ -523,6 +523,51 @@
     }
   }
 
+  /**
+   * A letter written on its own often starts with a short, nearly flat run-in stroke before it turns down into the
+   * letter (the little tail on an "m"), which the writer does not make inside a word. Cut that run-in off: a copy
+   * of the unit without it. Anything else is returned as it is.
+   */
+  function trimRunIn(u) {
+    const st0 = u.strokes[0];
+    if (!st0 || st0.pts.length < 8) return u;
+    const pts = st0.pts;
+    const ang = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+    // the opening direction, from the first few points
+    const a0 = ang(pts[0], pts[Math.min(3, pts.length - 1)]);
+    if (Math.abs(Math.sin(a0)) > 0.55 || Math.cos(a0) < 0) return u; // not an opening that runs to the right, flat-ish
+    let len = 0;
+    let k = -1;
+    for (let i = 1; i < pts.length - 2; i++) {
+      len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      if (len > 0.45) break;
+      const next = ang(pts[i], pts[Math.min(i + 3, pts.length - 1)]);
+      if (next < -1.0 && next > -2.4 && len > 0.04) {
+        // now heading steeply down (y is up, so a negative angle is down): the run-in ends here
+        k = i;
+        break;
+      }
+    }
+    if (k < 0) return u;
+    const rest = pts.slice(k);
+    const strokes = [{ ...st0, pts: rest }].concat(u.strokes.slice(1));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const piece of strokes.concat(u.marks)) {
+      for (const p of piece.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    const d = Math.hypot(rest[2].x - rest[0].x, rest[2].y - rest[0].y) || 1;
+    const entry = { ...u.entry, x: rest[0].x, y: rest[0].y, dx: (rest[2].x - rest[0].x) / d, dy: (rest[2].y - rest[0].y) / d };
+    return { ...u, strokes, entry, box: { minX, maxX, minY, maxY }, trimmed: true };
+  }
+
   function shrinkSingleLetters(byChar, allByChar) {
     const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
     const kind = (ch) => (/[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null);
@@ -554,11 +599,23 @@
     };
     for (const [ch, list] of allByChar) {
       const f = factorFor(ch);
-      if (!f || (f.fx > 0.98 && f.fy > 0.98)) continue;
       const swap = new Map();
+      if (!f || (f.fx > 0.98 && f.fy > 0.98)) {
+        // no shrinking needed, but a run-in stroke is still trimmed
+        list.forEach((u, i) => {
+          if (!u.iso) return;
+          const c = trimRunIn(u);
+          if (c === u) return;
+          swap.set(u, c);
+          list[i] = c;
+        });
+        const pool = byChar.get(ch);
+        if (pool) pool.forEach((u, i) => swap.has(u) && (pool[i] = swap.get(u)));
+        continue;
+      }
       list.forEach((u, i) => {
         if (!u.iso) return;
-        const c = scaleUnit(u, f);
+        const c = scaleUnit(trimRunIn(u), f);
         swap.set(u, c);
         list[i] = c;
       });
@@ -727,7 +784,7 @@
     return o.words;
   }
 
-  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl };
+  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
