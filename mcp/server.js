@@ -8,6 +8,9 @@
  *   node mcp/server.js --samples /path/to/my-handwriting.json [--out /folder/for/results]
  *   node mcp/server.js --samples ... --http 8787 --token <secret>      (a web address instead of stdin/stdout)
  *
+ * Samples can also be the sealed file the site publishes: --samples-url <address> (or --samples with a downloaded copy)
+ * and --password <password> (or HANDWRITING_PASSWORD, which keeps it out of the process list).
+ *
  * The built handwriting is cached in a .handwriting-cache folder next to the samples file (--cache DIR to move it,
  * --no-cache to turn it off), so starting the server again for each call is fast after the first time.
  *
@@ -135,6 +138,9 @@ function main() {
   const argv = process.argv.slice(2);
   const handle = createServer({
     samples: findSamples(argv),
+    // the sealed file on the site: given, or the address this copy of the server was published with (see build-site-extras.js)
+    samplesUrl: argValue(argv, '--samples-url') || process.env.HANDWRITING_URL || globalThis.__HW_DEFAULT_SAMPLES_URL__,
+    password: argValue(argv, '--password') || process.env.HANDWRITING_PASSWORD,
     out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
     cache: argv.includes('--no-cache') ? false : argValue(argv, '--cache') || process.env.HANDWRITING_CACHE,
   });

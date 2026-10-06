@@ -12,10 +12,11 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const NODE_BUILTINS = new Set(['fs', 'path', 'zlib', 'http', 'crypto', 'child_process', 'os', 'v8']);
+const NODE_BUILTINS = new Set(['fs', 'path', 'zlib', 'http', 'crypto', 'child_process', 'os', 'v8', 'https']);
 
 function build(opts) {
   const withPdf = !!(opts && opts.pdf);
+  const samplesUrl = opts && opts.samplesUrl; // where this copy looks for the sealed handwriting when it is not given one
   const modules = new Map(); // id (path from the repo root) -> source
   const idOf = (from, rel) => path.relative(ROOT, path.resolve(path.dirname(path.join(ROOT, from)), rel)).split(path.sep).join('/');
 
@@ -48,6 +49,7 @@ function build(opts) {
     `// Handwriting MCP server, one file. Built by scripts/build-mcp.js (${withPdf ? 'with' : 'without'} PDF tools). Run: node ${'handwriting-mcp.js'} --samples my-handwriting.json`,
     "'use strict';",
     withPdf ? '' : 'globalThis.__HW_NO_PDF__ = true;',
+    samplesUrl ? `globalThis.__HW_DEFAULT_SAMPLES_URL__ = ${JSON.stringify(samplesUrl)};` : '',
     'const __defs = {',
   ];
   for (const [id, src] of modules) parts.push(`${JSON.stringify(id)}: function (module, exports, __req) {\n${src}\n},`);

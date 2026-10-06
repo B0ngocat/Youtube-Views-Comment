@@ -80,6 +80,12 @@ Tools:
 
 Deploying the site also publishes the server next to the login page, so an assistant can fetch it instead of you uploading it each time: `https://<you>.github.io/<repo>/handwriting-mcp.js` (and `handwriting-mcp-pdf.js`), each with a `.sha256` file, and `mcp.txt`, a plain-text page of instructions an assistant can read. These files are only the program. Your handwriting is not in them and is not on the site: it stays in your own `my-handwriting.json`, which still has to be given to wherever the server runs.
 
+### Keeping the handwriting locked
+
+`SEAL_PASSWORD='a long password' node scripts/seal-samples.js my-handwriting.json handwriting.enc.json` locks your samples with a password (gzip, then AES-256-GCM with a PBKDF2 key, the same recipe as the protected page) and writes a file that is safe to keep anywhere. Nothing is uploaded. Passwords under 12 characters are refused, because anyone who can download a sealed file can guess at it offline.
+
+The server opens it with `--samples handwriting.enc.json --password ...`, or with `--samples-url <address of the file>`. Prefer `HANDWRITING_PASSWORD` in the environment to `--password`, so the password stays out of process lists. The unlocked samples are only ever held in memory; the speed-up cache described above does hold them unlocked, so keep that folder private.
+
 To use it as a web address instead of a program, add `--http 8787 --token <a secret of 16 or more characters>`. It then answers MCP requests at `http://127.0.0.1:8787/mcp` (POST, header `Authorization: Bearer <token>`). It listens on your computer only. To reach it from another device, put a tunnel or an HTTPS proxy in front of it; the token is the only thing stopping other people from writing in your hand, so keep it private.
 
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.

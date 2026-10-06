@@ -7,6 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const v8 = require('v8');
+const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 // Plain relative requires, so scripts/build-mcp.js can fold everything into one file. The PDF parts are required only
 // when a PDF tool is used, and a build without PDF support (globalThis.__HW_NO_PDF__) leaves them out altogether.
@@ -14,6 +16,7 @@ const S = require('../src/style');
 const R = require('../src/render');
 const Sheet = require('../src/sheet');
 const { renderPng } = require('./raster');
+const { isSealed, unseal } = require('./sealed');
 const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => require('../vendor/pdf-lib.min.js');
 const inspectPdf = (bytes, o) => require('./pdfinfo').inspect(bytes, o);
@@ -22,7 +25,9 @@ const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, s
 const DEFAULT_INK = '#1749b3';
 
 function createTools(config) {
-  const samplesFile = config.samples;
+  const source = config.samples || config.samplesUrl; // a path, or an address (the sealed file the site publishes)
+  const isUrl = /^https?:\/\//i.test(source || '');
+  const REFRESH_MS = 10 * 60 * 1000; // a server that stays up looks for newer samples this often
   const outDir = path.resolve(config.out || 'handwriting-out');
   let cache = null; // {mtime, style, words}
 
@@ -35,7 +40,7 @@ function createTools(config) {
     const files = own.every((f) => fs.existsSync(f)) ? own : [__filename]; // in the one-file build, the file itself is the engine
     return crypto.createHash('sha256').update(files.map((f) => fs.readFileSync(f)).join('\n')).digest('hex');
   })();
-  const cacheDir = config.cache === false ? null : path.resolve(config.cache || path.join(path.dirname(path.resolve(samplesFile || '.')), '.handwriting-cache'));
+  const cacheDir = config.cache === false ? null : path.resolve(config.cache || (isUrl || !source ? path.resolve('.handwriting-cache') : path.join(path.dirname(path.resolve(source)), '.handwriting-cache')));
 
   function readCache(key) {
     if (!cacheDir) return null;
@@ -59,16 +64,40 @@ function createTools(config) {
     }
   }
 
-  function load() {
-    if (!samplesFile) throw new Error('No handwriting file is set. Start the server with --samples /path/to/my-handwriting.json (the file the Export button in the Teach tab saves), or set HANDWRITING_FILE.');
-    let st;
-    try {
-      st = fs.statSync(samplesFile);
-    } catch {
-      throw new Error('Cannot read the handwriting file at ' + samplesFile + '. Check the path.');
+  /** GET an address (http or https), following redirects. */
+  function fetchBytes(url, hops) {
+    return new Promise((resolve, reject) => {
+      const req = (/^https:/i.test(url) ? https : http).get(url, { timeout: 30000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && (hops || 0) < 5) {
+          res.resume();
+          return resolve(fetchBytes(new URL(res.headers.location, url).href, (hops || 0) + 1));
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`Could not download the handwriting from ${url} (HTTP ${res.statusCode}).`));
+        }
+        const parts = [];
+        res.on('data', (c) => parts.push(c));
+        res.on('end', () => resolve(Buffer.concat(parts)));
+      });
+      req.on('timeout', () => req.destroy(new Error('Timed out downloading ' + url)));
+      req.on('error', (e) => reject(new Error(`Could not download the handwriting from ${url}: ${e.message}. If this computer needs a proxy, download the file with curl and give its path with --samples instead.`)));
+    });
+  }
+
+  async function load() {
+    if (!source) throw new Error('No handwriting is set. Start the server with --samples /path/to/my-handwriting.json (the file the Export button in the Teach tab saves), or --samples-url <address of the sealed file> with --password, or set HANDWRITING_FILE.');
+    let stamp2 = null;
+    if (!isUrl) {
+      try {
+        stamp2 = fs.statSync(source).mtimeMs;
+      } catch {
+        throw new Error('Cannot read the handwriting file at ' + source + '. Check the path.');
+      }
     }
-    if (cache && cache.mtime === st.mtimeMs) return cache;
-    const bytes = fs.readFileSync(samplesFile);
+    if (cache && (isUrl ? Date.now() - cache.at < REFRESH_MS : cache.mtime === stamp2)) return cache;
+    let bytes = isUrl ? await fetchBytes(source) : fs.readFileSync(source);
+    if (isSealed(bytes)) bytes = unseal(bytes, config.password); // the plain samples are only ever in memory
     const key = crypto.createHash('sha256').update(stamp).update(bytes).digest('hex');
     let built = readCache(key);
     if (!built) {
@@ -76,7 +105,7 @@ function createTools(config) {
       built = { style: S.buildStyle(words), words: words.length };
       writeCache(key, built);
     }
-    cache = { mtime: st.mtimeMs, style: built.style, words: built.words };
+    cache = { mtime: stamp2, at: Date.now(), style: built.style, words: built.words };
     return cache;
   }
 
@@ -98,9 +127,9 @@ function createTools(config) {
   }
 
   let counter = 0;
-  function renderOne(a) {
+  async function renderOne(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
-    const { style } = load();
+    const { style } = await load();
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
     const placed = Sheet.layoutBox(style, box, lookFrom(a));
     const ink = inkOf(a);
@@ -124,8 +153,8 @@ function createTools(config) {
       name: 'handwriting_status',
       description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. Characters without a sample are skipped when writing, so check this before writing anything with unusual symbols or digits.",
       inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample.' } } },
-      run(a) {
-        const { style, words } = load();
+      async run(a) {
+        const { style, words } = await load();
         const missing = S.missingChars(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"');
         return [text(`Handwriting loaded: ${words} recorded words, ${style.count} letters and symbols cut out. ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
       },
@@ -148,8 +177,8 @@ function createTools(config) {
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
-      run(a) {
-        const r = renderOne(a);
+      async run(a) {
+        const r = await renderOne(a);
         return [{ type: 'image', data: r.b64, mimeType: 'image/png' }, text(r.notes), ...(a.include_base64 ? [text('image/png base64:\n' + r.b64)] : [])];
       },
     },
@@ -170,21 +199,21 @@ function createTools(config) {
           include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
         },
       },
-      run(a) {
+      async run(a) {
         if (!Array.isArray(a.items) || !a.items.length) throw new Error('items must be a list with at least one item.');
         if (a.items.length > 100) throw new Error('At most 100 items per call.');
         const { items, return_images: images, ...shared } = a;
         const out = [];
-        a.items.forEach((item, i) => {
+        for (const [i, item] of a.items.entries()) {
           try {
-            const r = renderOne(Object.assign({}, shared, item));
+            const r = await renderOne(Object.assign({}, shared, item));
             out.push(text(`${i + 1}. ${r.notes}`));
             if (images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
             if (a.include_base64) out.push(text(`${i + 1}. image/png base64:\n${r.b64}`));
           } catch (e) {
             out.push(text(`${i + 1}. FAILED: ${e.message}`));
           }
-        });
+        }
         return out;
       },
     },
@@ -238,7 +267,7 @@ function createTools(config) {
         },
       },
       async run(a) {
-        const { style } = load();
+        const { style } = await load();
         const bytes = readPdf(a.pdf);
         if (!Array.isArray(a.answers) || !a.answers.length) throw new Error('answers must be a list with at least one answer.');
         const PDFLib = pdfLib();

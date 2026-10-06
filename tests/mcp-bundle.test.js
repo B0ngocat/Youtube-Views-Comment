@@ -155,3 +155,111 @@ test('the files published on the site are the program only, with hashes and inst
   assert.ok(txt.includes(hashes['handwriting-mcp.js']) && txt.includes(hashes['handwriting-mcp-pdf.js']));
   for (const tool of ['write_text', 'write_batch', 'handwriting_status', 'fill_pdf']) assert.ok(txt.includes(tool), tool);
 });
+
+test('sealed samples: round trip, wrong password, and the server opens them from a file or an address', async () => {
+  const { seal, unseal, isSealed } = require('../mcp/sealed');
+  const plain = Buffer.from(samplesJson);
+  const sealed = seal(plain, 'a-long-enough-password');
+  assert.ok(isSealed(sealed) && !isSealed(plain));
+  assert.ok(!sealed.includes('strokes') && !sealed.includes('quick'), 'nothing readable inside');
+  assert.ok(sealed.length < plain.length, 'compressed before locking');
+  assert.ok(unseal(Buffer.from(sealed), 'a-long-enough-password').equals(plain));
+  assert.throws(() => unseal(Buffer.from(sealed), 'another-long-password'), /Wrong password/);
+  assert.throws(() => unseal(Buffer.from(sealed), ''), /locked/);
+  assert.throws(() => seal(plain, 'short'), /under 12/);
+
+  const dir = lonely({});
+  fs.rmSync(path.join(dir, 'my-handwriting.json')); // only the sealed copy is here
+  fs.writeFileSync(path.join(dir, 'handwriting.enc.json'), sealed);
+  const ask = async (s, name, args) => (await s.ask('tools/call', { name, arguments: args })).result;
+
+  // from a file, password in the environment
+  let s = run(dir, ['--samples', path.join(dir, 'handwriting.enc.json')]);
+  s.close();
+  const withEnv = (extra, args) => {
+    const child = spawn(process.execPath, [path.join(dir, 'handwriting-mcp.js'), ...args], { cwd: dir, env: Object.assign({}, process.env, extra), stdio: ['pipe', 'pipe', 'pipe'] });
+    let buf = '';
+    const waiting = new Map();
+    child.stdout.on('data', (d) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+        if (waiting.has(m.id)) waiting.get(m.id)(m);
+      }
+    });
+    let n = 0;
+    return {
+      child,
+      ask: (method, params) => new Promise((resolve) => {
+        waiting.set(++n, resolve);
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: n, method, params }) + '\n');
+      }),
+    };
+  };
+  s = withEnv({ HANDWRITING_PASSWORD: 'a-long-enough-password' }, ['--samples', path.join(dir, 'handwriting.enc.json')]);
+  try {
+    assert.match((await ask(s, 'handwriting_status', {})).content[0].text, /recorded words/);
+  } finally {
+    s.child.kill();
+  }
+  // wrong or missing password: an error that says what to do
+  s = withEnv({ HANDWRITING_PASSWORD: 'not-the-right-password' }, ['--samples', path.join(dir, 'handwriting.enc.json')]);
+  try {
+    const r = await ask(s, 'handwriting_status', {});
+    assert.ok(r.isError);
+    assert.match(r.content[0].text, /Wrong password/);
+  } finally {
+    s.child.kill();
+  }
+  s = withEnv({}, ['--samples', path.join(dir, 'handwriting.enc.json')]);
+  try {
+    assert.match((await ask(s, 'handwriting_status', {})).content[0].text, /--password|HANDWRITING_PASSWORD/);
+  } finally {
+    s.child.kill();
+  }
+
+  // from an address, as the site publishes it
+  const web = http.createServer((req, res) => {
+    if (req.url === '/old') {
+      res.writeHead(302, { location: '/handwriting.enc.json' });
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(sealed);
+  });
+  await new Promise((r) => web.listen(0, '127.0.0.1', r));
+  try {
+    s = withEnv({ HANDWRITING_PASSWORD: 'a-long-enough-password' }, ['--samples-url', `http://127.0.0.1:${web.address().port}/old`]);
+    try {
+      const r = await ask(s, 'write_text', { text: 'the quick fox' });
+      assert.ok(!r.isError, JSON.stringify(r).slice(0, 200));
+      assert.equal(r.content[0].type, 'image');
+    } finally {
+      s.child.kill();
+    }
+    s = withEnv({}, ['--samples-url', 'http://127.0.0.1:1/none']);
+    try {
+      assert.match((await ask(s, 'handwriting_status', {})).content[0].text, /Could not download/);
+    } finally {
+      s.child.kill();
+    }
+  } finally {
+    web.close();
+  }
+});
+
+test('seal-samples.js locks a file and refuses a short password', () => {
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-seal-'));
+  fs.writeFileSync(path.join(dir, 'in.json'), samplesJson);
+  const script = path.join(__dirname, '..', 'scripts', 'seal-samples.js');
+  const ok = spawnSync(process.execPath, [script, path.join(dir, 'in.json'), path.join(dir, 'out.enc.json')], { env: Object.assign({}, process.env, { SEAL_PASSWORD: 'a-long-enough-password' }) });
+  assert.equal(ok.status, 0, ok.stderr.toString());
+  assert.equal(fs.statSync(path.join(dir, 'out.enc.json')).mode & 0o077, 0, 'private file');
+  const bad = spawnSync(process.execPath, [script, path.join(dir, 'in.json'), path.join(dir, 'x.enc.json')], { env: Object.assign({}, process.env, { SEAL_PASSWORD: 'short' }) });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr.toString(), /under 12/);
+  assert.ok(!fs.existsSync(path.join(dir, 'x.enc.json')));
+});
