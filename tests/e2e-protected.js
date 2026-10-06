@@ -55,6 +55,20 @@ const check = (name, ok, detail) => {
   check('the app works after decrypting (state, tabs)', await tab.evaluate(() => !!window.HW_APP && !document.querySelector('#teach').hidden));
   check('Lock button is offered on the protected site', await tab.isVisible('#btnLock'));
 
+  // the Sheet tab's libraries travel inside the encrypted page and load from there, not from the network
+  const requested = [];
+  tab.on('request', (r) => requested.push(r.url()));
+  const PDFLib = require('../vendor/pdf-lib.min.js');
+  const doc = await PDFLib.PDFDocument.create();
+  doc.addPage([612, 792]);
+  const pdfBytes = Buffer.from(await doc.save());
+  await tab.click('#tab-sheet');
+  await tab.setInputFiles('#sheetFile', { name: 'blank.pdf', mimeType: 'application/pdf', buffer: pdfBytes });
+  await tab.waitForFunction(() => /Page 1 of 1/.test(document.querySelector('#sheetPageNo').textContent), null, { timeout: 30000 });
+  check('the Sheet tab opens a PDF on the protected site', true);
+  check('without fetching anything from the server', !requested.some((u) => /vendor|\.js$/.test(u)), requested.join(' '));
+  await tab.click('#tab-teach');
+
   await tab.reload();
   await tab.waitForSelector('#pad', { timeout: 15000 });
   check('"Remember on this device" skips the login next time', true);

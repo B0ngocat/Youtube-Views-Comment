@@ -30,6 +30,20 @@ Fix mode (a checkbox above the page in the Write tab) is the quickest way to cle
 
 Export (in the Teach tab) saves your samples to a file, and Import loads them on another device.
 
+## Filling in a worksheet
+
+The Sheet tab puts your handwriting on a real worksheet, with nothing to install and nothing sent anywhere.
+
+1. Tap **Open worksheet** and choose the PDF, or a photo or screenshot of it (PNG or JPEG).
+2. Tap **Draw answer box** and drag a rectangle where an answer goes. Drag a box to move it, or drag the round handle at its corner to resize it. A box can be on any page; use the arrows to turn pages.
+3. With a box selected, type the answer in the panel on the right. It is written in your hand straight away, in the pen and colour set in the Write tab. Choose **Math** to type it as math (`\frac{a}{b}`, `x^2`), and **Another take** if you want that answer written differently.
+4. An answer that is too long for its box is written smaller until it fits (unless you untick that), and the panel says so. Letter height sets the size it starts from, in points.
+5. **Save PDF** gives back the worksheet with the writing drawn on top as vector ink, so it stays sharp. **Save page as PNG** saves the page you are looking at as a picture.
+
+The boxes and answers are remembered on this device for that file, so you can close the page and open the same file again later. A PDF that is locked with a password has to be unlocked first, and pages that are rotated inside the PDF can be shown but not saved as PDF yet (use the PNG).
+
+The PDF code (`vendor/`, pdf.js and pdf-lib) is only loaded the first time a worksheet is opened.
+
 ## Looking like a note-taking app
 
 The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in Notability's blue (`#1749b3`) on white paper. Its width, at the default 1.00, matches Notability's thickness 3 for handwriting of about 10 pt x-height on a letter page (measured from an exported sample page; 0.4 is thickness 1). Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.
@@ -54,9 +68,9 @@ The encrypted file is public, so a short or guessable password can be cracked of
 
 Each captured word is cut into letters along the pen path, so joins and loops stay attached to the right letter. To write new text it picks from your recorded letters (reusing real letter pairs when it has them), joins them with smooth curves and adds a little drift so the result doesn't look copy-pasted.
 
-`tools/` has a script that writes text or math in your hand onto a PDF (see `CLAUDE.md`).
+The Sheet tab does the same job as the script in `tools/` (writing text or math in your hand onto a PDF, see `CLAUDE.md`), but from the browser, by dragging boxes onto the page.
 
-The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses and joins them, `math.js` lays out math, `render.js` draws the ink and `capture.js` is the pad.
+The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses and joins them, `math.js` lays out math, `render.js` draws the ink, `capture.js` is the pad, and `sheet.js` and `sheetui.js` are the Sheet tab.
 
 ## Tests
 

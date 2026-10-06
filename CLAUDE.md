@@ -46,6 +46,8 @@ Data flow: `capture.js` records strokes -> `align.js` cuts each word into letter
 | `src/render.js` | Strokes to filled outlines (SVG path data) for canvas/SVG/PNG. Constant-width pen by default. |
 | `src/lines.js` | Splits a written line into words. |
 | `src/prompts.js` | The Teach rounds. |
+| `src/sheet.js`, `src/sheetui.js` | The Sheet tab: open a PDF or photo, drag answer boxes onto it, type answers, save the PDF with the ink drawn in. `sheet.js` is the part without a screen (fitting an answer to its box, writing ink into a PDF with pdf-lib); `sheetui.js` is the page (pdf.js to show it). |
+| `vendor/` | pdf.js and pdf-lib, unmodified, only for the Sheet tab. `loadLib` in `sheetui.js` loads them on first use; the protected build carries them as text in `window.HW_LIBS`. See `vendor/README.md`. |
 | `src/app.js`, `index.html`, `styles.css` | The UI. `window.HW_APP` exposes `style`, `words`, `layout` for debugging. |
 | `scripts/build-protected.js`, `deploy-pages.sh`, `login.template.html` | The password-protected site. |
 | `tools/handwrite-blocks.js`, `tools/place_on_pdf.py` | Write text or math in the user's hand onto a PDF (see below). |
@@ -77,6 +79,8 @@ Raw sample format (the export file): `{version: 1, words: [{text, xh, baseline, 
 `render.js` has `CONSTANT_W`: the constant pen is `0.12` x-heights wide at pen thickness 1.00. That number was measured from a Notability export: a vertical line at thickness 3 was 1.2 pt wide, and lowercase letters in the same sample were about 10 pt tall. To match another pen or thickness, ask the user to export a page from their app with a few lines drawn at the thicknesses they use and a word written beside each, then measure line width and x-height from the PDF (PyMuPDF `get_pixmap` at 600 dpi plus a column scan works; the ink colour is the path's fill colour in `page.get_drawings()`). Then set the colour (`#1749b3` here is that app's blue) and `CONSTANT_W = width / xheight / 0.085`.
 
 ## Writing answers onto a PDF (homework, forms)
+
+The easy way, for the user to do themselves: the Sheet tab (open the PDF, drag a box per answer, type, Save PDF). Boxes are `{page, x, y, w, h, text, kind, xhPt, seed, auto}` in points from the page's top-left corner. If you are doing it for them with a script, use the tools below, which put the same ink on the same kind of page.
 
     pip install pymupdf
     node tools/handwrite-blocks.js my-handwriting.json blocks.json out/

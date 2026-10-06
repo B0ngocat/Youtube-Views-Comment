@@ -67,6 +67,7 @@
     renderRounds();
     renderPrompt();
     if (!$('#write').hidden) queueRender();
+    document.dispatchEvent(new Event('hw:rebuilt')); // the Sheet tab redraws its answers
   }
   function scheduleRebuild() {
     clearTimeout(rebuildTimer);
@@ -744,14 +745,15 @@
   });
 
   // ---- tabs -------------------------------------------------------------------------------------
+  const TABS = ['teach', 'write', 'sheet'];
   function showTab(name) {
-    const teach = name === 'teach';
-    $('#teach').hidden = !teach;
-    $('#write').hidden = teach;
-    $('#tab-teach').setAttribute('aria-selected', String(teach));
-    $('#tab-write').setAttribute('aria-selected', String(!teach));
-    if (teach) pad.resize();
-    else queueRender();
+    TABS.forEach((t) => {
+      $('#' + t).hidden = t !== name;
+      $('#tab-' + t).setAttribute('aria-selected', String(t === name));
+    });
+    if (name === 'teach') pad.resize();
+    else if (name === 'write') queueRender();
+    document.dispatchEvent(new CustomEvent('hw:tab', { detail: name }));
     try {
       history.replaceState(null, '', '#' + name);
     } catch {
@@ -761,10 +763,12 @@
   $('#tab-teach').addEventListener('click', () => {
     showTab('teach');
   });
-  $('#tab-write').addEventListener('click', () => {
-    if (commit() === 'failed') return;
-    showTab('write');
-  });
+  ['write', 'sheet'].forEach((name) =>
+    $('#tab-' + name).addEventListener('click', () => {
+      if (commit() === 'failed') return;
+      showTab(name);
+    })
+  );
 
   // On the password-protected site the login page provides HW_LOCK
   if (window.HW_LOCK) {
@@ -778,7 +782,7 @@
   syncOutputs();
   goTo(0, firstOpen(0));
   const hash = (location.hash || '').replace('#', '');
-  showTab(hash === 'write' || hash === 'teach' ? hash : words.length >= 20 ? 'write' : 'teach');
+  showTab(TABS.includes(hash) ? hash : words.length >= 20 ? 'write' : 'teach');
   // The first build of a large saved set takes a few seconds. Let the page paint first so it never looks frozen.
   if (words.length) $('#status').textContent = 'Loading your handwriting';
   requestAnimationFrame(() => setTimeout(rebuild, 30));
@@ -804,5 +808,9 @@
     tokensOf,
     rounds,
     letterAt,
+    // what the Sheet tab needs to write like the Write tab does: the sliders and the pen
+    look() {
+      return Object.assign(readOpts(), paperOptions());
+    },
   };
 })();

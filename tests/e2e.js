@@ -282,6 +282,167 @@ async function inkPixels(page, selector) {
   check('the Write tab has a Use my real words slider', (await page.locator('#wordReuse').count()) === 1);
   check('the Teach tab lists a Math round', await page.evaluate(() => window.HW_APP.rounds().some((r) => r.id === 'math')));
 
+  console.log('Sheet tab');
+  {
+    const PDFLib = require('../vendor/pdf-lib.min.js');
+    const doc = await PDFLib.PDFDocument.create();
+    const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+    for (const n of [1, 2]) {
+      const pg = doc.addPage([612, 792]);
+      pg.drawText('Question ' + n + '. Explain your answer.', { x: 72, y: 700, size: 14, font });
+      pg.drawLine({ start: { x: 72, y: 600 }, end: { x: 540, y: 600 }, thickness: 1 });
+    }
+    const pdfPath = path.join(OUT, 'worksheet.pdf');
+    fs.writeFileSync(pdfPath, await doc.save());
+
+    await page.setViewportSize({ width: 1180, height: 900 });
+    await page.click('#tab-sheet');
+    check('the Sheet tab opens', await page.isVisible('#sheet'));
+    check('nothing can be drawn before a worksheet is open', await page.isDisabled('#sheetDraw'));
+    await page.setInputFiles('#sheetFile', pdfPath);
+    await page.waitForFunction(() => /Page 1 of 2/.test(document.querySelector('#sheetPageNo').textContent), null, { timeout: 20000 });
+    check('a PDF opens and shows its pages', await page.isVisible('#sheetStage'));
+    const shownInk = await inkPixels(page, '#sheetCanvas');
+    check('the page is drawn', shownInk > 200, String(shownInk));
+
+    // drag a box just above the line on page 1: x 72..540, y 160..190 pt from the top
+    await page.click('#sheetDraw');
+    const st = await page.locator('#sheetBoxes').boundingBox();
+    const at = (xPt, yPt) => [st.x + (xPt / 612) * st.width, st.y + (yPt / 792) * st.height];
+    const [x0, y0] = at(72, 160);
+    const [x1, y1] = at(540, 190);
+    await page.mouse.move(x0, y0);
+    await page.mouse.down();
+    await page.mouse.move((x0 + x1) / 2, (y0 + y1) / 2, { steps: 4 });
+    await page.mouse.move(x1, y1, { steps: 4 });
+    await page.mouse.up();
+    const made = await page.evaluate(() => window.HW_SHEET.boxes.map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h, page: b.page })));
+    check('dragging draws an answer box', made.length === 1 && Math.abs(made[0].x - 72) < 3 && Math.abs(made[0].w - 468) < 4 && Math.abs(made[0].h - 30) < 4, JSON.stringify(made));
+    check('the box is selected and its form is shown', await page.isVisible('#sheetForm'));
+    check('drawing turns itself off after one box', (await page.getAttribute('#sheetDraw', 'aria-pressed')) === 'false');
+
+    await page.fill('#sheetText', 'the quick fox jumps over the lazy dog');
+    await page.waitForFunction(() => document.querySelectorAll('#sheetInk path').length === 1);
+    check('typing shows the answer in handwriting on the page', true);
+    const warn = await page.isVisible('#sheetBoxWarn');
+    check('a short answer fits without a warning', !warn, await page.textContent('#sheetBoxWarn'));
+    await page.screenshot({ path: path.join(OUT, '6-sheet.png') });
+
+    // a long answer in the same box is shrunk instead of running out of it
+    await page.fill('#sheetText', 'the quick brown fox jumps over the lazy dog and the five dozen liquor jugs pack my box with the quick brown fox jumps over the lazy dog');
+    await page.waitForTimeout(300);
+    const shrunk = await page.evaluate(() => document.querySelector('#sheetBoxWarn').textContent);
+    check('a long answer is made smaller to fit and says so', /smaller|does not fit/i.test(shrunk), shrunk);
+    await page.fill('#sheetText', 'the quick fox jumps over the lazy dog');
+
+    // the saved PDF has the ink in the box (descenders may cross the bottom edge, like on a ruled line) and nowhere else, in the pen colour
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#sheetSavePdf')]);
+    const savedPath = path.join(OUT, 'worksheet-filled.pdf');
+    await download.saveAs(savedPath);
+    check('the saved file is named after the worksheet', download.suggestedFilename() === 'worksheet-filled.pdf', download.suggestedFilename());
+    const bytes = Array.from(fs.readFileSync(savedPath));
+    const counts = await page.evaluate(async (arr) => {
+      const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(arr) }).promise;
+      const pg = await doc.getPage(1);
+      const S = 2;
+      const vp = pg.getViewport({ scale: S });
+      const c = document.createElement('canvas');
+      c.width = vp.width;
+      c.height = vp.height;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      let inside = 0;
+      let outside = 0;
+      const b = window.HW_SHEET.boxes[0];
+      for (let y = 0; y < c.height; y++) {
+        for (let x = 0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          const blue = d[i + 2] > 120 && d[i] < 90 && d[i + 2] - d[i] > 70; // the pen is #1749b3, the worksheet is black on white
+          if (!blue) continue;
+          const px = x / S;
+          const py = y / S;
+          if (px >= b.x - 4 && px <= b.x + b.w + 4 && py >= b.y - 4 && py <= b.y + b.h + 8) inside++;
+          else outside++;
+        }
+      }
+      const second = await (await doc.getPage(2)).getTextContent();
+      return { inside, outside, pages: doc.numPages, text2: second.items.map((i) => i.str).join(' ') };
+    }, bytes);
+    check('the saved PDF has the handwriting in blue inside the box', counts.inside > 300, JSON.stringify(counts));
+    check('and none of it anywhere else on the page', counts.outside === 0, JSON.stringify(counts));
+    check('the rest of the worksheet is untouched', counts.pages === 2 && /Question 2/.test(counts.text2), JSON.stringify(counts));
+
+    // the box can be moved by dragging it, and the ink goes with it
+    const before = await page.evaluate(() => ({ x: window.HW_SHEET.boxes[0].x, y: window.HW_SHEET.boxes[0].y }));
+    const [mx, my] = at(300, 170);
+    await page.mouse.move(mx, my);
+    await page.mouse.down();
+    await page.mouse.move(mx + 60, my + 40, { steps: 5 });
+    await page.mouse.up();
+    const after = await page.evaluate(() => ({ x: window.HW_SHEET.boxes[0].x, y: window.HW_SHEET.boxes[0].y }));
+    check('dragging a box moves it', after.x > before.x + 30 && after.y > before.y + 20, JSON.stringify({ before, after }));
+
+    // math, another take, page 2 and delete
+    await page.check('input[name="sheetKind"][value="math"]');
+    await page.fill('#sheetText', String.raw`x = \frac{a}{b}`);
+    await page.waitForFunction(() => document.querySelectorAll('#sheetInk path').length === 1);
+    const d1 = await page.getAttribute('#sheetInk path', 'd');
+    await page.click('#sheetAgain');
+    await page.waitForTimeout(200);
+    const d2 = await page.getAttribute('#sheetInk path', 'd');
+    check('math boxes work and Another take writes it differently', d1 && d2 && d1 !== d2);
+    await page.click('#sheetNext');
+    await page.waitForFunction(() => /Page 2 of 2/.test(document.querySelector('#sheetPageNo').textContent));
+    check('boxes belong to their page', (await page.locator('.sheet-box').count()) === 0 && (await page.locator('#sheetInk path').count()) === 0);
+    await page.click('#sheetPrev');
+    await page.waitForFunction(() => /Page 1 of 2/.test(document.querySelector('#sheetPageNo').textContent));
+    await page.locator('.sheet-box').first().click({ position: { x: 20, y: 8 } });
+    await page.waitForTimeout(150);
+
+    const [png] = await Promise.all([page.waitForEvent('download'), page.click('#sheetSavePng')]);
+    check('a page can be saved as a PNG', /worksheet-page1\.png$/.test(png.suggestedFilename()), png.suggestedFilename());
+
+    // the boxes come back when the same file is opened again
+    await page.reload();
+    await page.waitForFunction(() => window.HW_APP && window.HW_APP.style);
+    await page.click('#tab-sheet');
+    await page.setInputFiles('#sheetFile', pdfPath);
+    await page.waitForFunction(() => /Page 1 of 2/.test(document.querySelector('#sheetPageNo').textContent), null, { timeout: 20000 });
+    await page.waitForTimeout(500);
+    const back = await page.evaluate(() => window.HW_SHEET.boxes.map((b) => b.text));
+    check('the boxes and answers are remembered for that file', back.length === 1 && /frac/.test(back[0]), JSON.stringify(back));
+    await page.locator('.sheet-box').first().click({ position: { x: 20, y: 8 } });
+    await page.click('#sheetDelete');
+    check('a box can be deleted', (await page.evaluate(() => window.HW_SHEET.boxes.length)) === 0);
+
+    // a photo works like a PDF
+    const photo = await page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 600;
+      c.height = 800;
+      const x = c.getContext('2d');
+      x.fillStyle = '#fff';
+      x.fillRect(0, 0, 600, 800);
+      x.fillStyle = '#000';
+      x.fillRect(50, 400, 500, 3);
+      return c.toDataURL('image/png').split(',')[1];
+    });
+    await page.setInputFiles('#sheetFile', { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(photo, 'base64') });
+    await page.waitForFunction(() => /Page 1 of 1/.test(document.querySelector('#sheetPageNo').textContent), null, { timeout: 20000 });
+    const shape = await page.evaluate(() => window.HW_SHEET.page);
+    check('a photo becomes a one page sheet with the same shape', shape.w === 612 && Math.abs(shape.h - 816) < 1, JSON.stringify(shape));
+    for (const [name, w, h] of [['ipad-portrait', 820, 1180], ['phone', 390, 844]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(500);
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      check(`${name} Sheet: no sideways scrolling`, over <= 1, String(over));
+    }
+    await page.setViewportSize({ width: 1180, height: 900 });
+  }
+
   console.log('Layout on iPad and phone sized screens');
   for (const [name, w, h] of [['ipad-portrait', 820, 1180], ['ipad-landscape', 1180, 820], ['phone', 390, 844]]) {
     await page.setViewportSize({ width: w, height: h });

@@ -27,6 +27,11 @@ function read(rel) {
 function inlineApp() {
   let html = read('index.html');
   html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, href) => `<style>\n${read(href)}\n</style>`);
+  // Big libraries (vendor/) go in as plain text and only run when the app asks for them (loadLib in src/sheetui.js), so
+  // they cost nothing at start-up. In a plain checkout loadLib fetches the same files by name instead.
+  const libs = fs.readdirSync(path.join(ROOT, 'vendor')).filter((f) => f.endsWith('.js')).sort();
+  const table = libs.map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
+  html = html.replace('</body>', () => `<script>window.HW_LIBS = {${table.join(',\n')}};</script>\n</body>`);
   html = html.replace(/<script src="([^"]+)"><\/script>/g, (_, src) => `<script>\n${read(src).replace(/<\/script/gi, '<\\/script')}\n</script>`);
   if (/<(link|script)[^>]+(href|src)="[^"]+"/.test(html.replace(/<script>[\s\S]*?<\/script>/g, '').replace(/<style>[\s\S]*?<\/style>/g, ''))) {
     throw new Error('index.html still references an external file after inlining');

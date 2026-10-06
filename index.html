@@ -14,6 +14,7 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button role="tab" id="tab-teach" aria-controls="teach" aria-selected="true">Teach</button>
       <button role="tab" id="tab-write" aria-controls="write" aria-selected="false">Write</button>
+      <button role="tab" id="tab-sheet" aria-controls="sheet" aria-selected="false">Sheet</button>
     </nav>
     <span class="status" id="status" aria-live="polite"></span>
     <button id="btnLock" class="ghost" title="Forget the password on this device and lock the page" hidden>Lock</button>
@@ -159,6 +160,59 @@ Pack my box with five dozen liquor jugs.</textarea>
         </aside>
       </div>
     </section>
+
+    <!-- ============================= SHEET ============================= -->
+    <section id="sheet" role="tabpanel" aria-labelledby="tab-sheet" hidden>
+      <div class="sheet-grid">
+        <div class="sheet-main">
+          <div class="card sheet-bar actions">
+            <button id="sheetOpen" class="primary">Open worksheet</button>
+            <input type="file" id="sheetFile" accept="application/pdf,image/png,image/jpeg" hidden>
+            <button id="sheetDraw" class="ghost" disabled>Draw answer box</button>
+            <span class="pager">
+              <button id="sheetPrev" class="ghost" aria-label="Previous page" disabled>&lsaquo;</button>
+              <span id="sheetPageNo">no page</span>
+              <button id="sheetNext" class="ghost" aria-label="Next page" disabled>&rsaquo;</button>
+            </span>
+            <span class="spacer"></span>
+            <button id="sheetSavePdf" disabled>Save PDF</button>
+            <button id="sheetSavePng" class="ghost" disabled>Save page as PNG</button>
+          </div>
+          <p class="warn" id="sheetWarn" hidden></p>
+          <div class="sheet-scroll" id="sheetScroll">
+            <p class="muted sheet-empty" id="sheetEmpty">Open a PDF or a photo of the worksheet. Then tap <b>Draw answer box</b> and drag a rectangle where an answer goes.</p>
+            <div class="sheet-stage" id="sheetStage" hidden>
+              <canvas id="sheetCanvas"></canvas>
+              <svg id="sheetInk" class="sheet-ink" aria-hidden="true"></svg>
+              <div id="sheetBoxes" class="sheet-boxes"></div>
+            </div>
+          </div>
+        </div>
+        <aside class="card sheet-side controls" id="sheetSide">
+          <h2>Answer</h2>
+          <p class="muted small" id="sheetHint">Select a box to type its answer. Boxes are kept for this file on this device.</p>
+          <div id="sheetForm" hidden>
+            <label>Text
+              <textarea id="sheetText" rows="4" spellcheck="false"></textarea>
+            </label>
+            <div class="row">
+              <label><input type="radio" name="sheetKind" value="text" checked> Words</label>
+              <label><input type="radio" name="sheetKind" value="math"> Math</label>
+            </div>
+            <label>Letter height <output id="o-sheetXh">9.5 pt</output>
+              <input type="range" id="sheetXh" min="5" max="16" step="0.5" value="9.5">
+            </label>
+            <label class="check"><input type="checkbox" id="sheetAuto" checked> Make it smaller if it does not fit</label>
+            <p class="warn" id="sheetBoxWarn" hidden></p>
+            <div class="row">
+              <button id="sheetAgain" class="ghost">Another take</button>
+              <button id="sheetDelete" class="ghost danger">Delete box</button>
+            </div>
+          </div>
+          <p class="muted small">The pen, colour and look come from the Write tab.</p>
+        </aside>
+      </div>
+    </section>
   </main>
 
   <script src="src/geometry.js"></script>
@@ -170,6 +224,8 @@ Pack my box with five dozen liquor jugs.</textarea>
   <script src="src/lines.js"></script>
   <script src="src/capture.js"></script>
   <script src="src/prompts.js"></script>
+  <script src="src/sheet.js"></script>
   <script src="src/app.js"></script>
+  <script src="src/sheetui.js"></script>
 </body>
 </html>
