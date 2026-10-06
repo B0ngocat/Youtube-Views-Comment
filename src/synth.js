@@ -93,9 +93,15 @@
           c += 2 * (unit.odd || 0); // looks unlike the writer's other examples of this letter
           if (unit.word.suspect) c += 1.5; // taken from a word the aligner was unsure about
           if (unit.wrong) c += 2; // looks more like a different letter than this one (probably cut in the wrong place)
-          // A letter written on its own is clean, but it carries the little run-in stroke the writer
-          // only makes when a letter stands alone, so keep it to the start of a word.
-          if (unit.iso) c += j === 0 || n === 1 ? -0.5 : /[a-z]/.test(chars[j]) ? 1.5 : 0;
+          if (unit.iso) {
+            // Written on its own, so never mis-cut. Digits and symbols cut out of words are mis-cut far more often
+            // than letters (a 9 comes out as a hook, a 1 picks up a stroke from its neighbour) and a single digit has
+            // no run-in stroke to give it away, so the writer's own are strongly preferred. A lowercase letter carries
+            // a run-in stroke the writer only makes when it stands alone, so it is kept to the start of a word.
+            if (!/[A-Za-z]/.test(chars[j])) c -= 2.5;
+            else if (j === 0 || n === 1) c -= 0.5;
+            else if (/[a-z]/.test(chars[j])) c += 1.5;
+          }
           if (unit.stray) c += 3; // carries a scrap of a neighbouring letter
           if (unit.open) c += 2.5; // the writer closes this letter, this copy stays open (cut wrongly?)
           c += 1.5 * (unit.far || 0); // unlike the writer's own single-letter version of it
@@ -201,7 +207,9 @@
           const byBox = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
           if (clearance && base !== null) {
             // nearest ink of the two letters ends up `want` apart, which varies a little like the writer's does
-            const want = Math.max(0.02, clearance.median + clearance.sd * 0.5 * G.gaussian(rng));
+            let want = Math.max(0.02, clearance.median + clearance.sd * 0.5 * G.gaussian(rng));
+            // a decimal point squeezed against its digits turns 71.45 into 7145
+            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) want = Math.max(want, 0.2);
             tx = prev.tx + want - base;
           } else tx = byBox;
         }

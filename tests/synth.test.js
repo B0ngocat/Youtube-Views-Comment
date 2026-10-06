@@ -247,3 +247,19 @@ test('replacing one letter changes that letter and nothing else', () => {
   const keep = (w) => w.ids.filter((_, j) => j !== ci).join(',');
   assert.equal(keep(b.words[wi]), keep(a.words[wi]), 'the other letters of that word are unchanged');
 });
+
+test('a digit the writer wrote on its own is strongly preferred over one cut out of a word', () => {
+  const unit = (iso, id, wid) => ({
+    ch: '5', iso, id, wid, idx: 0, strokes: [], marks: [], hc: 0, odd: 0, dev: 0,
+    entry: { mid: false, x: 0, y: 0.5, dx: 1, dy: 0 }, exit: { mid: false, x: 1, y: 0.5, dx: 1, dy: 0 },
+    box: { minX: 0, maxX: 1, minY: 0, maxY: 1.8 }, word: { units: [], suspect: false },
+  });
+  const single = unit(true, 'single', 1);
+  const cut = unit(false, 'cut', 2);
+  const style = { byChar: new Map([['5', [cut, single]]]), allByChar: new Map() };
+  for (let seed = 1; seed <= 30; seed++) {
+    const ctx = { variation: 0.4, messiness: 0, usage: new Map(), missing: new Set() };
+    const picked = Y.chooseUnits(style, ['5', '5'], G.mulberry32(seed), ctx);
+    assert.ok(picked.every((c) => c.unit.id === 'single'), 'seed ' + seed + ' picked ' + picked.map((c) => c.unit.id));
+  }
+});
