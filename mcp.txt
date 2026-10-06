@@ -1,0 +1,34 @@
+Handwriting MCP server
+======================
+
+Writes text or math in the owner's own handwriting and returns a PNG. One file of plain Node.js (18 or newer),
+no npm packages. It does not contain any handwriting: that is in a separate samples file the owner exports from
+the Teach tab of the app (my-handwriting.json), which this server reads from disk and never sends anywhere.
+
+Get it
+  curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
+  sha256sum handwriting-mcp.js     # should be 01224f7498e1abed9db4e87ac4ed19c0bc5652ff2cda493a5217ea1917694e83
+
+A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
+  sha256 6ee61b43bcc28ae51341f6a93f063d2a32a7c45d98d78d179e5d27fdd3ca8efd
+
+Run it (speaks MCP over stdin/stdout)
+  node handwriting-mcp.js --samples /path/to/my-handwriting.json
+  (without --samples it looks for my-handwriting.json in the current folder, then next to the file)
+
+As a web address instead
+  node handwriting-mcp.js --samples my-handwriting.json --http 8787 --token <a secret of 16+ characters>
+  POST http://127.0.0.1:8787/mcp with the header  Authorization: Bearer <token>
+
+Tools
+  handwriting_status   is the handwriting loaded, which characters have no sample
+  write_text           {text, kind: "text"|"math", width_pt, letter_height_pt, ink, seed, include_base64}
+                       returns a PNG (MCP image content; include_base64 also gives it as text)
+  write_batch          {items: [{text, kind, seed, ...}], return_images}   many at once, handwriting loaded once
+  inspect_pdf, fill_pdf   (PDF version only) find where answers go on a PDF, and write them in
+
+Math input: x^2, \frac{a}{b}, \sqrt{x} or sqrt(x), \sqrt[3]{x} or cubert(x), \int_0^1, \sum_{i=1}^{n},
+\text{ words }, and "\ " for a space that stays (plain spaces are ignored, as in TeX).
+
+The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
+folder next to the samples file, so later starts take under half a second.
