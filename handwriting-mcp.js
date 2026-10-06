@@ -2,6 +2,7 @@
 // Handwriting MCP server, one file. Built by scripts/build-mcp.js (without PDF tools). Run: node handwriting-mcp.js --samples my-handwriting.json
 'use strict';
 globalThis.__HW_NO_PDF__ = true;
+
 const __defs = {
 "mcp/server.js": function (module, exports, __req) {
 /*
@@ -12,6 +13,11 @@ const __defs = {
  *
  *   node mcp/server.js --samples /path/to/my-handwriting.json [--out /folder/for/results]
  *   node mcp/server.js --samples ... --http 8787 --token <secret>      (a web address instead of stdin/stdout)
+ *
+ * --format svg (or HANDWRITING_FORMAT=svg) makes write_text return SVG markup instead of a PNG unless a call asks otherwise.
+ *
+ * Samples can also be the sealed file the site publishes: --samples-url <address> (or --samples with a downloaded copy)
+ * and --password <password> (or HANDWRITING_PASSWORD, which keeps it out of the process list).
  *
  * The built handwriting is cached in a .handwriting-cache folder next to the samples file (--cache DIR to move it,
  * --no-cache to turn it off), so starting the server again for each call is fast after the first time.
@@ -140,6 +146,10 @@ function main() {
   const argv = process.argv.slice(2);
   const handle = createServer({
     samples: findSamples(argv),
+    // the sealed file on the site: given, or the address this copy of the server was published with (see build-site-extras.js)
+    samplesUrl: argValue(argv, '--samples-url') || process.env.HANDWRITING_URL || globalThis.__HW_DEFAULT_SAMPLES_URL__,
+    format: argValue(argv, '--format') || process.env.HANDWRITING_FORMAT, // png (default), svg or both: what write_text returns unless asked
+    password: argValue(argv, '--password') || process.env.HANDWRITING_PASSWORD,
     out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
     cache: argv.includes('--no-cache') ? false : argValue(argv, '--cache') || process.env.HANDWRITING_CACHE,
   });
@@ -167,6 +177,8 @@ module.exports = { createServer, PROTOCOLS, serveHttp };
 const fs = require('fs');
 const path = require('path');
 const v8 = require('v8');
+const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 // Plain relative requires, so scripts/build-mcp.js can fold everything into one file. The PDF parts are required only
 // when a PDF tool is used, and a build without PDF support (globalThis.__HW_NO_PDF__) leaves them out altogether.
@@ -174,6 +186,7 @@ const S = __req("src/style.js");
 const R = __req("src/render.js");
 const Sheet = __req("src/sheet.js");
 const { renderPng } = __req("mcp/raster.js");
+const { isSealed, unseal } = __req("mcp/sealed.js");
 const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => __req("vendor/pdf-lib.min.js");
 const inspectPdf = (bytes, o) => __req("mcp/pdfinfo.js").inspect(bytes, o);
@@ -182,7 +195,9 @@ const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, s
 const DEFAULT_INK = '#1749b3';
 
 function createTools(config) {
-  const samplesFile = config.samples;
+  const source = config.samples || config.samplesUrl; // a path, or an address (the sealed file the site publishes)
+  const isUrl = /^https?:\/\//i.test(source || '');
+  const REFRESH_MS = 10 * 60 * 1000; // a server that stays up looks for newer samples this often
   const outDir = path.resolve(config.out || 'handwriting-out');
   let cache = null; // {mtime, style, words}
 
@@ -195,7 +210,7 @@ function createTools(config) {
     const files = own.every((f) => fs.existsSync(f)) ? own : [__filename]; // in the one-file build, the file itself is the engine
     return crypto.createHash('sha256').update(files.map((f) => fs.readFileSync(f)).join('\n')).digest('hex');
   })();
-  const cacheDir = config.cache === false ? null : path.resolve(config.cache || path.join(path.dirname(path.resolve(samplesFile || '.')), '.handwriting-cache'));
+  const cacheDir = config.cache === false ? null : path.resolve(config.cache || (isUrl || !source ? path.resolve('.handwriting-cache') : path.join(path.dirname(path.resolve(source)), '.handwriting-cache')));
 
   function readCache(key) {
     if (!cacheDir) return null;
@@ -219,16 +234,40 @@ function createTools(config) {
     }
   }
 
-  function load() {
-    if (!samplesFile) throw new Error('No handwriting file is set. Start the server with --samples /path/to/my-handwriting.json (the file the Export button in the Teach tab saves), or set HANDWRITING_FILE.');
-    let st;
-    try {
-      st = fs.statSync(samplesFile);
-    } catch {
-      throw new Error('Cannot read the handwriting file at ' + samplesFile + '. Check the path.');
+  /** GET an address (http or https), following redirects. */
+  function fetchBytes(url, hops) {
+    return new Promise((resolve, reject) => {
+      const req = (/^https:/i.test(url) ? https : http).get(url, { timeout: 30000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && (hops || 0) < 5) {
+          res.resume();
+          return resolve(fetchBytes(new URL(res.headers.location, url).href, (hops || 0) + 1));
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`Could not download the handwriting from ${url} (HTTP ${res.statusCode}).`));
+        }
+        const parts = [];
+        res.on('data', (c) => parts.push(c));
+        res.on('end', () => resolve(Buffer.concat(parts)));
+      });
+      req.on('timeout', () => req.destroy(new Error('Timed out downloading ' + url)));
+      req.on('error', (e) => reject(new Error(`Could not download the handwriting from ${url}: ${e.message}. If this computer needs a proxy, download the file with curl and give its path with --samples instead.`)));
+    });
+  }
+
+  async function load() {
+    if (!source) throw new Error('No handwriting is set. Start the server with --samples /path/to/my-handwriting.json (the file the Export button in the Teach tab saves), or --samples-url <address of the sealed file> with --password, or set HANDWRITING_FILE.');
+    let stamp2 = null;
+    if (!isUrl) {
+      try {
+        stamp2 = fs.statSync(source).mtimeMs;
+      } catch {
+        throw new Error('Cannot read the handwriting file at ' + source + '. Check the path.');
+      }
     }
-    if (cache && cache.mtime === st.mtimeMs) return cache;
-    const bytes = fs.readFileSync(samplesFile);
+    if (cache && (isUrl ? Date.now() - cache.at < REFRESH_MS : cache.mtime === stamp2)) return cache;
+    let bytes = isUrl ? await fetchBytes(source) : fs.readFileSync(source);
+    if (isSealed(bytes)) bytes = unseal(bytes, config.password); // the plain samples are only ever in memory
     const key = crypto.createHash('sha256').update(stamp).update(bytes).digest('hex');
     let built = readCache(key);
     if (!built) {
@@ -236,7 +275,7 @@ function createTools(config) {
       built = { style: S.buildStyle(words), words: words.length };
       writeCache(key, built);
     }
-    cache = { mtime: st.mtimeMs, style: built.style, words: built.words };
+    cache = { mtime: stamp2, at: Date.now(), style: built.style, words: built.words };
     return cache;
   }
 
@@ -258,25 +297,43 @@ function createTools(config) {
   }
 
   let counter = 0;
-  function renderOne(a) {
+  const formatOf = (a) => (['png', 'svg', 'both'].includes(a.format) ? a.format : ['png', 'svg', 'both'].includes(config.format) ? config.format : 'png');
+  async function renderOne(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
-    const { style } = load();
+    const { style } = await load();
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
     const placed = Sheet.layoutBox(style, box, lookFrom(a));
     const ink = inkOf(a);
-    const d = R.layoutToPath(placed.layout, 1, true);
-    const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
-    const pxPerPt = 4;
-    const { png } = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * pxPerPt, rgb);
+    const format = formatOf(a);
     const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
-    const pngPath = outPath(base + '.png');
+    const pt = (v) => Math.round(v * placed.K * 100) / 100;
+    // the SVG is sized in points, so it comes out at the letter height that was asked for when it is placed at its own size
+    const svg = R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }).replace(/ width="[^"]*" height="[^"]*"/, ` width="${pt(placed.layout.width)}pt" height="${pt(Math.ceil(placed.layout.height))}pt"`);
     const svgPath = outPath(base + '.svg');
-    fs.writeFileSync(pngPath, png);
-    fs.writeFileSync(svgPath, R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }));
-    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. PNG: ${pngPath}  SVG: ${svgPath}`];
+    fs.writeFileSync(svgPath, svg);
+    let png = null;
+    let pngPath = null;
+    if (format !== 'svg') {
+      const d = R.layoutToPath(placed.layout, 1, true);
+      const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
+      png = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * 4, rgb).png; // 4 pixels per point
+      pngPath = outPath(base + '.png');
+      fs.writeFileSync(pngPath, png);
+    }
+    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}`];
     if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
-    const b64 = png.toString('base64');
-    return { b64, notes: notes.join('\n') };
+    return { svg, format, b64: png && png.toString('base64'), notes: notes.join('\n') };
+  }
+
+  /** What goes back for one rendered item: the PNG as an image, the SVG as text (MCP has no SVG image type), or both. */
+  function blocks(r, label, a, images) {
+    const out = [];
+    const tag = label ? label + '. ' : '';
+    if (r.b64 && images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
+    if (r.svg && r.format !== 'png' && images !== false) out.push(text(r.svg));
+    out.push(text(tag + r.notes));
+    if (r.b64 && a.include_base64) out.push(text(tag + 'image/png base64:\n' + r.b64));
+    return out;
   }
 
   const defs = [
@@ -284,15 +341,15 @@ function createTools(config) {
       name: 'handwriting_status',
       description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. Characters without a sample are skipped when writing, so check this before writing anything with unusual symbols or digits.",
       inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample.' } } },
-      run(a) {
-        const { style, words } = load();
+      async run(a) {
+        const { style, words } = await load();
         const missing = S.missingChars(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"');
         return [text(`Handwriting loaded: ${words} recorded words, ${style.count} letters and symbols cut out. ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
       },
     },
     {
       name: 'write_text',
-      description: "Writes text, or TeX-style math, in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a PNG and a transparent SVG and gives their paths. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
+      description: "Writes text, or TeX-style math, in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
       inputSchema: {
         type: 'object',
         required: ['text'],
@@ -305,17 +362,17 @@ function createTools(config) {
           seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
+          format: { type: 'string', enum: ['png', 'svg', 'both'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. The files are saved either way.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
-      run(a) {
-        const r = renderOne(a);
-        return [{ type: 'image', data: r.b64, mimeType: 'image/png' }, text(r.notes), ...(a.include_base64 ? [text('image/png base64:\n' + r.b64)] : [])];
+      async run(a) {
+        return blocks(await renderOne(a), '', a);
       },
     },
     {
       name: 'write_batch',
-      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns a picture of each, in order, and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
+      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
       inputSchema: {
         type: 'object',
         required: ['items'],
@@ -326,25 +383,23 @@ function createTools(config) {
           ink: { type: 'string' },
           neatness: { type: 'number' },
           messiness: { type: 'number' },
+          format: { type: 'string', enum: ['png', 'svg', 'both'], description: 'As in write_text. Default png.' },
           return_images: { type: 'boolean', description: 'Default true. False returns only the saved file paths, which is much smaller.' },
           include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
         },
       },
-      run(a) {
+      async run(a) {
         if (!Array.isArray(a.items) || !a.items.length) throw new Error('items must be a list with at least one item.');
         if (a.items.length > 100) throw new Error('At most 100 items per call.');
         const { items, return_images: images, ...shared } = a;
         const out = [];
-        a.items.forEach((item, i) => {
+        for (const [i, item] of a.items.entries()) {
           try {
-            const r = renderOne(Object.assign({}, shared, item));
-            out.push(text(`${i + 1}. ${r.notes}`));
-            if (images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
-            if (a.include_base64) out.push(text(`${i + 1}. image/png base64:\n${r.b64}`));
+            out.push(...blocks(await renderOne(Object.assign({}, shared, item)), String(i + 1), a, images));
           } catch (e) {
             out.push(text(`${i + 1}. FAILED: ${e.message}`));
           }
-        });
+        }
         return out;
       },
     },
@@ -398,7 +453,7 @@ function createTools(config) {
         },
       },
       async run(a) {
-        const { style } = load();
+        const { style } = await load();
         const bytes = readPdf(a.pdf);
         if (!Array.isArray(a.answers) || !a.answers.length) throw new Error('answers must be a list with at least one answer.');
         const PDFLib = pdfLib();
@@ -4022,6 +4077,53 @@ function renderPng(pathData, layoutWidth, layoutHeight, scale, rgb) {
 }
 
 module.exports = { renderPng, polygons, coverage };
+
+},
+"mcp/sealed.js": function (module, exports, __req) {
+'use strict';
+/*
+ * The handwriting samples, locked with a password so the file can sit on a public site. Gzip, then AES-256-GCM with a key
+ * from PBKDF2 (the same recipe as the protected page, scripts/build-protected.js). The file is JSON with "kind" first, so
+ * isSealed can tell it from a plain samples file without parsing all of it.
+ *
+ * The password is the only protection: anyone can download the file and try passwords offline, so use a long one.
+ */
+const crypto = require('crypto');
+const zlib = require('zlib');
+
+const ITERATIONS = 600000;
+const MIN_LENGTH = 12;
+
+const keyFor = (password, salt, iter) => crypto.pbkdf2Sync(Buffer.from(String(password).normalize('NFKC'), 'utf8'), salt, iter, 32, 'sha256');
+
+function seal(plain, password, opts) {
+  if (!password) throw new Error('A password is needed to seal the handwriting.');
+  if (String(password).length < MIN_LENGTH && !(opts && opts.allowShort)) throw new Error(`The password is under ${MIN_LENGTH} characters. The sealed file is public, so a short one can be cracked offline.`);
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', keyFor(password, salt, ITERATIONS), iv);
+  const ct = Buffer.concat([cipher.update(zlib.gzipSync(plain)), cipher.final(), cipher.getAuthTag()]);
+  return JSON.stringify({ kind: 'handwriting-samples', v: 1, iter: ITERATIONS, salt: salt.toString('base64'), iv: iv.toString('base64'), data: ct.toString('base64') });
+}
+
+function isSealed(buf) {
+  return /^\s*\{\s*"kind"\s*:\s*"handwriting-samples"/.test(Buffer.from(buf).subarray(0, 120).toString('utf8'));
+}
+
+function unseal(buf, password) {
+  if (!password) throw new Error('The handwriting file is locked. Give the password with --password or the HANDWRITING_PASSWORD environment variable.');
+  const o = JSON.parse(Buffer.from(buf).toString('utf8'));
+  const data = Buffer.from(o.data, 'base64');
+  try {
+    const d = crypto.createDecipheriv('aes-256-gcm', keyFor(password, Buffer.from(o.salt, 'base64'), o.iter), Buffer.from(o.iv, 'base64'));
+    d.setAuthTag(data.subarray(data.length - 16));
+    return zlib.gunzipSync(Buffer.concat([d.update(data.subarray(0, data.length - 16)), d.final()]));
+  } catch {
+    throw new Error('Wrong password for the handwriting file, or the file is damaged.');
+  }
+}
+
+module.exports = { seal, unseal, isSealed, MIN_LENGTH };
 
 },
 };
