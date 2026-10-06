@@ -25,6 +25,14 @@
     <section id="teach" role="tabpanel" aria-labelledby="tab-teach">
       <div class="teach-grid">
         <div class="teach-main">
+          <div class="card" id="guestNote" hidden>
+            <b>Three steps</b>
+            <ol class="small">
+              <li>Go through the rounds below, in order (about 30 minutes). Write each one on the solid line, then tap Next.</li>
+              <li>When you are done, tap <b>Download for my AI</b> at the bottom left. It saves a zip with your handwriting and everything your AI needs.</li>
+              <li>Give that zip to your AI and tell it: "Unzip this and read FOR-THE-AI.txt."</li>
+            </ol>
+          </div>
           <div class="rounds" id="rounds" role="group" aria-label="Rounds"></div>
 
           <div class="card prompt-card">
@@ -218,10 +226,10 @@ Pack my box with five dozen liquor jugs.</textarea>
   <!-- Download everything: shown only on the published site, which carries the package (src/download.js) -->
   <div class="dl" id="dl" hidden>
     <div class="dl-panel card" id="dlPanel" hidden>
-      <b>Download everything</b>
-      <p class="muted small">One .zip with the app's code, the MCP server (a single file, ready to run) and the setup guide as a PDF.</p>
-      <label class="check"><input type="checkbox" id="dlSamples"><span>Also include my handwriting (my-handwriting.json) <span id="dlSamplesNote"></span></span></label>
-      <p class="muted small">That file is yours alone. Leave it out if you are going to send the zip to someone.</p>
+      <b id="dlTitle">Download everything</b>
+      <p class="muted small" id="dlText">One .zip with the app's code, the MCP server (a single file, ready to run) and the setup guide as a PDF.</p>
+      <label class="check" id="dlSamplesRow"><input type="checkbox" id="dlSamples"><span>Also include my handwriting (my-handwriting.json) <span id="dlSamplesNote"></span></span></label>
+      <p class="muted small" id="dlKeep">That file is yours alone. Leave it out if you are going to send the zip to someone.</p>
       <div class="row"><button id="dlGo" class="primary">Download .zip</button><button id="dlClose" class="ghost">Close</button></div>
     </div>
     <button id="btnDownloadAll" class="dl-btn">Download everything</button>

@@ -11,10 +11,12 @@
   };
 
   // ---- persistence (all wrapped: Safari private mode / quota can throw) -------------------
+  // another part of the site (a different password) keeps its own data, so two people on one browser never mix
+  const NS = window.HW_PROFILE ? window.HW_PROFILE + ':' : '';
   const store = {
     get(key, dflt) {
       try {
-        const v = localStorage.getItem(key);
+        const v = localStorage.getItem(NS + key);
         return v ? JSON.parse(v) : dflt;
       } catch {
         return dflt;
@@ -22,7 +24,7 @@
     },
     set(key, val) {
       try {
-        localStorage.setItem(key, JSON.stringify(val));
+        localStorage.setItem(NS + key, JSON.stringify(val));
         return true;
       } catch {
         return false;
@@ -30,7 +32,7 @@
     },
     del(key) {
       try {
-        localStorage.removeItem(key);
+        localStorage.removeItem(NS + key);
       } catch {
         /* ignore */
       }
@@ -743,6 +745,8 @@
     }
     download(blob, 'handwriting.png');
   });
+
+  if (window.HW_PROFILE === 'guest') $('#guestNote').hidden = false;
 
   // ---- tabs -------------------------------------------------------------------------------------
   const TABS = ['teach', 'write', 'sheet'];

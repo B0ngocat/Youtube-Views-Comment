@@ -32,16 +32,28 @@ function tracked() {
   return execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString('utf8').split('\0').filter(Boolean);
 }
 
-/** [{name, size, crc, deflated}] with names under handwriting-engine/. */
-function buildPack(extra) {
-  const files = tracked()
+/**
+ * What each part of the site's Download button gives. The main part gets the whole project. The guest part is for someone
+ * whose AI can run a program but cannot host a site or use GitHub: just the two servers, the guide and a plain note for the
+ * AI, with the person's own handwriting added by the page (src/download.js).
+ */
+const PROFILES = {
+  guest: { top: 'handwriting-for-ai/', zip: 'handwriting-for-ai.zip', keep: ['docs/handwriting-engine-guide.pdf'], rename: { 'docs/FOR-THE-AI.txt': 'FOR-THE-AI.txt' } },
+};
+
+/** [{name, size, crc, deflated}] with names under the top folder. */
+function buildPack(extra, profile) {
+  const prof = profile && PROFILES[profile];
+  const top = prof ? prof.top : TOP;
+  const files = (prof ? [...prof.keep, 'docs/FOR-THE-AI.txt'] : tracked())
     .filter((f) => !NEVER.test(f))
     .map((f) => [f, fs.readFileSync(path.join(ROOT, f))]);
   // the servers, built here so a friend can run them straight away (no address baked in: they use their own samples)
   files.push(['handwriting-mcp.js', Buffer.from(build({ pdf: false }))], ['handwriting-mcp-pdf.js', Buffer.from(build({ pdf: true }))]);
   for (const e of extra || []) files.push(e);
   files.sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  return files.map(([name, data]) => ({ name: TOP + (name === 'docs/START-HERE.txt' ? 'START-HERE.txt' : name), size: data.length, crc: crc32(data), deflated: zlib.deflateRawSync(data, { level: 9 }) }));
+  const renamed = Object.assign({ 'docs/START-HERE.txt': 'START-HERE.txt' }, prof && prof.rename);
+  return files.map(([name, data]) => ({ name: top + (renamed[name] || name), size: data.length, crc: crc32(data), deflated: zlib.deflateRawSync(data, { level: 9 }) }));
 }
 
 /** The pack as a real .zip file (a Buffer), for putting on the site as a plain download. */
@@ -94,9 +106,9 @@ function buildZip(extra) {
 }
 
 /** The pack as the one line of script the page carries: window.HW_PACK = [[name, size, crc, base64], ...]. */
-function packScript(extra) {
-  const rows = buildPack(extra).map((e) => `[${JSON.stringify(e.name)},${e.size},${e.crc},${JSON.stringify(e.deflated.toString('base64'))}]`);
+function packScript(profile, extra) {
+  const rows = buildPack(extra, profile).map((e) => `[${JSON.stringify(e.name)},${e.size},${e.crc},${JSON.stringify(e.deflated.toString('base64'))}]`);
   return `window.HW_PACK = [${rows.join(',\n')}];`;
 }
 
-module.exports = { buildPack, buildZip, packScript, crc32, NEVER };
+module.exports = { buildPack, buildZip, packScript, crc32, NEVER, PROFILES };

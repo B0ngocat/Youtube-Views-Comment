@@ -84,17 +84,33 @@
     const entries = window.HW_PACK.map(([name, size, crc, b64]) => ({ name, method: 8, crc, size, data: fromBase64(b64) }));
     if (withSamples) {
       const bytes = new TextEncoder().encode(window.HW.style.toJSON(window.HW_APP.words));
-      entries.push({ name: 'handwriting-engine/my-handwriting.json', method: 0, crc: crc32(bytes), size: bytes.length, data: bytes });
+      entries.push({ name: top + 'my-handwriting.json', method: 0, crc: crc32(bytes), size: bytes.length, data: bytes });
     }
     return makeZip(entries);
   }
 
+  const guest = window.HW_PROFILE === 'guest'; // the guest part hands over a small zip for the person's AI, with their handwriting in it
+  const top = guest ? 'handwriting-for-ai/' : 'handwriting-engine/';
   const panel = $('#dlPanel');
   const have = () => (window.HW_APP && window.HW_APP.words ? window.HW_APP.words.length : 0);
   $('#dl').hidden = false;
+  if (guest) {
+    $('#btnDownloadAll').textContent = 'Download for my AI';
+    $('#dlTitle').textContent = 'Download for my AI';
+    $('#dlText').textContent = 'A zip with your handwriting, the program your AI runs, and a note that tells it what to do.';
+    $('#dlSamplesRow').hidden = true;
+    $('#dlKeep').hidden = true;
+    $('#dlGo').textContent = 'Download zip';
+  }
   $('#btnDownloadAll').addEventListener('click', () => {
     panel.hidden = !panel.hidden;
     const n = have();
+    if (guest) {
+      $('#dlSamples').checked = n > 0;
+      $('#dlGo').disabled = !n;
+      $('#dlText').textContent = n ? 'A zip with your handwriting, the program your AI runs, and a note that tells it what to do.' : 'Nothing has been taught in this browser yet. Do the rounds in the Teach tab first, then come back.';
+      return;
+    }
     $('#dlSamples').disabled = !n;
     if (!n) $('#dlSamples').checked = false;
     $('#dlSamplesNote').textContent = n ? `(${n} words taught in this browser)` : '(nothing taught in this browser yet)';
@@ -104,7 +120,7 @@
     const blob = new Blob([build($('#dlSamples').checked)], { type: 'application/zip' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'handwriting-engine.zip';
+    a.download = guest ? 'handwriting-for-ai.zip' : 'handwriting-engine.zip';
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {

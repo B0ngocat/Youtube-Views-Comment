@@ -84,3 +84,24 @@ test('the pack for the Download button holds the project, the servers and the gu
   assert.ok(!script.includes('</script'), 'safe inside a script tag');
   assert.ok(readZip); // the reader is exercised against the real zip in the browser test
 });
+
+test('a second password opens its own part of the site, and neither password opens the other', () => {
+  const GUEST = 'guest-password-12345';
+  const page = buildProtected(PASSWORD, { extra: [{ password: GUEST, profile: 'guest' }] });
+  const main = payloadOf(page);
+  const extra = JSON.parse(page.match(/var X = (\[[\s\S]*?\]); \/\/ other/)[1]);
+  assert.equal(extra.length, 1);
+  assert.notEqual(extra[0].id, main.id, 'told apart by id, for "remember on this device"');
+  const mainHtml = decrypt(main, PASSWORD);
+  const guestHtml = decrypt(extra[0], GUEST);
+  assert.ok(guestHtml.includes('window.HW_PROFILE = "guest"') && !mainHtml.includes('HW_PROFILE = '));
+  assert.ok(guestHtml.includes('id="guestNote"') && guestHtml.includes('HW_APP'), 'the same app, with its own front');
+  assert.throws(() => decrypt(extra[0], PASSWORD), 'the main password does not open the guest part');
+  assert.throws(() => decrypt(main, GUEST), 'the guest password does not open the main part');
+  for (const secret of [PASSWORD, GUEST, 'btnNext', 'HW_PROFILE']) assert.ok(!page.includes(secret), 'page leaks: ' + secret);
+  // the pack behind the guest button is the small one, with no project source
+  const names = require('../scripts/pack').buildPack([], 'guest').map((e) => e.name);
+  assert.deepEqual(names, ['handwriting-for-ai/FOR-THE-AI.txt', 'handwriting-for-ai/docs/handwriting-engine-guide.pdf', 'handwriting-for-ai/handwriting-mcp-pdf.js', 'handwriting-for-ai/handwriting-mcp.js']);
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: PASSWORD, profile: 'guest' }] }), /cannot share a password/);
+  assert.throws(() => buildProtected(PASSWORD, { extra: [{ password: 'short', profile: 'guest' }] }), /GUEST_PASSWORD is under 12/);
+});

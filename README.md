@@ -94,6 +94,10 @@ The assistant can look at the PDF itself as well as read `inspect_pdf`, which on
 
 On the published (password-protected) site there is a **Download everything** button at the bottom left. It gives one `handwriting-engine.zip` with the app's code, the MCP server (`handwriting-mcp.js`, and the PDF version), and the setup guide as a PDF. Tick the box in its panel to add your own `my-handwriting.json` as well; it is off by default so a zip you send to someone does not carry your handwriting. The package is built into the encrypted page by `scripts/pack.js` and put together as a zip in the browser (`src/download.js`), so it works offline once the page has loaded. It is not there when you run the app locally with `npm run serve`.
 
+### A second password, for someone whose AI cannot host a site
+
+`GUEST_PASSWORD='...' SITE_PASSWORD='...' npm run deploy:pages` puts a second part behind the same login page. A person who types the guest password gets the same app with their own front page (three steps), their own saved data (it never mixes with yours, even in one browser), and a button, **Download for my AI**, that saves a small zip: their handwriting, the two MCP servers, the guide and `FOR-THE-AI.txt`, plain instructions for an assistant that can run a program but cannot host a website or use GitHub. Nothing of the main part is in it. The two passwords must differ, and neither opens the other's part.
+
 ## Looking like a note-taking app
 
 The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in Notability's blue (`#1749b3`) on white paper. Its width, at the default 1.00, matches Notability's thickness 3 for handwriting of about 10 pt x-height on a letter page (measured from an exported sample page; 0.4 is thickness 1). Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.

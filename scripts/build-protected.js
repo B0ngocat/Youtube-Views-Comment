@@ -26,6 +26,7 @@ function read(rel) {
 
 /** index.html with its stylesheet and scripts inlined, so it is one self-contained document. */
 function inlineApp(opts) {
+  const profile = opts && opts.profile; // another part of the site (see PROFILES in pack.js); none for the main one
   let html = read('index.html');
   html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, href) => `<style>\n${read(href)}\n</style>`);
   // Big libraries (vendor/) go in as plain text and only run when the app asks for them (loadLib in src/sheetui.js), so
@@ -34,9 +35,11 @@ function inlineApp(opts) {
   const table = libs.map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
   // The Download button's package (project files, the servers, the guide): deflated here, put into a .zip by src/download.js
   // (it goes just before download.js, which looks for it when it starts)
-  const pack = opts && opts.pack === false ? '' : `<script>${packScript()}</script>\n`;
+  const pack = opts && opts.pack === false ? '' : `<script>${packScript(profile)}</script>\n`;
   html = html.replace('</body>', () => `<script>window.HW_LIBS = {${table.join(',\n')}};</script>\n</body>`);
   html = html.replace('<script src="src/download.js"></script>', () => `${pack}<script src="src/download.js"></script>`);
+  // which part of the site this is, before anything else runs: it decides where the app keeps its data and what the button downloads
+  if (profile) html = html.replace('<body>', () => `<body>\n<script>window.HW_PROFILE = ${JSON.stringify(profile)};</script>`);
   html = html.replace(/<script src="([^"]+)"><\/script>/g, (_, src) => `<script>\n${read(src).replace(/<\/script/gi, '<\\/script')}\n</script>`);
   if (/<(link|script)[^>]+(href|src)="[^"]+"/.test(html.replace(/<script>[\s\S]*?<\/script>/g, '').replace(/<style>[\s\S]*?<\/style>/g, ''))) {
     throw new Error('index.html still references an external file after inlining');
@@ -61,24 +64,40 @@ function encrypt(plaintext, password) {
   };
 }
 
-/** Returns the protected page as a string. Throws on a missing or short password. */
+function checkPassword(password, what, allowShort) {
+  if (!password) throw new Error(`Set ${what}.`);
+  if (password.length < MIN_LENGTH && !allowShort) {
+    throw new Error(`${what} is under ${MIN_LENGTH} characters. The encrypted file is public, so a short password can be cracked offline. Set ALLOW_SHORT_PASSWORD=1 to use it anyway.`);
+  }
+  if (password.length < MIN_LENGTH) console.warn(`Warning: ${what} is under ${MIN_LENGTH} characters, so it could be cracked offline.`);
+}
+
+/**
+ * Returns the protected page as a string. Throws on a missing or short password.
+ * opts.extra: [{password, profile}], more passwords, each opening its own part of the site (a different copy of the app).
+ */
 function buildProtected(password, opts) {
   const allowShort = !!(opts && opts.allowShort);
-  if (!password) throw new Error('Set SITE_PASSWORD.');
-  if (password.length < MIN_LENGTH && !allowShort) {
-    throw new Error(`SITE_PASSWORD is under ${MIN_LENGTH} characters. The encrypted file is public, so a short password can be cracked offline. Set ALLOW_SHORT_PASSWORD=1 to use it anyway.`);
+  checkPassword(password, 'SITE_PASSWORD', allowShort);
+  const extra = (opts && opts.extra) || [];
+  const seen = new Set([password]);
+  for (const e of extra) {
+    checkPassword(e.password, e.profile.toUpperCase() + '_PASSWORD', allowShort);
+    if (seen.has(e.password)) throw new Error('Two parts of the site cannot share a password.');
+    seen.add(e.password);
   }
-  if (password.length < MIN_LENGTH) console.warn(`Warning: password is under ${MIN_LENGTH} characters, so it could be cracked offline.`);
   const payload = encrypt(inlineApp(), password);
-  const page = read('scripts/login.template.html').replace('__PAYLOAD__', JSON.stringify(payload));
-  if (page.includes(password)) throw new Error('refusing to write a page that contains the password');
+  const others = extra.map((e) => encrypt(inlineApp({ profile: e.profile }), e.password));
+  const page = read('scripts/login.template.html').replace('__PAYLOAD__', JSON.stringify(payload)).replace('__EXTRA__', JSON.stringify(others));
+  for (const pw of seen) if (page.includes(pw)) throw new Error('refusing to write a page that contains a password');
   return page;
 }
 
 if (require.main === module) {
   try {
     const out = path.resolve(process.argv[2] || path.join(ROOT, 'dist'));
-    const page = buildProtected(process.env.SITE_PASSWORD, { allowShort: process.env.ALLOW_SHORT_PASSWORD === '1' });
+    const extra = process.env.GUEST_PASSWORD ? [{ password: process.env.GUEST_PASSWORD, profile: 'guest' }] : [];
+    const page = buildProtected(process.env.SITE_PASSWORD, { allowShort: process.env.ALLOW_SHORT_PASSWORD === '1', extra });
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'index.html'), page);
     fs.writeFileSync(path.join(out, '.nojekyll'), '');

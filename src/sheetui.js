@@ -31,10 +31,11 @@
   let renderTask = null;
   const placedCache = new Map(); // box id -> {key, placed, d}
 
+  const NS = window.HW_PROFILE ? window.HW_PROFILE + ':' : '';
   const store = {
     get(k, d) {
       try {
-        const v = localStorage.getItem(k);
+        const v = localStorage.getItem(NS + k);
         return v ? JSON.parse(v) : d;
       } catch {
         return d;
@@ -42,7 +43,7 @@
     },
     set(k, v) {
       try {
-        localStorage.setItem(k, JSON.stringify(v));
+        localStorage.setItem(NS + k, JSON.stringify(v));
       } catch {
         /* storage full or blocked: the boxes just are not remembered */
       }
