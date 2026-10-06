@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const NODE_BUILTINS = new Set(['fs', 'path', 'zlib', 'http', 'crypto', 'child_process', 'os']);
+const NODE_BUILTINS = new Set(['fs', 'path', 'zlib', 'http', 'crypto', 'child_process', 'os', 'v8']);
 
 function build(opts) {
   const withPdf = !!(opts && opts.pdf);

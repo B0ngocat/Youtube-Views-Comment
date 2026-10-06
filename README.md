@@ -24,7 +24,7 @@ Common words has about 90 everyday words. When the text you type contains a word
 
 The Full lines round has you write whole sentences on one line. From those the app learns how you really space words and how your baseline, size and slant drift along a line, and uses that when it writes. The words in each line also count as extra samples. At least 3 lines are needed. Word gaps are taken as measured; baseline, size and slant drift are measured less reliably from short lines, so they are kept within ordinary human ranges. The Natural variation slider scales the drift (30% is the default, lower is neater).
 
-Math mode (a checkbox under the text box in the Write tab) lays out math in your hand. It reads TeX-style input: `x^2`, `x_1`, `\frac{a}{b}`, `\sqrt{x}`, `\lim_{x \to 0}`, `\int_0^1 x\,dx`, `\sum_{i=1}^{n}`, and `->`, `<=`, `>=`, `!=` for the arrows and comparisons. Exponents and subscripts are smaller and shifted, fractions are stacked with a bar, and brackets stretch to fit what is inside. Letters and digits come from your samples. For symbols, the Math round in the Teach tab has you write each one on its own (the operators twice); a symbol you haven't written yet is drawn for you with a small wobble, and your own is used as soon as you have written it. Plain paper looks best for math.
+Math mode (a checkbox under the text box in the Write tab) lays out math in your hand. It reads TeX-style input: `x^2`, `x_1`, `\frac{a}{b}`, `\sqrt{x}`, `\lim_{x \to 0}`, `\int_0^1 x\,dx`, `\sum_{i=1}^{n}`, `\sqrt[3]{x}` (also typed as `sqrt(x)` or `cubert(x)`), `\text{ so }` for plain words in the middle of math, and `->`, `<=`, `>=`, `!=` for the arrows and comparisons. Ordinary spaces are ignored, as in TeX; `\ `, `\,`, `\;` and `\quad` are spaces that stay. Exponents and subscripts are smaller and shifted, fractions are stacked with a bar, and brackets stretch to fit what is inside. Letters and digits come from your samples. For symbols, the Math round in the Teach tab has you write each one on its own (the operators twice); a symbol you haven't written yet is drawn for you with a small wobble, and your own is used as soon as you have written it. Plain paper looks best for math.
 
 Fix mode (a checkbox above the page in the Write tab) is the quickest way to clean up wrong letters. Tick it, then tap any letter on the page that looks wrong. That letter is replaced by another example of the same letter, the example it came from is left out from then on, and every other letter on the page stays exactly as it was. Undo puts it back. It works in ordinary text, not in Math mode. It changes the same "left out" list as the letter check in the Teach tab.
 
@@ -60,12 +60,15 @@ For Claude Desktop, add this to its config file (`mcpServers` section) and resta
       "args": ["/full/path/to/mcp/server.js", "--samples", "/full/path/to/my-handwriting.json", "--out", "/full/path/to/results"]
     }
 
+Building your handwriting takes several seconds, so the first call after a fresh start is slow (about 7 s for a full set of samples). The built result is kept in a `.handwriting-cache` folder next to your samples file (private to you, and git skips it), so every later start takes under half a second, even if your assistant starts the program for each call. `--cache DIR` moves it and `--no-cache` turns it off. A server that stays running (`--http`) keeps it in memory.
+
 `--out` is where it saves what it makes (default: a `handwriting-out` folder in the directory the server starts in).
 
 Tools:
 
 - `handwriting_status`: is your handwriting loaded, and which characters have no sample yet.
 - `write_text`: writes text or TeX-style math and returns a picture of it, so the assistant can check it. Also saves a PNG and a transparent SVG.
+- `write_batch`: the same as `write_text` for a whole list of items in one call, so the handwriting is loaded once. A bad item is reported by number and the rest still come back; `return_images: false` returns just the saved file paths.
 - `inspect_pdf`: for each page, the printed text and the ruled lines, with positions in points from the top-left corner. This is how the assistant finds where an answer goes.
 - `fill_pdf`: writes answers onto a PDF and saves a new file (the original is never changed). Each answer has a page, an x position, a width, and either a y (top of the box) or the y of the printed line it should sit on. Long answers are written smaller to fit, and the reply says which ones were.
 

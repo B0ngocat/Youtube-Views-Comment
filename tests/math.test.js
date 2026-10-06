@@ -83,3 +83,47 @@ test('without a written "=" a drawn one is used', () => {
   assert.deepEqual(l.missing, []);
   assert.ok(l.strokes.length >= 3, 'two letters plus the strokes of the sign');
 });
+
+test('\\text{} writes its words as plain text, not the word "text"', () => {
+  const [l] = M.parse(String.raw`y\text{-int} = 3`);
+  assert.deepEqual(l.map((n) => n.t), ['run', 'text', 'sym', 'run']);
+  assert.equal(l[1].s, '-int');
+  const [m] = M.parse(String.raw`\text{ so the } x`);
+  assert.equal(m[0].s, ' so the ');
+  const withText = lay(String.raw`y\text{-int}`);
+  assert.deepEqual(withText.missing.filter((c) => c !== '-'), [], 'nothing outside the samples');
+  assert.ok(lay(String.raw`y\text{-int}`).strokes.length < lay('ytext-int').strokes.length, 'the letters t-e-x-t are not written');
+  assert.ok(inkBox(lay(String.raw`\text{the fox}`).strokes).w > inkBox(lay('the').strokes).w, 'two words');
+  const wd = (t) => inkBox(lay(t).strokes).w;
+  assert.ok(wd(String.raw`a\text{ the }b`) > wd(String.raw`a\text{the}b`) + 0.5 * 34, 'spaces inside the braces are spaces');
+  assert.ok(lay(String.raw`\mathrm{box} + \textbf{fox}`).strokes.length > 0, 'the other text commands work too');
+});
+
+test('a backslash and a space is a space that stays, and so are \\, \; \\quad', () => {
+  const w = (t) => inkBox(lay(t).strokes).w;
+  const tight = w('so x');
+  assert.ok(w(String.raw`so\ x`) > tight + 0.3 * 34, 'wider than a plain space, which TeX ignores: ' + w(String.raw`so\ x`) + ' vs ' + tight);
+  assert.ok(w(String.raw`so\quad x`) > w(String.raw`so\ x`) + 0.3 * 34);
+  assert.ok(w(String.raw`so\, x`) > tight);
+  const syms = M.parse(String.raw`100\%`)[0].filter((n) => n.t === 'sym').map((n) => n.c);
+  assert.deepEqual(syms, ['%'], 'an escaped percent sign is a percent sign, not a space');
+});
+
+test('sqrt, cbrt and cubert typed as words become roots', () => {
+  const root = (src) => M.parse(src)[0].find((n) => n.t === 'sqrt');
+  assert.deepEqual(root('sqrt(x + 1)').a.map((n) => n.t), ['run', 'sym', 'run']);
+  assert.equal(root('sqrt{x}').a[0].s, 'x');
+  assert.equal(root('sqrt x').a[0].s, 'x');
+  assert.equal(root('sqrt25').a[0].s, '25');
+  assert.equal(root('√(x)').a[0].s, 'x');
+  assert.equal(root('cubert(8)').idx[0].s, '3');
+  assert.equal(root('cbrt{8}').idx[0].s, '3');
+  assert.equal(root(String.raw`\sqrt[4]{x}`).idx[0].s, '4', 'the index of an n-th root');
+  assert.equal(root(String.raw`\sqrt{x}`).idx, null);
+  assert.equal(root('sqrt(x) + 1').a.length, 1, 'only what is in the brackets is under the root');
+  // the test handwriting has no digits, so use a letter for the index
+  const plain = inkBox(lay(String.raw`\sqrt{o}`).strokes).w;
+  assert.ok(inkBox(lay(String.raw`\sqrt[n]{o}`).strokes).w > plain + 3, 'the little n takes room at the hook');
+  assert.ok(!lay('sqrt(x)').missing.length);
+  assert.equal(lay('sqrt(x)').strokes.length, lay(String.raw`\sqrt{x}`).strokes.length, 'same picture as the TeX form');
+});

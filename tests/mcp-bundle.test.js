@@ -62,7 +62,7 @@ test('alone in a folder with the samples, it answers write_text with a PNG, and 
     const init = await s.ask('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } });
     assert.equal(init.result.serverInfo.name, 'handwriting');
     const names = (await s.ask('tools/list')).result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['handwriting_status', 'write_text']);
+    assert.deepEqual(names, ['handwriting_status', 'write_batch', 'write_text']);
     const r = await s.ask('tools/call', { name: 'write_text', arguments: { text: 'the quick fox', include_base64: true, width_pt: 300 } });
     const img = r.result.content.find((c) => c.type === 'image');
     assert.equal(Buffer.from(img.data, 'base64').subarray(1, 4).toString(), 'PNG');
@@ -87,7 +87,7 @@ test('the --pdf build adds the PDF tools and they work from a single file too', 
   fs.writeFileSync(path.join(dir, 'w.pdf'), await doc.save());
   const s = run(dir, ['--out', path.join(dir, 'results')]);
   try {
-    assert.deepEqual((await s.ask('tools/list')).result.tools.map((t) => t.name).sort(), ['fill_pdf', 'handwriting_status', 'inspect_pdf', 'write_text']);
+    assert.deepEqual((await s.ask('tools/list')).result.tools.map((t) => t.name).sort(), ['fill_pdf', 'handwriting_status', 'inspect_pdf', 'write_batch', 'write_text']);
     const ins = await s.ask('tools/call', { name: 'inspect_pdf', arguments: { pdf: path.join(dir, 'w.pdf') } });
     assert.match(ins.result.content[0].text, /line\s+x=72 y=192 w=468/);
     const fill = await s.ask('tools/call', { name: 'fill_pdf', arguments: { pdf: path.join(dir, 'w.pdf'), answers: [{ page: 1, x: 72, line_y: 192, width: 468, text: 'the quick fox' }] } });

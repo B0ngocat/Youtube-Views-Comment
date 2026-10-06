@@ -8,6 +8,9 @@
  *   node mcp/server.js --samples /path/to/my-handwriting.json [--out /folder/for/results]
  *   node mcp/server.js --samples ... --http 8787 --token <secret>      (a web address instead of stdin/stdout)
  *
+ * The built handwriting is cached in a .handwriting-cache folder next to the samples file (--cache DIR to move it,
+ * --no-cache to turn it off), so starting the server again for each call is fast after the first time.
+ *
  * (or HANDWRITING_FILE and HANDWRITING_OUT in the environment). No dependencies: the protocol is a few lines of JSON-RPC.
  */
 'use strict';
@@ -130,7 +133,11 @@ function main() {
   // stdout carries the protocol; anything a library prints must go to stderr
   console.log = console.info = console.warn = (...a) => console.error(...a);
   const argv = process.argv.slice(2);
-  const handle = createServer({ samples: findSamples(argv), out: argValue(argv, '--out') || process.env.HANDWRITING_OUT });
+  const handle = createServer({
+    samples: findSamples(argv),
+    out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
+    cache: argv.includes('--no-cache') ? false : argValue(argv, '--cache') || process.env.HANDWRITING_CACHE,
+  });
   const port = argValue(argv, '--http');
   if (port === undefined) return serveStdio(handle);
   const token = argValue(argv, '--token') || process.env.HANDWRITING_TOKEN;

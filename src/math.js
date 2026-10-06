@@ -18,6 +18,10 @@
     sigma: 'σ', phi: 'φ', omega: 'ω', Delta: 'Δ', partial: '∂', le: '≤', leq: '≤', ge: '≥', geq: '≥',
     ne: '≠', neq: '≠', approx: '≈', pm: '±', times: '×', cdot: '·', div: '÷', prime: "'",
   };
+  const TEXT_COMMANDS = new Set(['text', 'textrm', 'textbf', 'textit', 'mathrm', 'mathbf', 'mathit', 'mbox', 'operatorname']);
+  // widths, in x-heights, of the spaces TeX has names for (a plain space between things is ignored, as in TeX)
+  const SPACES = { ' ': 0.8, ',': 0.45, ';': 0.6, ':': 0.5, quad: 1.2, qquad: 2.4 };
+  const spaceOf = (k) => (Object.prototype.hasOwnProperty.call(SPACES, k) ? SPACES[k] : undefined);
   const WORDS = new Set(['sin', 'cos', 'tan', 'log', 'ln', 'exp', 'lim', 'max', 'min', 'det']);
   const RELATIONS = new Set(['=', '<', '>', '≤', '≥', '≠', '≈', '→']);
   const BINARY = new Set(['+', '-', '×', '÷', '±', '·', '*']);
@@ -45,19 +49,50 @@
         } else if (/[A-Za-z]/.test(s[i + 1] || '')) {
           let j = i + 1;
           while (j < s.length && /[A-Za-z]/.test(s[j])) j++;
-          out.push({ k: 'cmd', v: s.slice(i + 1, j) });
+          const name = s.slice(i + 1, j);
           i = j;
+          if (TEXT_COMMANDS.has(name)) {
+            // \text{some words}: the braces hold plain text, written as it is (spaces count, commands do not)
+            let k = i;
+            while (k < s.length && /[ \t]/.test(s[k])) k++;
+            if (s[k] === '{') {
+              let depth = 0;
+              let e = k;
+              for (; e < s.length; e++) {
+                if (s[e] === '{') depth++;
+                else if (s[e] === '}' && --depth === 0) break;
+              }
+              out.push({ k: 'text', v: s.slice(k + 1, e) });
+              i = Math.min(s.length, e + 1);
+              continue;
+            }
+          }
+          if (spaceOf(name) !== undefined) out.push({ k: 'gap', v: spaceOf(name) });
+          else out.push({ k: 'cmd', v: name });
+        } else if (spaceOf(s[i + 1]) !== undefined) {
+          out.push({ k: 'gap', v: spaceOf(s[i + 1]) }); // "\ " is a space that stays, like \, and \;
+          i += 2;
+        } else if (s[i + 1] === '!' || i + 1 >= s.length) {
+          i += 2;
         } else {
-          out.push({ k: 'sp' }); // "\ " and "\," are just spaces
+          out.push({ k: 'ch', v: s[i + 1] }); // \% \$ \{ and so on: the character itself
           i += 2;
         }
       } else if (c === '{' || c === '}' || c === '^' || c === '_') {
         out.push({ k: c });
         i++;
+      } else if (c === '√' || c === '∛') {
+        out.push({ k: 'cmd', v: c === '√' ? 'sqrt' : 'cbrt' });
+        i++;
       } else if (/[A-Za-z0-9.']/.test(c)) {
         let j = i;
         while (j < s.length && /[A-Za-z0-9.']/.test(s[j])) j++;
-        out.push({ k: 'run', v: s.slice(i, j) });
+        const word = s.slice(i, j);
+        const root = /^(sqrt|cbrt|cubert|cuberoot)(\d[\d.]*)?$/i.exec(word); // typed as words: sqrt(x), cubert 8
+        if (root) {
+          out.push({ k: 'cmd', v: root[1].toLowerCase() === 'sqrt' ? 'sqrt' : 'cbrt' });
+          if (root[2]) out.push({ k: 'run', v: root[2] });
+        } else out.push({ k: 'run', v: word });
         i = j;
       } else {
         out.push({ k: 'ch', v: c });
@@ -91,12 +126,36 @@
       return a ? [a] : [];
     }
 
+    // parsing can be limited to the tokens before `end`, for sqrt(...) and \sqrt[3]{...}
+    let end = Infinity;
+    function until(close) {
+      // tokens up to the matching close bracket, parsed as a row; leaves i after it
+      let depth = 0;
+      let j = i;
+      for (; j < toks.length; j++) {
+        if (toks[j].k === 'ch' && toks[j].v === (close === ')' ? '(' : '[')) depth++;
+        else if (toks[j].k === 'ch' && toks[j].v === close && depth-- === 0) break;
+      }
+      const saved = end;
+      end = j;
+      const nodes = seq(false);
+      end = saved;
+      i = Math.min(toks.length, j + 1);
+      return nodes;
+    }
+
     function atom(noScripts) {
       skipSpace();
       const t = toks[i];
-      if (!t || t.k === '}' || t.k === 'nl') return null;
+      if (!t || i >= end || t.k === '}' || t.k === 'nl') return null;
       let n = null;
-      if (t.k === '{') {
+      if (t.k === 'gap') {
+        i++;
+        return { t: 'gap', w: t.v };
+      } else if (t.k === 'text') {
+        i++;
+        n = { t: 'text', s: t.v };
+      } else if (t.k === '{') {
         n = { t: 'group', a: group() };
       } else if (t.k === 'run') {
         i++;
@@ -110,8 +169,20 @@
           const a = arg();
           const b = arg();
           n = { t: 'frac', a, b };
-        } else if (t.v === 'sqrt') {
-          n = { t: 'sqrt', a: arg() };
+        } else if (t.v === 'sqrt' || t.v === 'cbrt') {
+          let idx = t.v === 'cbrt' ? [{ t: 'run', s: '3' }] : null;
+          skipSpace();
+          if (!idx && toks[i] && toks[i].k === 'ch' && toks[i].v === '[') {
+            i++;
+            idx = until(']');
+            skipSpace();
+          }
+          let body;
+          if (toks[i] && toks[i].k === 'ch' && toks[i].v === '(') {
+            i++;
+            body = until(')'); // sqrt(x + 1)
+          } else body = arg();
+          n = { t: 'sqrt', a: body, idx };
         } else if (t.v === 'int' || t.v === 'sum' || t.v === 'prod') {
           n = { t: 'big', c: t.v === 'int' ? '∫' : t.v === 'sum' ? '∑' : '∏' };
         } else if (t.v === 'left' || t.v === 'right') {
@@ -156,7 +227,7 @@
       for (;;) {
         skipSpace();
         const t = toks[i];
-        if (!t || t.k === 'nl' || (inGroup && t.k === '}')) break;
+        if (!t || i >= end || t.k === 'nl' || (inGroup && t.k === '}')) break;
         if (t.k === '}') {
           i++;
           continue;
@@ -361,6 +432,7 @@
   function gapBetween(a, b, atStart) {
     if (!a) return 0;
     const unary = b.c === '-' && (atStart || a.kind === 'open' || a.kind === 'rel' || a.kind === 'bin');
+    if (a.kind === 'gap' || b.kind === 'gap') return 0; // a space that was asked for is the whole gap
     if (a.kind === 'rel' || b.kind === 'rel') return 0.55;
     if (a.kind === 'bin' && !(a.unary)) return 0.35;
     if (b.kind === 'bin' && !unary) return 0.35;
@@ -437,6 +509,29 @@
       box = attachScripts(E, n, box, sc);
       return { kind: 'run', box };
     }
+    if (n.t === 'gap') return { kind: 'gap', box: { w: n.w * sc, up: 0, down: 0, strokes: [] } };
+    if (n.t === 'text') {
+      // plain text inside math: each word written as a word, with word gaps between (and no operator spacing in "-int")
+      const out = [];
+      let x = /^\s/.test(n.s) ? 0.4 * sc : 0; // spaces at the ends of the braces are real: \text{ so }
+      let up = 0;
+      let down = 0;
+      for (const w of n.s.split(/\s+/).filter(Boolean)) {
+        const box = E.written(w, sc);
+        if (!box) {
+          for (const c of Array.from(w)) E.ctx.missing.add(c);
+          continue;
+        }
+        if (out.length) x += 0.3 * sc;
+        place(out, box, x, 0);
+        x += box.w;
+        up = Math.max(up, box.up);
+        down = Math.max(down, box.down);
+      }
+      if (!out.length) return null;
+      if (/\s$/.test(n.s)) x += 0.4 * sc;
+      return { kind: 'run', box: attachScripts(E, n, { w: x, up, down, strokes: out }, sc) };
+    }
     if (n.t === 'sym') {
       const c = n.c;
       const kind = RELATIONS.has(c) ? 'rel' : BINARY.has(c) ? 'bin' : OPEN.has(c) ? 'open' : CLOSE.has(c) ? 'close' : c === ',' || c === ';' || c === ':' ? 'punct' : 'ord';
@@ -469,13 +564,21 @@
       const top = Math.max(inner.up, 1.0 * sc) + 0.25 * sc;
       const bottom = -(inner.down + 0.05 * sc);
       const h = top - bottom;
+      const index = n.idx && n.idx.length ? row(E, n.idx, sc * 0.55) : null; // the 3 of a cube root, small at the hook
+      const lead = index ? Math.max(0, index.w - 0.12 * sc) : 0;
       const rw = 0.55 * sc;
       const poly = [[0, bottom + 0.45 * h], [0.15 * sc, bottom + 0.55 * h], [0.32 * sc, bottom], [rw, top], [rw + inner.w + 0.2 * sc, top]];
       const rad = E.drawn([poly.map(([x, y]) => [x / sc, y / sc])], sc);
       const out = [];
-      place(out, rad, 0, 0);
-      place(out, inner, rw + 0.08 * sc, 0);
-      const box = { w: rw + inner.w + 0.2 * sc, up: top, down: Math.max(inner.down, -bottom), strokes: out };
+      place(out, rad, lead, 0);
+      place(out, inner, lead + rw + 0.08 * sc, 0);
+      let boxUp = top;
+      if (index) {
+        const iy = bottom + 0.5 * h;
+        place(out, index, 0, iy);
+        boxUp = Math.max(top, iy + index.up);
+      }
+      const box = { w: lead + rw + inner.w + 0.2 * sc, up: boxUp, down: Math.max(inner.down, -bottom), strokes: out };
       return { kind: 'sqrt', box: attachScripts(E, n, box, sc) };
     }
     if (n.t === 'big') {

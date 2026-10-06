@@ -6,6 +6,8 @@
  */
 const fs = require('fs');
 const path = require('path');
+const v8 = require('v8');
+const crypto = require('crypto');
 // Plain relative requires, so scripts/build-mcp.js can fold everything into one file. The PDF parts are required only
 // when a PDF tool is used, and a build without PDF support (globalThis.__HW_NO_PDF__) leaves them out altogether.
 const S = require('../src/style');
@@ -24,6 +26,39 @@ function createTools(config) {
   const outDir = path.resolve(config.out || 'handwriting-out');
   let cache = null; // {mtime, style, words}
 
+  // Building the style (cutting every recorded word into letters) takes several seconds for a full set of samples, and a
+  // client that starts this program for every call would pay that every time. So the built style is kept on disk, next to the
+  // samples, keyed by a hash of the samples and of the engine code. It holds the same strokes as the samples file, so it gets
+  // the same care: a private folder, and .gitignore skips it.
+  const stamp = (() => {
+    const own = ['../src/align.js', '../src/style.js', '../src/geometry.js'].map((f) => path.join(__dirname, f));
+    const files = own.every((f) => fs.existsSync(f)) ? own : [__filename]; // in the one-file build, the file itself is the engine
+    return crypto.createHash('sha256').update(files.map((f) => fs.readFileSync(f)).join('\n')).digest('hex');
+  })();
+  const cacheDir = config.cache === false ? null : path.resolve(config.cache || path.join(path.dirname(path.resolve(samplesFile || '.')), '.handwriting-cache'));
+
+  function readCache(key) {
+    if (!cacheDir) return null;
+    try {
+      return v8.deserialize(fs.readFileSync(path.join(cacheDir, 'style-' + key.slice(0, 32) + '.v8')));
+    } catch {
+      return null; // none, or an unreadable one: build again
+    }
+  }
+  function writeCache(key, value) {
+    if (!cacheDir) return;
+    try {
+      fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+      const file = path.join(cacheDir, 'style-' + key.slice(0, 32) + '.v8');
+      const tmp = file + '.' + process.pid + '.tmp';
+      fs.writeFileSync(tmp, v8.serialize(value), { mode: 0o600 });
+      fs.renameSync(tmp, file); // whole or not at all, so another call starting now never reads half a file
+      for (const f of fs.readdirSync(cacheDir)) if (/^style-.*\.v8$/.test(f) && f !== path.basename(file)) fs.unlinkSync(path.join(cacheDir, f));
+    } catch {
+      /* a read-only folder: it just stays slow */
+    }
+  }
+
   function load() {
     if (!samplesFile) throw new Error('No handwriting file is set. Start the server with --samples /path/to/my-handwriting.json (the file the Export button in the Teach tab saves), or set HANDWRITING_FILE.');
     let st;
@@ -32,10 +67,16 @@ function createTools(config) {
     } catch {
       throw new Error('Cannot read the handwriting file at ' + samplesFile + '. Check the path.');
     }
-    if (!cache || cache.mtime !== st.mtimeMs) {
-      const words = S.fromJSON(fs.readFileSync(samplesFile, 'utf8'));
-      cache = { mtime: st.mtimeMs, style: S.buildStyle(words), words: words.length };
+    if (cache && cache.mtime === st.mtimeMs) return cache;
+    const bytes = fs.readFileSync(samplesFile);
+    const key = crypto.createHash('sha256').update(stamp).update(bytes).digest('hex');
+    let built = readCache(key);
+    if (!built) {
+      const words = S.fromJSON(bytes.toString('utf8'));
+      built = { style: S.buildStyle(words), words: words.length };
+      writeCache(key, built);
     }
+    cache = { mtime: st.mtimeMs, style: built.style, words: built.words };
     return cache;
   }
 
@@ -54,6 +95,28 @@ function createTools(config) {
   function outPath(name) {
     fs.mkdirSync(outDir, { recursive: true });
     return path.join(outDir, name);
+  }
+
+  let counter = 0;
+  function renderOne(a) {
+    if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
+    const { style } = load();
+    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
+    const placed = Sheet.layoutBox(style, box, lookFrom(a));
+    const ink = inkOf(a);
+    const d = R.layoutToPath(placed.layout, 1, true);
+    const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
+    const pxPerPt = 4;
+    const { png } = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * pxPerPt, rgb);
+    const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
+    const pngPath = outPath(base + '.png');
+    const svgPath = outPath(base + '.svg');
+    fs.writeFileSync(pngPath, png);
+    fs.writeFileSync(svgPath, R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }));
+    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. PNG: ${pngPath}  SVG: ${svgPath}`];
+    if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
+    const b64 = png.toString('base64');
+    return { b64, notes: notes.join('\n') };
   }
 
   const defs = [
@@ -86,24 +149,43 @@ function createTools(config) {
         },
       },
       run(a) {
-        if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
-        const { style } = load();
-        const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
-        const placed = Sheet.layoutBox(style, box, lookFrom(a));
-        const ink = inkOf(a);
-        const d = R.layoutToPath(placed.layout, 1, true);
-        const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
-        const pxPerPt = 4;
-        const { png } = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * pxPerPt, rgb);
-        const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36);
-        const pngPath = outPath(base + '.png');
-        const svgPath = outPath(base + '.svg');
-        fs.writeFileSync(pngPath, png);
-        fs.writeFileSync(svgPath, R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }));
-        const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. PNG: ${pngPath}  SVG: ${svgPath}`];
-        if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
-        const b64 = png.toString('base64');
-        return [{ type: 'image', data: b64, mimeType: 'image/png' }, text(notes.join('\n')), ...(a.include_base64 ? [text('image/png base64:\n' + b64)] : [])];
+        const r = renderOne(a);
+        return [{ type: 'image', data: r.b64, mimeType: 'image/png' }, text(r.notes), ...(a.include_base64 ? [text('image/png base64:\n' + r.b64)] : [])];
+      },
+    },
+    {
+      name: 'write_batch',
+      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns a picture of each, in order, and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
+      inputSchema: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: { type: 'array', maxItems: 100, items: { type: 'object', required: ['text'], properties: { text: { type: 'string' }, kind: { type: 'string', enum: ['text', 'math'] }, seed: { type: 'integer' }, width_pt: { type: 'number' }, letter_height_pt: { type: 'number' }, ink: { type: 'string' } } } },
+          width_pt: { type: 'number' },
+          letter_height_pt: { type: 'number' },
+          ink: { type: 'string' },
+          neatness: { type: 'number' },
+          messiness: { type: 'number' },
+          return_images: { type: 'boolean', description: 'Default true. False returns only the saved file paths, which is much smaller.' },
+          include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
+        },
+      },
+      run(a) {
+        if (!Array.isArray(a.items) || !a.items.length) throw new Error('items must be a list with at least one item.');
+        if (a.items.length > 100) throw new Error('At most 100 items per call.');
+        const { items, return_images: images, ...shared } = a;
+        const out = [];
+        a.items.forEach((item, i) => {
+          try {
+            const r = renderOne(Object.assign({}, shared, item));
+            out.push(text(`${i + 1}. ${r.notes}`));
+            if (images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
+            if (a.include_base64) out.push(text(`${i + 1}. image/png base64:\n${r.b64}`));
+          } catch (e) {
+            out.push(text(`${i + 1}. FAILED: ${e.message}`));
+          }
+        });
+        return out;
       },
     },
     {

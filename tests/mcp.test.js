@@ -48,7 +48,7 @@ test('the handshake names the server and says it has tools', async () => {
 
 test('the tools are listed with descriptions and schemas', async () => {
   const names = (await rpc('tools/list')).result.tools.map((t) => t.name);
-  assert.deepEqual(names.sort(), ['fill_pdf', 'handwriting_status', 'inspect_pdf', 'write_text']);
+  assert.deepEqual(names.sort(), ['fill_pdf', 'handwriting_status', 'inspect_pdf', 'write_batch', 'write_text']);
   for (const t of (await rpc('tools/list')).result.tools) {
     assert.ok(t.description.length > 40, t.name);
     assert.equal(t.inputSchema.type, 'object');
@@ -186,4 +186,62 @@ test('the real program speaks the protocol over stdin and stdout, and only the p
   const msgs = lines.map((l) => JSON.parse(l)); // every line is JSON: nothing else was printed to stdout
   assert.equal(msgs[0].id, 1);
   assert.match(msgs[1].result.content[0].text, /Question 1/);
+});
+
+test('the built handwriting is cached on disk, so a second start does not build it again, and the result is the same', async () => {
+  const cacheDir = path.join(tmp, 'cache-test');
+  const mk = () => createServer({ samples, out: path.join(tmp, 'out2'), cache: cacheDir });
+  const ask = (h, name, args) => h({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const svgOf = (r) => fs.readFileSync(textOf(r).match(/SVG: (\S+)/)[1], 'utf8');
+  const first = svgOf(await ask(mk(), 'write_text', { text: 'quick fox jumps', seed: 5 }));
+  const files = fs.readdirSync(cacheDir);
+  assert.equal(files.length, 1);
+  assert.match(files[0], /^style-[0-9a-f]{32}\.v8$/);
+  assert.equal(fs.statSync(path.join(cacheDir, files[0])).mode & 0o077, 0, 'private to the user');
+  const real = S.buildStyle;
+  S.buildStyle = () => {
+    throw new Error('built again');
+  };
+  try {
+    const again = svgOf(await ask(mk(), 'write_text', { text: 'quick fox jumps', seed: 5 }));
+    assert.equal(again, first, 'the same ink from the cached handwriting');
+    const m = await ask(mk(), 'write_text', { text: String.raw`x = \frac{a}{b}`, kind: 'math' });
+    assert.ok(!m.result.isError, 'math works from the cache too');
+  } finally {
+    S.buildStyle = real;
+  }
+  // other samples: not the old cache
+  const other = path.join(tmp, 'other.json');
+  fs.writeFileSync(other, S.toJSON(WORDS.slice(0, 20).map((w, i) => writeWord(w, { style: 'print', seed: i + 50 }))));
+  const h2 = createServer({ samples: other, out: path.join(tmp, 'out2'), cache: cacheDir });
+  assert.match(textOf(await ask(h2, 'handwriting_status', {})), /20 recorded words/);
+  assert.equal(fs.readdirSync(cacheDir).length, 1, 'only the newest is kept');
+  // turned off
+  const none = path.join(tmp, 'cache-off');
+  await ask(createServer({ samples, out: path.join(tmp, 'out2'), cache: false }), 'handwriting_status', {});
+  assert.ok(!fs.existsSync(none));
+});
+
+test('write_batch writes many in one call, reports a bad one by number and can skip the pictures', async () => {
+  const res = await call('write_batch', { ink: '#aa0000', items: [{ text: 'the fox' }, { text: '   ' }, { text: String.raw`x^2`, kind: 'math' }, { text: 'quick', seed: 3 }] });
+  assert.ok(!res.result.isError);
+  const c = res.result.content;
+  assert.equal(c.filter((x) => x.type === 'image').length, 3);
+  const t = c.filter((x) => x.type === 'text').map((x) => x.text);
+  assert.match(t[0], /^1\. Written at/);
+  assert.match(t[1], /^2\. FAILED: text is required/);
+  assert.match(t[2], /^3\. /);
+  const svg = fs.readFileSync(t[0].match(/SVG: (\S+)/)[1], 'utf8');
+  assert.match(svg, /#aa0000/, 'top-level options apply to every item');
+  const names = new Set(t.filter((x) => /SVG:/.test(x)).map((x) => x.match(/SVG: (\S+)/)[1]));
+  assert.equal(names.size, 3, 'each item has its own files');
+  const slim = await call('write_batch', { return_images: false, items: [{ text: 'the fox' }, { text: 'quick' }] });
+  assert.equal(slim.result.content.filter((x) => x.type === 'image').length, 0);
+  assert.equal(slim.result.content.length, 2);
+  assert.ok((await call('write_batch', { items: [] })).result.isError);
+});
+
+test('math typed the way people type it: sqrt words, \\text and spaces, through write_text', async () => {
+  const r = await call('write_text', { text: String.raw`y\text{-int}: so\ x = sqrt(x + 1)`, kind: 'math' });
+  assert.ok(!r.result.isError, textOf(r));
 });
