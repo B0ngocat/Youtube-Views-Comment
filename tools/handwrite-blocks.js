@@ -55,8 +55,11 @@ for (const b of spec.blocks || []) {
     messiness: 0.3,
     variation: 0.4,
   });
+  // a tall letter on the first line (digits, brackets, l, h) can reach above the box; grow the box to hold it,
+  // and move it back by the same amount so the writing still lands where it was asked for
+  const moved = R.fitLayout(lay, 0.1 * XH);
   fs.writeFileSync(path.join(outDir, b.name + '.svg'), R.toSVG(lay, render));
-  manifest.blocks.push({ name: b.name, page: b.page, x: b.x, y: b.y, w: lay.width * K, h: lay.height * K, missing: lay.missing });
+  manifest.blocks.push({ name: b.name, page: b.page, x: b.x - moved.dx * K, y: b.y - moved.dy * K, w: lay.width * K, h: lay.height * K, missing: lay.missing });
   if (lay.missing.length) console.warn(`${b.name}: no sample for ${lay.missing.join(' ')} (skipped)`);
 }
 

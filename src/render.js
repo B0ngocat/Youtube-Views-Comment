@@ -227,7 +227,42 @@
     ctx.restore();
   }
 
-  const api = { strokeToPath, layoutToPath, toSVG, drawToCanvas };
+  /**
+   * Move and grow a layout so none of its ink is outside it (a tall letter on the first line, a long tail at the
+   * right), with `pad` to spare on every side. Returns how far everything moved right and down, so a caller that
+   * places the layout somewhere can move it back by the same amount and keep the writing where it was meant to be.
+   */
+  function fitLayout(layout, pad) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const s of layout.strokes) {
+      for (const p of s.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    if (!isFinite(minX)) return { dx: 0, dy: 0 };
+    const dx = Math.max(0, pad - minX);
+    const dy = Math.max(0, pad - minY);
+    if (dx || dy) {
+      for (const s of layout.strokes) {
+        for (const p of s.pts) {
+          p.x += dx;
+          p.y += dy;
+        }
+      }
+      layout.baselines = layout.baselines.map((b) => b + dy);
+    }
+    layout.width = Math.max(layout.width + dx, maxX + dx + pad);
+    layout.height = Math.max(layout.height + dy, maxY + dy + pad);
+    return { dx, dy };
+  }
+
+  const api = { strokeToPath, layoutToPath, toSVG, drawToCanvas, fitLayout };
   root.HW = root.HW || {};
   root.HW.render = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
