@@ -2,7 +2,7 @@
 // Handwriting MCP server, one file. Built by scripts/build-mcp.js (without PDF tools). Run: node handwriting-mcp.js --samples my-handwriting.json
 'use strict';
 globalThis.__HW_NO_PDF__ = true;
-
+globalThis.__HW_DEFAULT_SAMPLES_URL__ = "https://b0ngocat.github.io/Youtube-Views-Comment/handwriting.enc.json";
 const __defs = {
 "mcp/server.js": function (module, exports, __req) {
 /*
