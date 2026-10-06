@@ -12,6 +12,7 @@
  */
 'use strict';
 const fs = require('fs');
+const { packScript } = require('./pack');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -24,14 +25,18 @@ function read(rel) {
 }
 
 /** index.html with its stylesheet and scripts inlined, so it is one self-contained document. */
-function inlineApp() {
+function inlineApp(opts) {
   let html = read('index.html');
   html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, href) => `<style>\n${read(href)}\n</style>`);
   // Big libraries (vendor/) go in as plain text and only run when the app asks for them (loadLib in src/sheetui.js), so
   // they cost nothing at start-up. In a plain checkout loadLib fetches the same files by name instead.
   const libs = fs.readdirSync(path.join(ROOT, 'vendor')).filter((f) => f.endsWith('.js')).sort();
   const table = libs.map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
+  // The Download button's package (project files, the servers, the guide): deflated here, put into a .zip by src/download.js
+  // (it goes just before download.js, which looks for it when it starts)
+  const pack = opts && opts.pack === false ? '' : `<script>${packScript()}</script>\n`;
   html = html.replace('</body>', () => `<script>window.HW_LIBS = {${table.join(',\n')}};</script>\n</body>`);
+  html = html.replace('<script src="src/download.js"></script>', () => `${pack}<script src="src/download.js"></script>`);
   html = html.replace(/<script src="([^"]+)"><\/script>/g, (_, src) => `<script>\n${read(src).replace(/<\/script/gi, '<\\/script')}\n</script>`);
   if (/<(link|script)[^>]+(href|src)="[^"]+"/.test(html.replace(/<script>[\s\S]*?<\/script>/g, '').replace(/<style>[\s\S]*?<\/style>/g, ''))) {
     throw new Error('index.html still references an external file after inlining');

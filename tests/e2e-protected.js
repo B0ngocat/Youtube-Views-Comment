@@ -55,6 +55,42 @@ const check = (name, ok, detail) => {
   check('the app works after decrypting (state, tabs)', await tab.evaluate(() => !!window.HW_APP && !document.querySelector('#teach').hidden));
   check('Lock button is offered on the protected site', await tab.isVisible('#btnLock'));
 
+  // the Download button, bottom left, gives one zip of everything
+  const { readZip } = require('./zip-reader');
+  const box = await tab.locator('#btnDownloadAll').boundingBox();
+  const vp = tab.viewportSize();
+  check('a Download button sits at the bottom left', !!box && box.x < 40 && box.y + box.height > vp.height - 40 && box.y + box.height <= vp.height, JSON.stringify(box));
+  await tab.click('#btnDownloadAll');
+  check('it opens a small panel with the handwriting option off', (await tab.isVisible('#dlPanel')) && !(await tab.isChecked('#dlSamples')));
+  check('and the handwriting option is unavailable when nothing has been taught', await tab.isDisabled('#dlSamples'));
+  const [dl] = await Promise.all([tab.waitForEvent('download'), tab.click('#dlGo')]);
+  check('the file is a zip with a plain name', dl.suggestedFilename() === 'handwriting-engine.zip', dl.suggestedFilename());
+  const zipPath = path.join(shot || require('os').tmpdir(), 'handwriting-engine.zip');
+  fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+  await dl.saveAs(zipPath);
+  let files;
+  try {
+    files = readZip(fs.readFileSync(zipPath));
+  } catch (e) {
+    files = new Map();
+    check('the zip opens and every file checks out', false, e.message);
+  }
+  const top = 'handwriting-engine/';
+  for (const need of ['README.md', 'CLAUDE.md', 'index.html', 'src/synth.js', 'handwriting-mcp.js', 'handwriting-mcp-pdf.js', 'docs/handwriting-engine-guide.pdf']) check('the zip has ' + need, files.has(top + need));
+  check('the PDF guide is a real PDF', !!files.get(top + 'docs/handwriting-engine-guide.pdf') && files.get(top + 'docs/handwriting-engine-guide.pdf').subarray(0, 5).toString() === '%PDF-');
+  check('without asking, none of the user\'s handwriting is in it', ![...files.keys()].some((n) => /my-handwriting/.test(n)));
+  // with the option: give the app some handwriting first, then the file is in the zip
+  await tab.evaluate(() => window.HW_APP.words.push({ text: 'hi', xh: 30, baseline: 0, strokes: [[[0, 0, 0, 0.5], [5, 5, 10, 0.5]]] }));
+  await tab.click('#btnDownloadAll');
+  check('the handwriting option works once something is taught', !(await tab.isDisabled('#dlSamples')));
+  await tab.check('#dlSamples');
+  const [dl2] = await Promise.all([tab.waitForEvent('download'), tab.click('#dlGo')]);
+  await dl2.saveAs(zipPath);
+  const withHand = readZip(fs.readFileSync(zipPath));
+  const mine = withHand.get(top + 'my-handwriting.json');
+  check('ticking it adds my-handwriting.json with the words', !!mine && JSON.parse(mine.toString()).words[0].text === 'hi');
+  await tab.evaluate(() => window.HW_APP.words.pop());
+
   // the Sheet tab's libraries travel inside the encrypted page and load from there, not from the network
   const requested = [];
   tab.on('request', (r) => requested.push(r.url()));

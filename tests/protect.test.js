@@ -59,3 +59,28 @@ test('short or missing passwords are refused unless explicitly allowed', () => {
   const page = buildProtected('short-pw', { allowShort: true });
   assert.equal(decrypt(payloadOf(page), 'short-pw').includes('HW_APP'), true);
 });
+
+test('the pack for the Download button holds the project, the servers and the guide, and never samples or secrets', () => {
+  const { buildPack, packScript } = require('../scripts/pack');
+  const { readZip } = require('./zip-reader');
+  const pack = buildPack();
+  const names = pack.map((e) => e.name);
+  const top = 'handwriting-engine/';
+  for (const need of ['README.md', 'CLAUDE.md', 'package.json', 'index.html', 'src/synth.js', 'mcp/server.js', 'handwriting-mcp.js', 'handwriting-mcp-pdf.js', 'docs/handwriting-engine-guide.pdf', 'scripts/build-mcp.js']) assert.ok(names.includes(top + need), need);
+  assert.ok(!names.some((n) => /my-handwriting|node_modules|dist\/|\.handwriting-cache|package-lock|\.git\//.test(n)), 'nothing private or generated');
+  // every entry inflates back to what its CRC says, and none of them mention a password this project has used
+  const zlib = require('zlib');
+  const { crc32 } = require('../scripts/pack');
+  for (const e of pack) {
+    const data = zlib.inflateRawSync(e.deflated);
+    assert.equal(data.length, e.size);
+    assert.equal(crc32(data), e.crc, e.name);
+    // passwords are never kept in the project, so this reads them from the environment when you want the check run:
+    //   HW_SECRETS='one,two' npm test
+    for (const secret of (process.env.HW_SECRETS || '').split(',').filter(Boolean)) assert.ok(!data.includes(secret), 'a secret is in ' + e.name);
+  }
+  const script = packScript();
+  assert.ok(script.startsWith('window.HW_PACK = ['));
+  assert.ok(!script.includes('</script'), 'safe inside a script tag');
+  assert.ok(readZip); // the reader is exercised against the real zip in the browser test
+});

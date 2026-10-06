@@ -215,6 +215,18 @@ Pack my box with five dozen liquor jugs.</textarea>
     </section>
   </main>
 
+  <!-- Download everything: shown only on the published site, which carries the package (src/download.js) -->
+  <div class="dl" id="dl" hidden>
+    <div class="dl-panel card" id="dlPanel" hidden>
+      <b>Download everything</b>
+      <p class="muted small">One .zip with the app's code, the MCP server (a single file, ready to run) and the setup guide as a PDF.</p>
+      <label class="check"><input type="checkbox" id="dlSamples"><span>Also include my handwriting (my-handwriting.json) <span id="dlSamplesNote"></span></span></label>
+      <p class="muted small">That file is yours alone. Leave it out if you are going to send the zip to someone.</p>
+      <div class="row"><button id="dlGo" class="primary">Download .zip</button><button id="dlClose" class="ghost">Close</button></div>
+    </div>
+    <button id="btnDownloadAll" class="dl-btn">Download everything</button>
+  </div>
+
   <script src="src/geometry.js"></script>
   <script src="src/align.js"></script>
   <script src="src/style.js"></script>
@@ -227,5 +239,6 @@ Pack my box with five dozen liquor jugs.</textarea>
   <script src="src/sheet.js"></script>
   <script src="src/app.js"></script>
   <script src="src/sheetui.js"></script>
+  <script src="src/download.js"></script>
 </body>
 </html>

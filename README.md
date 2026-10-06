@@ -90,6 +90,10 @@ To use it as a web address instead of a program, add `--http 8787 --token <a sec
 
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.
 
+## Downloading everything
+
+On the published (password-protected) site there is a **Download everything** button at the bottom left. It gives one `handwriting-engine.zip` with the app's code, the MCP server (`handwriting-mcp.js`, and the PDF version), and the setup guide as a PDF. Tick the box in its panel to add your own `my-handwriting.json` as well; it is off by default so a zip you send to someone does not carry your handwriting. The package is built into the encrypted page by `scripts/pack.js` and put together as a zip in the browser (`src/download.js`), so it works offline once the page has loaded. It is not there when you run the app locally with `npm run serve`.
+
 ## Looking like a note-taking app
 
 The default pen is a constant-width pen with round ends, like a ballpoint in a note-taking app, in Notability's blue (`#1749b3`) on white paper. Its width, at the default 1.00, matches Notability's thickness 3 for handwriting of about 10 pt x-height on a letter page (measured from an exported sample page; 0.4 is thickness 1). Under Look, "Pen thickness" sets the width and "Pen" switches to the older speed-based line. Under Paper & ink, "Exact ink colour" takes any colour, so you can match your own pen.
