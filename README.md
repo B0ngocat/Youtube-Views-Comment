@@ -67,7 +67,7 @@ Building your handwriting takes several seconds, so the first call after a fresh
 Tools:
 
 - `handwriting_status`: is your handwriting loaded, and which characters have no sample yet.
-- `write_text`: writes text or TeX-style math and returns a picture of it, so the assistant can check it. Also saves a PNG and a transparent SVG.
+- `write_text`: writes text or TeX-style math and returns it. By default that is a PNG picture. With `format: "svg"` it returns the SVG markup itself as text (transparent, sized in points, ready to save as a `.svg` file), and `"both"` gives both. Both files are saved either way. Start the server with `--format svg` (or `HANDWRITING_FORMAT=svg`) to make SVG the default.
 - `write_batch`: the same as `write_text` for a whole list of items in one call, so the handwriting is loaded once. A bad item is reported by number and the rest still come back; `return_images: false` returns just the saved file paths.
 - `inspect_pdf`: for each page, the printed text and the ruled lines, with positions in points from the top-left corner. This is how the assistant finds where an answer goes.
 - `fill_pdf`: writes answers onto a PDF and saves a new file (the original is never changed). Each answer has a page, an x position, a width, and either a y (top of the box) or the y of the printed line it should sit on. Long answers are written smaller to fit, and the reply says which ones were.

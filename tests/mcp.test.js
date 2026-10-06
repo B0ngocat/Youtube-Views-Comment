@@ -81,9 +81,10 @@ test('write_text returns a PNG of ink and saves the files', async () => {
     if (raw[o + 2] > 150 && raw[o] < 100) blue++;
   }
   assert.ok(blue > 200, 'there is ink: ' + blue);
-  const paths = textOf(res).match(/PNG: (\S+)\s+SVG: (\S+)/);
+  const paths = textOf(res).match(/SVG: (\S+)\s+PNG: (\S+)/);
   assert.ok(fs.existsSync(paths[1]) && fs.existsSync(paths[2]), 'files saved');
-  assert.match(fs.readFileSync(paths[2], 'utf8'), /^<svg/);
+  assert.match(fs.readFileSync(paths[1], 'utf8'), /^<svg/);
+  assert.ok(!res.result.content.some((c) => c.type === 'text' && c.text.startsWith('<svg')), 'the default is the picture only');
 });
 
 test('write_text takes math and a colour, and another seed is another take', async () => {
@@ -244,4 +245,32 @@ test('write_batch writes many in one call, reports a bad one by number and can s
 test('math typed the way people type it: sqrt words, \\text and spaces, through write_text', async () => {
   const r = await call('write_text', { text: String.raw`y\text{-int}: so\ x = sqrt(x + 1)`, kind: 'math' });
   assert.ok(!r.result.isError, textOf(r));
+});
+
+test('format svg returns the SVG markup as text, in points, with no PNG; both gives both', async () => {
+  const r = await call('write_text', { text: 'the quick fox', format: 'svg', letter_height_pt: 10, ink: '#112233' });
+  assert.ok(!r.result.isError);
+  assert.ok(!r.result.content.some((c) => c.type === 'image'), 'no raster');
+  const svg = r.result.content[0].text;
+  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="[^"]+" width="[\d.]+pt" height="[\d.]+pt">/);
+  assert.match(svg, /fill="#112233"/);
+  assert.ok(!/<rect/.test(svg), 'transparent');
+  const size = svg.match(/width="([\d.]+)pt" height="([\d.]+)pt"/);
+  assert.match(textOf(r), new RegExp(`${Math.round(size[1])} x ${Math.round(size[2])} pt`), 'the stated size is the drawn size');
+  const saved = textOf(r).match(/SVG: (\S+)/)[1];
+  assert.equal(fs.readFileSync(saved, 'utf8'), svg, 'the file is the same markup');
+  assert.ok(!/PNG: /.test(textOf(r)), 'no png made');
+  const both = await call('write_text', { text: 'the fox', format: 'both' });
+  assert.ok(both.result.content.some((c) => c.type === 'image') && both.result.content.some((c) => c.type === 'text' && c.text.startsWith('<svg')));
+  const batch = await call('write_batch', { format: 'svg', items: [{ text: 'the fox' }, { text: 'quick' }] });
+  assert.equal(batch.result.content.filter((c) => c.text && c.text.startsWith('<svg')).length, 2);
+  assert.equal(batch.result.content.filter((c) => c.type === 'image').length, 0);
+  const slim = await call('write_batch', { format: 'svg', return_images: false, items: [{ text: 'the fox' }] });
+  assert.ok(!slim.result.content.some((c) => c.text && c.text.startsWith('<svg')), 'return_images false sends paths only');
+  // a server started with --format svg gives SVG unless a call says png
+  const svgServer = createServer({ samples, out, format: 'svg' });
+  const d = await svgServer({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write_text', arguments: { text: 'the fox' } } });
+  assert.ok(d.result.content[0].text.startsWith('<svg'));
+  const p = await svgServer({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'write_text', arguments: { text: 'the fox', format: 'png' } } });
+  assert.equal(p.result.content[0].type, 'image');
 });

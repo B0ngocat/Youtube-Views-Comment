@@ -45,9 +45,11 @@ As a web address instead
 
 Tools
   handwriting_status   is the handwriting loaded, which characters have no sample
-  write_text           {text, kind: "text"|"math", width_pt, letter_height_pt, ink, seed, include_base64}
-                       returns a PNG (MCP image content; include_base64 also gives it as text)
-  write_batch          {items: [{text, kind, seed, ...}], return_images}   many at once, handwriting loaded once
+  write_text           {text, kind: "text"|"math", width_pt, letter_height_pt, ink, seed, format, include_base64}
+                       format "png" (default): a PNG as MCP image content (include_base64 also gives it as text)
+                       format "svg": the SVG markup itself as text, transparent, sized in points
+                       format "both": both. Start with --format svg to make SVG the default.
+  write_batch          {items: [{text, kind, seed, ...}], format, return_images}   many at once, handwriting loaded once
   inspect_pdf, fill_pdf   (PDF version only) find where answers go on a PDF, and write them in
 
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},

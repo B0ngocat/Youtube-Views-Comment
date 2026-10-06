@@ -127,25 +127,43 @@ function createTools(config) {
   }
 
   let counter = 0;
+  const formatOf = (a) => (['png', 'svg', 'both'].includes(a.format) ? a.format : ['png', 'svg', 'both'].includes(config.format) ? config.format : 'png');
   async function renderOne(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
     const { style } = await load();
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
     const placed = Sheet.layoutBox(style, box, lookFrom(a));
     const ink = inkOf(a);
-    const d = R.layoutToPath(placed.layout, 1, true);
-    const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
-    const pxPerPt = 4;
-    const { png } = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * pxPerPt, rgb);
+    const format = formatOf(a);
     const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
-    const pngPath = outPath(base + '.png');
+    const pt = (v) => Math.round(v * placed.K * 100) / 100;
+    // the SVG is sized in points, so it comes out at the letter height that was asked for when it is placed at its own size
+    const svg = R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }).replace(/ width="[^"]*" height="[^"]*"/, ` width="${pt(placed.layout.width)}pt" height="${pt(Math.ceil(placed.layout.height))}pt"`);
     const svgPath = outPath(base + '.svg');
-    fs.writeFileSync(pngPath, png);
-    fs.writeFileSync(svgPath, R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }));
-    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. PNG: ${pngPath}  SVG: ${svgPath}`];
+    fs.writeFileSync(svgPath, svg);
+    let png = null;
+    let pngPath = null;
+    if (format !== 'svg') {
+      const d = R.layoutToPath(placed.layout, 1, true);
+      const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
+      png = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * 4, rgb).png; // 4 pixels per point
+      pngPath = outPath(base + '.png');
+      fs.writeFileSync(pngPath, png);
+    }
+    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}`];
     if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
-    const b64 = png.toString('base64');
-    return { b64, notes: notes.join('\n') };
+    return { svg, format, b64: png && png.toString('base64'), notes: notes.join('\n') };
+  }
+
+  /** What goes back for one rendered item: the PNG as an image, the SVG as text (MCP has no SVG image type), or both. */
+  function blocks(r, label, a, images) {
+    const out = [];
+    const tag = label ? label + '. ' : '';
+    if (r.b64 && images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
+    if (r.svg && r.format !== 'png' && images !== false) out.push(text(r.svg));
+    out.push(text(tag + r.notes));
+    if (r.b64 && a.include_base64) out.push(text(tag + 'image/png base64:\n' + r.b64));
+    return out;
   }
 
   const defs = [
@@ -161,7 +179,7 @@ function createTools(config) {
     },
     {
       name: 'write_text',
-      description: "Writes text, or TeX-style math, in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a PNG and a transparent SVG and gives their paths. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
+      description: "Writes text, or TeX-style math, in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
       inputSchema: {
         type: 'object',
         required: ['text'],
@@ -174,17 +192,17 @@ function createTools(config) {
           seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
+          format: { type: 'string', enum: ['png', 'svg', 'both'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. The files are saved either way.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
       async run(a) {
-        const r = await renderOne(a);
-        return [{ type: 'image', data: r.b64, mimeType: 'image/png' }, text(r.notes), ...(a.include_base64 ? [text('image/png base64:\n' + r.b64)] : [])];
+        return blocks(await renderOne(a), '', a);
       },
     },
     {
       name: 'write_batch',
-      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns a picture of each, in order, and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
+      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
       inputSchema: {
         type: 'object',
         required: ['items'],
@@ -195,6 +213,7 @@ function createTools(config) {
           ink: { type: 'string' },
           neatness: { type: 'number' },
           messiness: { type: 'number' },
+          format: { type: 'string', enum: ['png', 'svg', 'both'], description: 'As in write_text. Default png.' },
           return_images: { type: 'boolean', description: 'Default true. False returns only the saved file paths, which is much smaller.' },
           include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
         },
@@ -206,10 +225,7 @@ function createTools(config) {
         const out = [];
         for (const [i, item] of a.items.entries()) {
           try {
-            const r = await renderOne(Object.assign({}, shared, item));
-            out.push(text(`${i + 1}. ${r.notes}`));
-            if (images !== false) out.push({ type: 'image', data: r.b64, mimeType: 'image/png' });
-            if (a.include_base64) out.push(text(`${i + 1}. image/png base64:\n${r.b64}`));
+            out.push(...blocks(await renderOne(Object.assign({}, shared, item)), String(i + 1), a, images));
           } catch (e) {
             out.push(text(`${i + 1}. FAILED: ${e.message}`));
           }
