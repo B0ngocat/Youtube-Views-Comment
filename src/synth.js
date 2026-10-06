@@ -338,6 +338,29 @@
   }
 
   /**
+   * If the writer wrote this very word, pins for its letters so it is written back from their real strokes (the
+   * letters of a recorded word fit each other, and none of them can have been cut wrongly out of a *different*
+   * word). A word is pasted less and less willingly the more it has already been used on the page, and the
+   * least-used recorded copy goes first, so a page does not repeat itself. Returns null to write the word fresh.
+   */
+  function wholeWordPins(style, chars, rng, ctx) {
+    const reuse = ctx.wordReuse || 0;
+    if (!reuse || !style.wholeWords) return null;
+    const core = chars.join('').replace(/[.,!?;:]+$/, '');
+    const found = style.wholeWords.get(core);
+    if (!found || !found.length) return null;
+    if (!ctx.wordUse) ctx.wordUse = new Map();
+    let best = null;
+    for (const w of found) {
+      const used = ctx.wordUse.get(w) || 0;
+      if (!best || used < best.used || (used === best.used && rng() < 0.5)) best = { w, used };
+    }
+    if (rng() >= reuse * Math.pow(0.55, best.used)) return null;
+    ctx.wordUse.set(best.w, best.used + 1);
+    return chars.map((_, i) => (i < core.length ? best.w.units[i].id : null));
+  }
+
+  /**
    * One word -> strokes in engine units (x from 0, baseline 0, x-height 1, no global slant).
    * A word takes one number from `rng` and makes its own streams from it, one for picking letters and
    * one for everything after (spacing, wobble), so what happens to one word cannot change another.
@@ -347,7 +370,10 @@
     const chars = expandChars(word).filter((c) => !/\s/.test(c));
     const seed = Math.floor(rng() * 4294967296) >>> 0;
     if (!chars.length) return null;
-    const choices = chooseUnits(style, chars, G.mulberry32(seed), ctx, pins);
+    const crng = G.mulberry32(seed);
+    // a word the writer wrote is written back as they wrote it, unless the page has asked for specific letters
+    const use = pins || wholeWordPins(style, chars, crng, ctx);
+    const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
     const strokes = assemble(choices, style.liftGap, style.clearance, arng);
@@ -362,12 +388,12 @@
 
   /**
    * opts: {xh (px), width (px), lineHeight (x-heights), wordSpacing, messiness 0..1,
-   *        variation 0..1, slantDelta (deg), seed, margin (px)}
+   *        wordReuse 0..1 (how willingly a word the writer wrote is written back from their real strokes), variation 0..1, slantDelta (deg), seed, margin (px)}
    * returns {width, height, strokes:[{pts:[{x,y,w}], taperStart, taperEnd}], missing:[...], baselines:[...]}
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.8 },
       opts || {}
     );
     const rng = G.mulberry32(o.seed);
@@ -376,7 +402,7 @@
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map() };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;

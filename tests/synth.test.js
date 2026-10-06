@@ -263,3 +263,50 @@ test('a digit the writer wrote on its own is strongly preferred over one cut out
     assert.ok(picked.every((c) => c.unit.id === 'single'), 'seed ' + seed + ' picked ' + picked.map((c) => c.unit.id));
   }
 });
+
+// ---- words the writer wrote are written back from their own strokes ------------------------------
+
+test('a word the writer wrote is written back from their own strokes, letter for letter', () => {
+  const { style } = corpus('cursive');
+  const lay = Y.layout(style, 'quick brown fox', { seed: 3, width: 4000, wordReuse: 1 });
+  for (const w of lay.words) {
+    const src = new Set(w.choices.map((c) => c.wid));
+    assert.equal(src.size, 1, w.text + ' comes from one recorded word');
+    assert.deepEqual(w.choices.map((c) => c.idx), w.choices.map((_, i) => w.choices[0].idx + i), 'in the order it was written');
+  }
+});
+
+test('with reuse off, or for a word never written, letters are picked fresh', () => {
+  const { style } = corpus('cursive');
+  const off = Y.layout(style, 'quick', { seed: 3, width: 4000, wordReuse: 0 });
+  const sources = (l) => new Set(l.words[0].choices.map((c) => c.wid)).size;
+  const unseen = Y.layout(style, 'zbqk', { seed: 3, width: 4000, wordReuse: 1 });
+  assert.ok(unseen.words[0].choices.length > 0 && sources(unseen) > 1, 'a word that was never written is built from several');
+  assert.ok(off.words[0].choices.length === 5);
+});
+
+test('a recorded word is not pasted identically all over a page', () => {
+  const { style } = corpus('cursive');
+  const lay = Y.layout(style, 'quick quick quick quick quick quick quick quick', { seed: 4, width: 4000, wordReuse: 1 });
+  const sig = lay.words.map((w) => w.ids.join(','));
+  assert.ok(new Set(sig).size >= 3, 'only ' + new Set(sig).size + ' different versions in 8 words');
+});
+
+test('a crossed-out letter keeps a whole word from being reused', () => {
+  const { raws } = corpus('cursive');
+  const copy = raws.map((r) => ({ ...r }));
+  const before = S.buildStyle(copy);
+  assert.ok(before.wholeWords.has('quick'));
+  const n = before.wholeWords.get('quick').length;
+  const one = before.wholeWords.get('quick')[0].units[1];
+  copy[one.wid].skip = [{ i: one.idx, ch: one.ch }];
+  assert.equal(S.buildStyle(copy).wholeWords.get('quick').length, n - 1);
+});
+
+test('explicit pins win over word reuse', () => {
+  const { style } = corpus('cursive');
+  const a = Y.layout(style, 'the quick fox', { seed: 8, width: 4000, wordReuse: 0 });
+  const pins = a.words.map((w) => w.ids);
+  const b = Y.layout(style, 'the quick fox', { seed: 8, width: 4000, wordReuse: 1, pins });
+  assert.deepEqual(b.words.map((w) => w.ids), pins);
+});

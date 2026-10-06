@@ -652,11 +652,23 @@
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     const unitById = new Map();
     for (const list of allByChar.values()) for (const u of list) unitById.set(u.id, u);
+    // Words the writer actually wrote, by their letters, so a typed word they have written can be written back
+    // from their own strokes. Single letters, words the aligner was unsure of, and words with a crossed-out or
+    // implausible letter are left out.
+    const wholeWords = new Map();
+    for (const w of aligned) {
+      if (!w.ok || w.suspect || !w.units.length || w.units.some((u) => u.iso || u.skipped || (u.hc || 0) > 0.8)) continue;
+      const core = w.units.map((u) => u.ch).join('').replace(/[.,!?;:]+$/, '');
+      if (core.length < 2) continue;
+      if (!wholeWords.has(core)) wholeWords.set(core, []);
+      wholeWords.get(core).push(w);
+    }
     return {
       words: aligned,
       byChar,
       allByChar,
       unitById,
+      wholeWords,
       profile,
       clearance,
       rhythm: computeRhythm(words, aligned),

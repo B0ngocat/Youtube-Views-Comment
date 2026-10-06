@@ -195,3 +195,12 @@ test('a slash written much taller than the writer\'s letters is scaled down to t
   assert.ok(height > 1, 'still a tall slash');
   assert.equal(S.buildStyle(words.concat(letters, [slash])).byChar.get('/')[0].box.maxY, u.box.maxY, 'rebuilding does not shrink it again');
 });
+
+test('Common words gives only words, each at least two letters, and no duplicates', () => {
+  const toks = P.tokens(P.ROUNDS.find((r) => r.id === 'common'));
+  assert.ok(toks.length >= 80);
+  const words = toks.map((t) => t.text);
+  assert.ok(words.every((w) => /^[a-z]{2,}$/.test(w)));
+  assert.equal(new Set(words).size, words.length);
+  assert.equal(new Set(toks.map((t) => t.key)).size, toks.length);
+});

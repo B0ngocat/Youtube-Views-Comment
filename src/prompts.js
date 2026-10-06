@@ -80,6 +80,25 @@
       sentences: ['1.74 2.36 5.89 0.45', '37.06 92.18 10.50 68.23', '529.25 4507.75 36.805 98.25'],
     },
     {
+      id: 'common',
+      title: 'Common words',
+      blurb: 'Everyday words you have not written yet. A word you write here can be put back exactly as you wrote it, so the more of these you do, the less the app has to build letter by letter, and the better every page looks.',
+      sentences: [
+        "be that have not as do this his",
+        "from say or an one all their what",
+        "so if about who get which make like",
+        "no just him know take into year them",
+        "other than then now look only come its",
+        "think also after use work first way even",
+        "new want because any these give most has",
+        "had did been made may find down more",
+        "part still here going really thing things something",
+        "someone always never again little school tomorrow yesterday",
+        "night morning week love need feel through great",
+        "before right too does"
+],
+    },
+    {
       id: 'ln',
       title: 'Full lines',
       kind: 'line',
