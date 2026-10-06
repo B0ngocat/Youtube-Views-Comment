@@ -6,6 +6,7 @@
  *   handwriting-mcp.js        the server, one file, no dependencies          (+ .sha256)
  *   handwriting-mcp-pdf.js    the same with inspect_pdf and fill_pdf          (+ .sha256)
  *   handwriting.enc.json      the user's samples, sealed with the password (only when there is one to publish)
+ *   handwriting-engine.zip    everything for someone starting from scratch: the project, both servers, the guide (+ .sha256)
  *   mcp.txt                   how to fetch and run it all, in plain text
  *
  * The program files hold none of the user's handwriting. The samples are only ever published sealed (mcp/sealed.js).
@@ -21,6 +22,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { build } = require('./build-mcp');
 const { seal, unseal } = require('../mcp/sealed');
+const { buildZip } = require('./pack');
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const ENC = 'handwriting.enc.json';
@@ -46,7 +48,13 @@ Writes text or math in the owner's own handwriting and returns it as a PNG or an
 no npm packages. The program contains no handwriting. ${hasSamples ? "The handwriting is in a separate sealed file on this site (AES-256, password needed) or in the owner's own unlocked export." : 'The handwriting is in a separate file the owner exports from the Teach tab of the app.'}
 It is read into memory and never sent anywhere.
 
-Get it
+Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
+Give this to an AI assistant and tell it to read START-HERE.txt inside:
+  curl -fsSLO ${url('handwriting-engine.zip')}
+  sha256sum handwriting-engine.zip     # should be ${hashes['handwriting-engine.zip']}
+  unzip handwriting-engine.zip
+
+Just the server
   curl -fsSLO ${url('handwriting-mcp.js')}
   sha256sum handwriting-mcp.js     # should be ${hashes['handwriting-mcp.js']}
 
@@ -96,6 +104,10 @@ function buildExtras(outDir, base, opts) {
     fs.writeFileSync(path.join(outDir, name), code);
     fs.writeFileSync(path.join(outDir, name + '.sha256'), `${hashes[name]}  ${name}\n`);
   }
+  const zip = buildZip();
+  hashes['handwriting-engine.zip'] = sha(zip);
+  fs.writeFileSync(path.join(outDir, 'handwriting-engine.zip'), zip);
+  fs.writeFileSync(path.join(outDir, 'handwriting-engine.zip.sha256'), `${hashes['handwriting-engine.zip']}  handwriting-engine.zip\n`);
   fs.writeFileSync(path.join(outDir, 'mcp.txt'), instructions(base, hashes, hasSamples));
   return hashes;
 }

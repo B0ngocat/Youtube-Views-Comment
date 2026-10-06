@@ -143,7 +143,13 @@ test('the files published on the site are the program only, with hashes and inst
   const crypto = require('crypto');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-site-'));
   const hashes = buildExtras(dir, 'https://example.github.io/repo/');
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['handwriting-mcp-pdf.js', 'handwriting-mcp-pdf.js.sha256', 'handwriting-mcp.js', 'handwriting-mcp.js.sha256', 'mcp.txt']);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['handwriting-engine.zip', 'handwriting-engine.zip.sha256', 'handwriting-mcp-pdf.js', 'handwriting-mcp-pdf.js.sha256', 'handwriting-mcp.js', 'handwriting-mcp.js.sha256', 'mcp.txt']);
+  const files = require('./zip-reader').readZip(fs.readFileSync(path.join(dir, 'handwriting-engine.zip')));
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, 'handwriting-engine.zip'))).digest('hex'), hashes['handwriting-engine.zip']);
+  for (const need of ['START-HERE.txt', 'CLAUDE.md', 'README.md', 'handwriting-mcp.js', 'docs/handwriting-engine-guide.pdf']) assert.ok(files.has('handwriting-engine/' + need), need);
+  assert.ok(![...files.keys()].some((n) => /my-handwriting|\.enc\.json|node_modules/.test(n)), 'no samples in the public zip');
+  assert.ok(!files.get('handwriting-engine/handwriting-mcp.js').toString().includes('__HW_DEFAULT_SAMPLES_URL__ ='), 'the zip server has no address of anyone\'s samples baked in');
+  assert.match(fs.readFileSync(path.join(dir, 'mcp.txt'), 'utf8'), /handwriting-engine\.zip/);
   for (const name of ['handwriting-mcp.js', 'handwriting-mcp-pdf.js']) {
     const code = fs.readFileSync(path.join(dir, name));
     assert.equal(crypto.createHash('sha256').update(code).digest('hex'), hashes[name]);

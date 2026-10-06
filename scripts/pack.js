@@ -41,7 +41,56 @@ function buildPack(extra) {
   files.push(['handwriting-mcp.js', Buffer.from(build({ pdf: false }))], ['handwriting-mcp-pdf.js', Buffer.from(build({ pdf: true }))]);
   for (const e of extra || []) files.push(e);
   files.sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  return files.map(([name, data]) => ({ name: TOP + name, size: data.length, crc: crc32(data), deflated: zlib.deflateRawSync(data, { level: 9 }) }));
+  return files.map(([name, data]) => ({ name: TOP + (name === 'docs/START-HERE.txt' ? 'START-HERE.txt' : name), size: data.length, crc: crc32(data), deflated: zlib.deflateRawSync(data, { level: 9 }) }));
+}
+
+/** The pack as a real .zip file (a Buffer), for putting on the site as a plain download. */
+function buildZip(extra) {
+  const entries = buildPack(extra);
+  const d = new Date();
+  const time = (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | (d.getUTCSeconds() >> 1);
+  const date = ((d.getUTCFullYear() - 1980) << 9) | ((d.getUTCMonth() + 1) << 5) | d.getUTCDate();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt16LE(time, 10);
+    local.writeUInt16LE(date, 12);
+    local.writeUInt32LE(e.crc, 14);
+    local.writeUInt32LE(e.deflated.length, 18);
+    local.writeUInt32LE(e.size, 22);
+    local.writeUInt16LE(name.length, 26);
+    parts.push(local, name, e.deflated);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(20, 4);
+    c.writeUInt16LE(20, 6);
+    c.writeUInt16LE(0x0800, 8);
+    c.writeUInt16LE(8, 10);
+    c.writeUInt16LE(time, 12);
+    c.writeUInt16LE(date, 14);
+    c.writeUInt32LE(e.crc, 16);
+    c.writeUInt32LE(e.deflated.length, 20);
+    c.writeUInt32LE(e.size, 24);
+    c.writeUInt16LE(name.length, 28);
+    c.writeUInt32LE(offset, 42);
+    central.push(c, name);
+    offset += 30 + name.length + e.deflated.length;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cd, end]);
 }
 
 /** The pack as the one line of script the page carries: window.HW_PACK = [[name, size, crc, base64], ...]. */
@@ -50,4 +99,4 @@ function packScript(extra) {
   return `window.HW_PACK = [${rows.join(',\n')}];`;
 }
 
-module.exports = { buildPack, packScript, crc32, NEVER };
+module.exports = { buildPack, buildZip, packScript, crc32, NEVER };
