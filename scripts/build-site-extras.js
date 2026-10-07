@@ -75,6 +75,10 @@ Tools
                        format "both": both. Start with --format svg to make SVG the default.
   write_batch          {items: [{text, kind, seed, ...}], format, return_images}   many at once, handwriting loaded once
   inspect_pdf, fill_pdf   (PDF version only) find where answers go on a PDF, and write them in
+                       fill_pdf also takes notability: true (and pen_width): it then saves a Notability note
+                       (<name>-filled.note) whose pages are the worksheet and whose answers are editable pen
+                       strokes. Tell the person to open it from Files with Share, then Notability.
+  write_text with format "note" makes a one page Notability note of text (editable pen strokes).
 
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},
 \\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:

@@ -47,6 +47,10 @@ STEP 3. Use it.
   fill_pdf     {"pdf": "/path/worksheet.pdf", "answers": [{"page": 1, "x": 72, "line_y": 192, "width": 468,
                 "text": "My answer"}]}   saves a NEW pdf (the original is never changed). "line_y" is the y of the
                 printed line the writing should sit on. Positions are in points from the top-left of the page.
+               Add  "notability": true  to ALSO save a Notability note, <name>-filled.note: the worksheet is its pages and
+                the answers are editable pen strokes on top (optional "pen_width", default 1.05). Use it when the
+                person wants to work on the worksheet in Notability. Tell them to open it from Files with Share, then
+                Notability. Rotated pages are not supported.
 
 Math input:  x^2   x_1   \frac{a}{b}   \sqrt{x} or sqrt(x)   \sqrt[3]{x} or cubert(x)   \int_0^1   \sum_{i=1}^{n}
   \text{ words }   for plain words inside math.     "\ " (backslash space) for a space that stays.
