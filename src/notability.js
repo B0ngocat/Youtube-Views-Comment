@@ -430,6 +430,7 @@
   // the class name of the PDF object, and the exact left/top offsets (PDF_X0, PDF_Y0), which the calibration note is for.
   const PDF_X0 = -12.8; // where the PDF's left edge is, in stroke x (a blank page's edge is 12.8 left of x = 0 too)
   const PDF_Y0 = 0; // and its top edge, relative to the top of its page's band
+  const PDF_PAGE_GAP = 0.9; // points between one page and the next: page 2's PDF sat 0.9 pt lower than its stacked position (zoomed screenshot on an iPad, 21 px per point)
   const PDF_SHIFT_X = -1.5; // points: measured with the colour ladder note on an iPad, pen lines came out 1.5 pt right of the PDF (up and down was exact)
 
   /**
@@ -444,7 +445,7 @@
     let top = 0;
     return pages.map((p) => {
       const band = { top, height: p.h / scale, scale, xoff: (widest - p.w) / 2 };
-      top += band.height;
+      top += band.height + PDF_PAGE_GAP / scale;
       return band;
     });
   }
@@ -793,7 +794,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationBars, CAL_COLORS, CAL_STEP_X, CAL_STEP_Y, PDF_SHIFT_X, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationBars, PDF_PAGE_GAP, CAL_COLORS, CAL_STEP_X, CAL_STEP_Y, PDF_SHIFT_X, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

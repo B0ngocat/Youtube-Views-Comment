@@ -270,7 +270,7 @@ test('PDF pages are stacked down the canvas with one scale, the widest page as w
   assert.ok(bands.every((b) => Math.abs(b.scale - k) < 1e-12), 'one scale for every page');
   assert.equal(bands[0].top, 0);
   assert.ok(Math.abs(bands[0].height - 792 / k) < 1e-9);
-  assert.ok(Math.abs(bands[1].top - bands[0].height) < 1e-9);
+  assert.ok(Math.abs(bands[1].top - bands[0].height - N.PDF_PAGE_GAP / k) < 1e-9, 'a small gap between pages');
   assert.ok(Math.abs(bands[1].height - 841.89 / k) < 1e-6);
   const [x0, y0] = N.pdfPoint(bands, 0, 0, 0);
   const [x1, y1] = N.pdfPoint(bands, 0, 612, 792);
