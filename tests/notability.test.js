@@ -314,27 +314,27 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
   }
 });
 
-test('the PDF calibration note builds: two rows of seven corner pieces in each corner, piece 4 not moved', () => {
-  const pieces = N.pdfCalibrationPieces(PDF_PAGES);
-  assert.equal(pieces.length, PDF_PAGES.length * 4 * 2 * 7);
-  const curves = N.pdfCalibrationCurves(PDF_PAGES, '#1749b3');
-  assert.equal(curves.length, pieces.length * 2 + PDF_PAGES.length * 4 * N.CORNER_COLORS.length * 2);
-  assert.equal(N.pdfCornerCurves(PDF_PAGES).length, PDF_PAGES.length * 4 * N.CORNER_COLORS.length * 2);
+test('the PDF calibration note builds: nine coloured lines over each arm of every corner, the black one in the middle of the grey', () => {
+  const curves = N.pdfCalibrationCurves(PDF_PAGES);
+  assert.equal(curves.length, PDF_PAGES.length * 4 * 2 * N.CAL_COLORS.length);
+  const bars = N.pdfCalibrationBars(PDF_PAGES);
+  assert.equal(bars.length, PDF_PAGES.length * 4 * 2);
   const note = N.buildNote(curves, { name: 'Cal', pdf: { bytes: PDF_BYTES, pages: PDF_PAGES } });
   assert.ok(readZip(note).has('Cal/Session.plist'));
-  for (const c of pieces) {
-    assert.equal(c.dx === 0 && c.dy === 0, c.n === 4, 'only piece 4 is unmoved');
-    assert.ok(c.dx === 0 || c.dy === 0, 'a piece moves one way only');
-    assert.ok(Math.abs((c.row === 0 ? c.dx : c.dy) - (c.n - 4) * 1.5) < 1e-9);
-    assert.ok(c.x > 0 && c.x < PDF_PAGES[c.page].w && c.y > 0 && c.y < PDF_PAGES[c.page].h, 'on the page');
-  }
-  // the unmoved piece in the top left corner: its pen line starts exactly where the PDF's L has its corner
   const bands = N.pdfBands(PDF_PAGES);
-  const p4 = pieces.find((c) => c.page === 0 && c.corner === 'TL' && c.row === 0 && c.n === 4);
-  const first = curves[pieces.indexOf(p4) * 2];
-  const want = N.pdfPoint(bands, 0, p4.x, p4.y);
-  const black = N.pdfCornerCurves(PDF_PAGES)[3 * 2]; // page 1, top left, colour 4 (black): the middle of the grey flush with the page corner
-  const cp = N.pdfPoint(bands, 0, N.CORNER_THICK / 2, N.CORNER_THICK / 2);
-  assert.ok(Math.abs(black.pts[0][0] - cp[0]) < 1e-6 && Math.abs(black.pts[0][1] - cp[1]) < 1e-6);
-  assert.ok(Math.abs(first.pts[0][0] - want[0]) < 1e-6 && Math.abs(first.pts[0][1] - want[1]) < 1e-6);
+  // page 1, top left: the black horizontal line is in the middle of the horizontal bar, the lines either side 1 pt away; the vertical
+  // ones are in the middle of the vertical bar and 2 pt apart, and purple is left of pink everywhere
+  const at = (page, x, y) => N.pdfPoint(bands, page, x, y);
+  const h = bars.find((b) => b.page === 0 && b.x === 0 && b.y === 0 && b.w > b.h);
+  const v = bars.find((b) => b.page === 0 && b.x === 0 && b.y === 0 && b.w < b.h);
+  const n = N.CAL_COLORS.length;
+  const mid = (arm, k) => (arm === 'h' ? curves[k * 2] : curves[k * 2 + 1]);
+  assert.ok(Math.abs(mid('h', 4).pts[0][1] - at(0, 0, h.y + h.h / 2)[1]) < 1e-6);
+  assert.ok(Math.abs(mid('v', 4).pts[0][0] - at(0, v.x + v.w / 2, 0)[0]) < 1e-6);
+  assert.ok(Math.abs((mid('h', 5).pts[0][1] - mid('h', 4).pts[0][1]) * bands[0].scale - N.CAL_STEP_Y) < 1e-6);
+  assert.ok(Math.abs((mid('v', 5).pts[0][0] - mid('v', 4).pts[0][0]) * bands[0].scale - N.CAL_STEP_X) < 1e-6);
+  assert.ok(mid('v', 0).pts[0][0] < mid('v', n - 1).pts[0][0] && mid('h', 0).pts[0][1] < mid('h', n - 1).pts[0][1], 'purple is left and up of pink');
+  // the same at the bottom right corner of the last page: purple still left of pink, even though the bar is on the other side
+  const last = curves.slice(-2 * n * 1);
+  assert.ok(last[0].pts[0][1] < last[2 * (n - 1)].pts[0][1] && last[1].pts[0][0] < last[2 * (n - 1) + 1].pts[0][0]);
 });
