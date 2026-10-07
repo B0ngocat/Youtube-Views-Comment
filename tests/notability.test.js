@@ -104,8 +104,8 @@ test('the strokes in the note add up: counts, names and sizes agree', () => {
   assert.equal(h.curvesfractionalwidths.length, 4 * o[9]);
   const counts = new Int32Array(h.curvesnumpoints.buffer.slice(h.curvesnumpoints.byteOffset, h.curvesnumpoints.byteOffset + h.curvesnumpoints.length));
   assert.equal(counts.reduce((a, b) => a + b, 0), o[11]);
-  assert.ok(counts.every((c) => c >= 4), 'every stroke has at least four points');
-  assert.equal(counts.reduce((a, c) => a + Math.max(Math.floor(c / 3) + 1, 2), 0), o[9]);
+  assert.ok(counts.every((c) => c >= 4 && c % 3 === 1), 'every stroke is a chain of Bezier segments: 3k + 1 points');
+  assert.equal(counts.reduce((a, c) => a + (c - 1) / 3 + 1, 0), o[9]);
   assert.deepEqual([...h.curvescolors.subarray(0, 4)], [0x17, 0x49, 0xb3, 255], 'the pen colour');
   assert.equal(o[37], 'Test note', 'the name inside is the name of the folder');
   assert.ok([...files.keys()].every((k) => k.startsWith('Test note/')));
@@ -160,14 +160,26 @@ test('the thumbnails are PNGs of the right sizes with the writing on them', () =
   assert.equal(wrapped[1].UIScale, 2);
 });
 
-test('short strokes are filled out to four points, dense ones thinned, and an empty note is refused', () => {
-  assert.equal(N.lengthen([[1, 1]]).length, 4);
-  assert.equal(N.lengthen([[0, 0], [3, 3]]).length, 4);
-  assert.deepEqual(N.lengthen([[0, 0], [3, 3]])[1], [1, 1]);
-  assert.equal(N.lengthen([[0, 0], [1, 1], [2, 2]]).length, 4);
-  const line = Array.from({ length: 1000 }, (_, i) => [i * 0.1, 0]);
-  const thin = N.thin(line, 0.8);
-  assert.ok(thin.length < 140 && thin[0] === line[0] && thin[thin.length - 1] === line[999]);
+test('a stroke is a chain of Bezier segments: 3k + 1 points through every point it is given', () => {
+  // found on an iPad: a stroke with any other number of points is not drawn, and a circle of 25 points was but one of 24 was not
+  const one = N.toChain([[1, 1]]);
+  assert.equal(one.length, 4, 'a dot');
+  const line = N.toChain([[0, 0], [3, 3]]);
+  assert.deepEqual(line.map((p) => p.map((v) => Math.round(v * 1000) / 1000)), [[0, 0], [1, 1], [2, 2], [3, 3]], 'a straight line in thirds');
+  const anchors = Array.from({ length: 23 }, (_, i) => [i * 2, Math.sin(i / 3) * 5]);
+  const chain = N.toChain(anchors);
+  assert.equal(chain.length, 3 * 22 + 1);
+  assert.equal(chain.length % 3, 1);
+  anchors.forEach((p, i) => assert.deepEqual(chain[3 * i], p, 'the curve goes through point ' + i));
+  // between two points the controls follow the direction of travel: a smooth curve, not a zigzag
+  assert.ok(chain[1][0] > chain[0][0] && chain[2][0] < chain[3][0]);
+  for (let n = 1; n < 40; n++) assert.equal(N.toChain(Array.from({ length: n }, (_, i) => [i, i % 3])).length % 3, 1, n + ' points');
+  assert.throws(() => N.packCurves([{ pts: [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]], width: 1, color: [0, 0, 0] }]), /3k \+ 1/);
+  const fr = N.packCurves([{ pts: N.toChain(anchors), width: 1, color: [0, 0, 0] }]);
+  assert.equal(fr.numfractionalwidths, 23, 'one width fraction for each end point');
+  const line2 = Array.from({ length: 1000 }, (_, i) => [i * 0.1, 0]);
+  const thin = N.thin(line2, 0.8);
+  assert.ok(thin.length < 140 && thin[0] === line2[0] && thin[thin.length - 1] === line2[999]);
   assert.throws(() => N.buildNote([], {}), /nothing/);
   assert.equal(N.safeName('a/b:c'), 'a b c');
   assert.equal(N.safeName(''), 'Handwriting');

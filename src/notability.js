@@ -351,20 +351,31 @@
     return [n >> 16, (n >> 8) & 255, n & 255];
   };
 
-  /** Notability wants at least four points in a stroke, so a short one is filled out (a dot becomes a tiny diamond). */
-  function lengthen(pts) {
-    if (pts.length >= 4) return pts;
-    if (pts.length === 1 || (pts.length === 2 && pts[0][0] === pts[1][0] && pts[0][1] === pts[1][1])) {
-      const [x, y] = pts[0];
-      return [[x + 0.01, y], [x, y + 0.01], [x - 0.01, y], [x, y - 0.01]];
-    }
-    const out = [];
-    const n = 4;
-    for (let k = 0; k < n; k++) {
-      const t = (k * (pts.length - 1)) / (n - 1);
-      const i = Math.min(pts.length - 2, Math.floor(t));
-      const f = t - i;
-      out.push([pts[i][0] * (1 - f) + pts[i + 1][0] * f, pts[i][1] * (1 - f) + pts[i + 1][1] * f]);
+  /**
+   * A stroke is a chain of cubic Bezier segments: points 0 and 3, 3 and 6, and so on are the ends of a segment and the two points
+   * between are its control points, so a stroke has 3k + 1 points. A stroke with any other number of points is not drawn at all
+   * (found by opening notes on an iPad), and the width fractions are one per end point (k + 1 of them).
+   *
+   * This turns the points a stroke passes through into such a chain: a smooth curve through every one of them (a Catmull-Rom
+   * spline written as Beziers). Two points give a straight line, and one point, a dot.
+   */
+  function toChain(anchors) {
+    let a = anchors;
+    if (a.length === 1) a = [[a[0][0] - 0.01, a[0][1]], [a[0][0] + 0.01, a[0][1]]];
+    if (a.length === 2 && a[0][0] === a[1][0] && a[0][1] === a[1][1]) a = [[a[0][0] - 0.01, a[0][1]], [a[0][0] + 0.01, a[0][1]]];
+    const m = a.length;
+    const at = (i) => {
+      if (i < 0) return [2 * a[0][0] - a[1][0], 2 * a[0][1] - a[1][1]]; // past the ends, carry on in the same direction
+      if (i >= m) return [2 * a[m - 1][0] - a[m - 2][0], 2 * a[m - 1][1] - a[m - 2][1]];
+      return a[i];
+    };
+    const out = [a[0]];
+    for (let i = 0; i < m - 1; i++) {
+      const p0 = at(i - 1);
+      const p1 = a[i];
+      const p2 = a[i + 1];
+      const p3 = at(i + 2);
+      out.push([p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6], p2);
     }
     return out;
   }
@@ -382,12 +393,15 @@
   }
 
   /**
-   * The byte arrays a note keeps its strokes in. curves: [{pts: [[x, y], ...], width, color: [r, g, b]}], already in the
+   * The byte arrays a note keeps its strokes in. curves: [{pts: [[x, y], ...] (3k + 1 of them, see toChain), width, color: [r, g, b]}], already in the
    * note's own units. Little-endian, as written on an iPad.
    */
   function packCurves(curves) {
     const counts = curves.map((c) => c.pts.length);
-    const fracCounts = counts.map((n) => Math.max(Math.floor(n / 3) + 1, 2)); // one width fraction (1.0 = the pen's width) for every three points
+    counts.forEach((n) => {
+      if (n % 3 !== 1 || n < 4) throw new Error('A stroke must have 3k + 1 points (see toChain), not ' + n);
+    });
+    const fracCounts = counts.map((n) => (n - 1) / 3 + 1); // one width fraction (1.0 = the pen's width) for each end point of a segment
     const colors = new Uint8Array(curves.length * 4);
     curves.forEach((c, i) => colors.set([c.color[0], c.color[1], c.color[2], 255], i * 4));
     return {
@@ -550,7 +564,7 @@
    * the left of the drawable area and from the top of the page to the text's top left corner.
    * opts: {ink '#rrggbb', xhDoc (height of a lowercase letter in note units, default 8.8, which is 10 pt on a letter page),
    * pen (the line width in note units, default 1.05, a Notability pen at thickness 3), left (20), top (40), spacing (keep a point
-   * about this far apart, default 0.8), fractions (a function (pointCount) -> the width fractions, default all 1)}
+   * about this far apart, default 1.2), fractions (a function (pointCount) -> the width fractions, one per end point, default all 1)}
    */
   function curvesFromLayout(layout, opts) {
     const o = opts || {};
@@ -561,7 +575,7 @@
     const curves = [];
     for (const s of layout.strokes) {
       if (!s.pts || !s.pts.length) continue;
-      const pts = lengthen(thin(s.pts.map((p) => [left + p.x * K, top + p.y * K]), o.spacing === undefined ? 0.8 : o.spacing));
+      const pts = toChain(thin(s.pts.map((p) => [left + p.x * K, top + p.y * K]), o.spacing === undefined ? 1.2 : o.spacing));
       const curve = { pts, width: o.pen || 1.05, color };
       if (o.fractions) curve.fractions = o.fractions(pts.length);
       curves.push(curve);
@@ -581,7 +595,7 @@
    */
   function calibrationCurves(ink) {
     const color = hexToRgb(ink);
-    const line = (a, b) => ({ pts: lengthen([a, b]), width: 1.05, color });
+    const line = (a, b) => ({ pts: toChain([a, b]), width: 1.05, color });
     const m = 2;
     const R = INNER_W - m;
     const B = PAGE_H - m;
@@ -599,7 +613,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, lengthen, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
