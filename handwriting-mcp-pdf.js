@@ -446,6 +446,8 @@ function createTools(config) {
           out: { type: 'string', description: 'Where to save. Default: <name>-filled.pdf in the output folder.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3.' },
           neatness: { type: 'number' },
+          notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
+          pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           answers: {
             type: 'array',
             items: {
@@ -505,7 +507,13 @@ function createTools(config) {
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, out);
-        return [text(`Saved ${dest}\n` + report.join('\n'))];
+        let noteLine = '';
+        if (a.notability) {
+          const noteDest = dest.replace(/\.pdf$/i, '') + '.note';
+          fs.writeFileSync(noteDest, Notability.noteFromBoxes(bytes, sizes, items, { name: path.basename(noteDest, '.note').slice(0, 30), ink: inkOf(a), pen: clampNum(a.pen_width, 0.2, 10, 1.05) }));
+          noteLine = `\nNotability note: ${noteDest}`;
+        }
+        return [text(`Saved ${dest}${noteLine}\n` + report.join('\n'))];
       },
     },
   ];
@@ -4600,14 +4608,76 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
 
   const safeName = (s) => String(s || 'Handwriting').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').trim().slice(0, 60) || 'Handwriting';
 
+  // ---- a PDF behind the pages ---------------------------------------------------------------------------------
+  //
+  // From the notes of people who read Notability files (lh/notability-to-pdf, which checked them against thousands of notes):
+  // the PDF sits in the note's PDFs/ folder; Session.plist lists it in `pdfFiles` (objects with pdfFileName, version 2) and has
+  // one entry per page in `pageLayoutArray` (which PDF, which page of it). A note is one long canvas PAGE_W wide, y down, and
+  // the pages are stacked on it top to bottom, each scaled to the canvas width. Not checked here by opening one in Notability:
+  // the class name of the PDF object, and the exact left/top offsets (PDF_X0, PDF_Y0), which the calibration note is for.
+  const PDF_X0 = -12.8; // where the PDF's left edge is, in stroke x (a blank page's edge is 12.8 left of x = 0 too)
+  const PDF_Y0 = 0; // and its top edge, relative to the top of its page's band
+  const PDF_PAGE_GAP = 0.9; // points between one page and the next: page 2's PDF sat 0.9 pt lower than its stacked position (zoomed screenshot on an iPad, 21 px per point)
+  const PDF_SHIFT_X = -1.5; // points: measured with the colour ladder note on an iPad, pen lines came out 1.5 pt right of the PDF (up and down was exact)
+
+  /**
+   * Where each PDF page is on the canvas. pages: [{w, h}] in points. Returns [{top, height, scale, xoff}]: the page's band starts
+   * `top` units down the canvas and is `height` units tall, one note unit is `scale` points, and the page starts `xoff` points
+   * in from the left. Measured on an iPad with a letter page followed by an A4 one: every page has the same scale (the
+   * widest page fills the canvas width) and a narrower page is centred, rather than each being stretched to the width.
+   */
+  function pdfBands(pages) {
+    const widest = Math.max(...pages.map((p) => p.w));
+    const scale = widest / PAGE_W;
+    let top = 0;
+    return pages.map((p) => {
+      const band = { top, height: p.h / scale, scale, xoff: (widest - p.w) / 2 };
+      top += band.height + PDF_PAGE_GAP / scale;
+      return band;
+    });
+  }
+
+  /** A point on page `page` (0-based), in points from the page's top left corner, as a point of the canvas. */
+  function pdfPoint(bands, page, x, y) {
+    const b = bands[page];
+    return [(x + b.xoff + PDF_SHIFT_X) / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
+  }
+
+  /** The objects Session.plist needs to show a PDF, to go after the 45 a blank note has; first is at index `at`. */
+  function pdfObjects(pdf, at) {
+    const U = (n) => new UID(n);
+    const o = [
+      { $classname: 'PDFFile', $classes: ['PDFFile', 'NSObject'] }, // at
+      pdf.fileName, // at + 1
+      { pdfFileName: U(at + 1), highlights: U(3), pageNumbers: U(0), version: 2, type: 0, contentBoxVersion: 1, $class: U(at) }, // at + 2
+      { 'NS.object.0': U(at + 2), $class: U(4) }, // at + 3: pdfFiles
+      'kPageLayoutPDFFileKey', // at + 4
+      'kPageLayoutPDFPageNumberKey', // at + 5
+      'kPageLayoutPDFIsOriginalPageKey', // at + 6
+      true, // at + 7
+    ];
+    const entries = [];
+    for (let i = 0; i < pdf.pageCount; i++) {
+      o.push(i + 1); // the page number, 1-based
+      const num = at + o.length - 1;
+      o.push({ 'NS.key.0': U(at + 4), 'NS.object.0': U(at + 2), 'NS.key.1': U(at + 5), 'NS.object.1': U(num), 'NS.key.2': U(at + 6), 'NS.object.2': U(at + 7), $class: U(24) });
+      entries.push(at + o.length - 1);
+    }
+    const layout = { $class: U(6) };
+    entries.forEach((e, i) => (layout['NS.object.' + i] = U(e)));
+    o.push(layout);
+    return { objects: o, files: at + 3, layout: at + o.length - 1 };
+  }
+
   /** Session.plist: the same 45 objects, in the same order, as a note written by Notability, with the strokes put in. */
-  function sessionPlist(name, packed, when) {
+  function sessionPlist(name, packed, when, pdf) {
     const U = (n) => new UID(n);
     const cocoa = (when.getTime() / 1000 - COCOA_EPOCH);
+    const extra = pdf ? pdfObjects(pdf, 45) : { objects: [], files: 3, layout: 3 };
     const objects = [
       '$null',
       { subject: U(40), NBNoteTakingSessionBundleVersionNumberKey: U(41), contentPlaybackEventManager: U(42), paperLineStyle: 0, NBNoteTakingSessionMinorVersionNumberKey: 3, packagePath: U(37), tags: U(36), sessionFormatVersion: 4, $class: U(44), paperIndex: 12, richText: U(2), isReadOnly: false, creationDate: U(38), name: U(37) },
-      { formatVersion: 4, pageLayoutArray: U(3), attributedString: U(29), 'Handwriting Overlay': U(7), NBAttributedBackingString: U(17), $class: U(35), reflowState: U(14), didBecomeReflowable: true, pdfFiles: U(3), mediaObjects: U(3), 'Handwriting Objects': U(5), recordingTimestampString: U(32) },
+      { formatVersion: 4, pageLayoutArray: U(extra.layout), attributedString: U(29), 'Handwriting Overlay': U(7), NBAttributedBackingString: U(17), $class: U(35), reflowState: U(14), didBecomeReflowable: true, pdfFiles: U(extra.files), mediaObjects: U(3), 'Handwriting Objects': U(5), recordingTimestampString: U(32) },
       { $class: U(4) },
       { $classname: 'NSArray', $classes: ['NSArray', 'NSObject'] },
       { $class: U(6) },
@@ -4650,7 +4720,7 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
       { $class: U(43), NBCPTimeManagerSOATimestampsKey: new Uint8Array(0), NBCPTimeManagerSOANumEventsKey: 0, NBCPTimeManagerSOARecordingIDsKey: new Uint8Array(0), NBCPTimeManagerSOADurationsKey: new Uint8Array(0), NBCPTimeManagerSOAEventIDsKey: new Uint8Array(0) },
       { $classname: 'NBCPEventManager', $classes: ['NBCPEventManager', 'NSObject'] },
       { $classname: 'NoteTakingSession', $classes: ['NoteTakingSession', 'NSObject'] },
-    ];
+    ].concat(extra.objects);
     return bplistWrite({ $version: 100000, $objects: objects, $archiver: 'GLKeyedArchiver', $top: { $0: U(1) } });
   }
 
@@ -4709,7 +4779,8 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
 
   /**
    * A .note file (a Uint8Array) from curves in the note's units (see packCurves).
-   * opts: {name, when (a Date)}
+   * opts: {name, when (a Date), pdf: {bytes (Uint8Array), pages: [{w, h}] in points}}. With a pdf, the note has that PDF's pages as
+   * its pages (curves are then in canvas units, see pdfBands) instead of blank paper.
    */
   function buildNote(curves, opts) {
     const o = opts || {};
@@ -4719,11 +4790,17 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
     const enc = new TextEncoder();
     const dir = name + '/';
     const png = (w, h) => thumbnail(curves, w, h);
+    let pdf = null;
+    if (o.pdf) {
+      if (!o.pdf.pages || !o.pdf.pages.length) throw new Error('The PDF has no pages.');
+      pdf = { fileName: pdfFileName(o.pdf.bytes, name), pageCount: o.pdf.pages.length };
+    }
     return makeZip(
       [
         { name: dir + 'thumbnail', data: imagePlist(png(48, 63), 1) },
         { name: dir + 'Assets/' },
-        { name: dir + 'Session.plist', data: sessionPlist(name, packCurves(curves), when) },
+        { name: dir + 'Session.plist', data: sessionPlist(name, packCurves(curves), when, pdf) },
+        ...(pdf ? [{ name: dir + 'PDFs/' }, { name: dir + 'PDFs/' + pdf.fileName, data: o.pdf.bytes }] : []),
         { name: dir + 'thumb3x.png', data: png(144, 189) },
         { name: dir + 'Recordings/library.plist', data: enc.encode(LIBRARY_PLIST) },
         { name: dir + 'Recordings/' },
@@ -4762,6 +4839,118 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
     return curves;
   }
 
+  /** A UUID-shaped name for the PDF inside the note, from the PDF's own bytes so the same file always gets the same one. */
+  function pdfFileName(bytes) {
+    let a = 0x811c9dc5;
+    let b = 0x1b873593;
+    for (let i = 0; i < bytes.length; i++) {
+      a = Math.imul(a ^ bytes[i], 16777619) >>> 0;
+      b = Math.imul(b + bytes[i], 2246822519) >>> 0;
+    }
+    const h = (n) => n.toString(16).toUpperCase().padStart(8, '0');
+    const t = h(a) + h(b) + h(Math.imul(a, b) >>> 0) + h((a ^ b) >>> 0);
+    return `${t.slice(0, 8)}-${t.slice(8, 12)}-4${t.slice(13, 16)}-A${t.slice(17, 20)}-${t.slice(20, 32)}.pdf`;
+  }
+
+  /**
+   * Handwriting placed in boxes on the pages of a PDF, as curves in canvas units. items: [{box, placed}] as the Sheet tab and
+   * sheet.layoutBox give them (box in points from the page's top left; the layout belongs at box.x - dx * K, box.y - dy * K).
+   * pages: [{w, h}] in points. opts: {ink, pen (line width in note units, default 1.05), spacing, fractions}.
+   */
+  function curvesFromBoxes(items, pages, opts) {
+    const o = opts || {};
+    const bands = pdfBands(pages);
+    const color = hexToRgb(o.ink);
+    const curves = [];
+    for (const { box, placed } of items) {
+      if (!bands[box.page]) continue;
+      const ox = box.x - placed.dx * placed.K;
+      const oy = box.y - placed.dy * placed.K;
+      for (const s of placed.layout.strokes) {
+        if (!s.pts || !s.pts.length) continue;
+        const raw = s.pts.map((p) => pdfPoint(bands, box.page, ox + p.x * placed.K, oy + p.y * placed.K));
+        const pts = toChain(thin(raw, o.spacing === undefined ? 1.2 : o.spacing));
+        const curve = { pts, width: o.pen || 1.05, color };
+        if (o.fractions) curve.fractions = o.fractions(pts.length);
+        curves.push(curve);
+      }
+    }
+    return curves;
+  }
+
+  /** A note of a PDF with handwriting on its pages. items as for curvesFromBoxes; opts as there, plus {name, when}. */
+  function noteFromBoxes(pdfBytes, pages, items, opts) {
+    const o = opts || {};
+    return buildNote(curvesFromBoxes(items, pages, o), { name: o.name, when: o.when, pdf: { bytes: pdfBytes, pages } });
+  }
+
+  // The calibration note: right on each page corner, a grey L on the PDF flush with the page edges, and over each of its two arms nine
+  // pen lines in nine colours. The colour in the middle of the grey bar says how far the pen is from the PDF, the same way at
+  // every corner: purple is furthest left (or up), pink furthest right (or down), black is not moved from where the page layout
+  // puts it. The horizontal arm (along the top or bottom edge) shows up and down, in CAL_STEP_Y steps; the vertical arm (down the
+  // left or right edge) shows left and right, in CAL_STEP_X steps and on a thicker bar.
+  const CAL_COLORS = [
+    { name: 'purple', rgb: '#7b2cbf' },
+    { name: 'blue', rgb: '#1f4fff' },
+    { name: 'cyan', rgb: '#00b8d9' },
+    { name: 'green', rgb: '#1fa84f' },
+    { name: 'black', rgb: '#000000' },
+    { name: 'yellow', rgb: '#f2c200' },
+    { name: 'orange', rgb: '#ff7f00' },
+    { name: 'red', rgb: '#e00000' },
+    { name: 'pink', rgb: '#ff4fa3' },
+  ];
+  const CAL_STEP_X = 2; // points
+  const CAL_STEP_Y = 1;
+  const CAL_THICK_X = 18; // the grey of the vertical arm; the pen lines move over +-8 points of it
+  const CAL_THICK_Y = 10; // the grey of the horizontal arm; +-4
+  const CAL_LEN = 60; // how far the arms go from the corner
+
+  /**
+   * The grey bars of the calibration note, as rectangles in points from the page's top left: {page, x, y, w, h}.
+   * The horizontal bars are drawn clear of the vertical ones, so two ladders never cross.
+   */
+  function pdfCalibrationBars(pages) {
+    const out = [];
+    pages.forEach((p, page) => {
+      for (const left of [true, false]) {
+        for (const top of [true, false]) {
+          out.push({ page, x: left ? 0 : p.w - CAL_LEN, y: top ? 0 : p.h - CAL_THICK_Y, w: CAL_LEN, h: CAL_THICK_Y });
+          out.push({ page, x: left ? 0 : p.w - CAL_THICK_X, y: top ? 0 : p.h - CAL_LEN, w: CAL_THICK_X, h: CAL_LEN });
+        }
+      }
+    });
+    return out;
+  }
+
+  /** Strokes for the calibration note (see above); the grey bars are drawn on the PDF by scripts/make-calibration-pdf-note.js. */
+  function pdfCalibrationCurves(pages) {
+    const bands = pdfBands(pages);
+    const curves = [];
+    pages.forEach((p, page) => {
+      const line = (a, b, color) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 0.8, color });
+      for (const left of [true, false]) {
+        for (const top of [true, false]) {
+          const cy = top ? CAL_THICK_Y / 2 : p.h - CAL_THICK_Y / 2; // the middle of the horizontal bar
+          const cx = left ? CAL_THICK_X / 2 : p.w - CAL_THICK_X / 2; // and of the vertical one
+          // each line stays out of the other bar's corner square, so the colours of the two ladders do not mix
+          const hx0 = left ? CAL_THICK_X + 2 : p.w - CAL_LEN;
+          const hx1 = left ? CAL_LEN : p.w - CAL_THICK_X - 2;
+          const vy0 = top ? CAL_THICK_Y + 2 : p.h - CAL_LEN;
+          const vy1 = top ? CAL_LEN : p.h - CAL_THICK_Y - 2;
+          CAL_COLORS.forEach((c, i) => {
+            const color = hexToRgb(c.rgb);
+            const dy = (i - 4) * CAL_STEP_Y;
+            const dx = (i - 4) * CAL_STEP_X;
+            line([hx0, cy + dy], [hx1, cy + dy], color);
+            line([cx + dx, vy0], [cx + dx, vy1], color);
+          });
+        }
+      }
+    });
+    return curves;
+  }
+
   /** A note from a handwriting layout; opts as for curvesFromLayout, plus {name, when}. */
   function noteFromLayout(layout, opts) {
     const o = opts || {};
@@ -4792,7 +4981,7 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationBars, PDF_PAGE_GAP, CAL_COLORS, CAL_STEP_X, CAL_STEP_Y, PDF_SHIFT_X, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

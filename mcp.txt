@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be a2b2d5c8555170e3de44d4fd5ddc39c609dfbc9cc647cf0fac56ce42026fb2fa
+  sha256sum handwriting-engine.zip     # should be bf20dbf179546f8091d72f84c25f71fd876dcb42d76be4588a2afe767619b671
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be 9450d131e8e18e782eea014ffc7d7c80f8c06dc075fed90668a8c240794c36c8
+  sha256sum handwriting-mcp.js     # should be a8496a48d029734d751ca280a2fb5b25c068271a6ba018c1648f4218c28e4980
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 75cdd362d4541694c9f1404a62fe31a4c5ee71fea474f38c5fada1125dd4bf52
+  sha256 546483915a998ad7d9aea0e439d8e9412ac4455f3134e1c5633859eae39e9805
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
