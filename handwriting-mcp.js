@@ -304,7 +304,7 @@ function createTools(config) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
     const { style } = await load();
     const format = formatOf(a);
-    // a Notability note is one page 537.6 units wide, which is a 612 pt page: its text has to fit in about 460 of those units
+    // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
     const placed = Sheet.layoutBox(style, box, lookFrom(a));
     const ink = inkOf(a);
@@ -320,7 +320,7 @@ function createTools(config) {
     let notePath = null;
     if (format === 'note') {
       const unit = Notability.PAGE_W / 612; // note units per point of a letter-size page
-      note = Notability.noteFromLayout(placed.layout, { name: a.text.slice(0, 30), ink, xhDoc: placed.xhPt * unit, pen: clampNum(a.pen_width, 0.2, 10, 1.05), left: clampNum(a.left, 0, 500, 40), top: clampNum(a.top, 50, 705, Notability.PAGE_H - 40) });
+      note = Notability.noteFromLayout(placed.layout, { name: a.text.slice(0, 30), ink, xhDoc: placed.xhPt * unit, pen: clampNum(a.pen_width, 0.2, 10, 1.05), left: clampNum(a.left, 0, 480, 20), top: clampNum(a.top, 0, 690, 40) });
       notePath = outPath(base + '.note');
       fs.writeFileSync(notePath, note);
     }
@@ -375,10 +375,10 @@ function createTools(config) {
           seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
-          format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; y goes up). The SVG file is saved either way.' },
+          format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; top is measured down from the top of the page). The SVG file is saved either way.' },
           pen_width: { type: 'number', description: 'format note only: the pen width in note units. Default 1.05 (about a Notability pen at thickness 3).' },
-          left: { type: 'number', description: 'format note only: where the text starts, in note units from the left of the page. Default 40.' },
-          top: { type: 'number', description: 'format note only: where the text starts, in note units from the bottom of the page (y goes up; the page is about 705 tall). Default 665.' },
+          left: { type: 'number', description: 'format note only: where the text starts, in note units from the left edge of the drawable area (512 wide). Default 20.' },
+          top: { type: 'number', description: 'format note only: where the text starts, in note units down from the top of the page (about 705 tall). Default 40.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
@@ -4170,6 +4170,9 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
 
   const PAGE_W = 537.5999755859375; // width of a page in Notability's own units on an iPad (pageWidthInDocumentCoordsKey)
   const PAGE_H = 705.6; // the page shape of the thumbnails Notability writes (48 x 63)
+  // Found by opening a calibration note on an iPad: strokes are placed with y going DOWN from the top of the page, and x = 0
+  // is 12.8 units in from the page's left edge (the page has a 12.8 margin each side), so the drawable width is 512.
+  const INNER_W = 512;
   const COCOA_EPOCH = 978307200; // seconds from 1970 to 2001, which is where Apple's dates start
 
   // ---- binary property lists ---------------------------------------------------------------------
@@ -4461,8 +4464,8 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
     for (const cv of curves) {
       let prev = null;
       for (const [x, y] of cv.pts) {
-        const px = Math.round(x * sx);
-        const py = Math.round((PAGE_H - y) * sy); // the page's y goes up, the picture's goes down
+        const px = Math.round((x + 12.8) * sx);
+        const py = Math.round(y * sy); // y goes down in a note, as in a picture
         if (prev) {
           const n = Math.max(Math.abs(px - prev[0]), Math.abs(py - prev[1]), 1);
           for (let k = 0; k <= n; k++) dot(Math.round(prev[0] + ((px - prev[0]) * k) / n), Math.round(prev[1] + ((py - prev[1]) * k) / n), cv.color);
@@ -4493,20 +4496,31 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
     return [n >> 16, (n >> 8) & 255, n & 255];
   };
 
-  /** Notability wants at least four points in a stroke, so a short one is filled out (a dot becomes a tiny diamond). */
-  function lengthen(pts) {
-    if (pts.length >= 4) return pts;
-    if (pts.length === 1 || (pts.length === 2 && pts[0][0] === pts[1][0] && pts[0][1] === pts[1][1])) {
-      const [x, y] = pts[0];
-      return [[x + 0.01, y], [x, y + 0.01], [x - 0.01, y], [x, y - 0.01]];
-    }
-    const out = [];
-    const n = 4;
-    for (let k = 0; k < n; k++) {
-      const t = (k * (pts.length - 1)) / (n - 1);
-      const i = Math.min(pts.length - 2, Math.floor(t));
-      const f = t - i;
-      out.push([pts[i][0] * (1 - f) + pts[i + 1][0] * f, pts[i][1] * (1 - f) + pts[i + 1][1] * f]);
+  /**
+   * A stroke is a chain of cubic Bezier segments: points 0 and 3, 3 and 6, and so on are the ends of a segment and the two points
+   * between are its control points, so a stroke has 3k + 1 points. A stroke with any other number of points is not drawn at all
+   * (found by opening notes on an iPad), and the width fractions are one per end point (k + 1 of them).
+   *
+   * This turns the points a stroke passes through into such a chain: a smooth curve through every one of them (a Catmull-Rom
+   * spline written as Beziers). Two points give a straight line, and one point, a dot.
+   */
+  function toChain(anchors) {
+    let a = anchors;
+    if (a.length === 1) a = [[a[0][0] - 0.01, a[0][1]], [a[0][0] + 0.01, a[0][1]]];
+    if (a.length === 2 && a[0][0] === a[1][0] && a[0][1] === a[1][1]) a = [[a[0][0] - 0.01, a[0][1]], [a[0][0] + 0.01, a[0][1]]];
+    const m = a.length;
+    const at = (i) => {
+      if (i < 0) return [2 * a[0][0] - a[1][0], 2 * a[0][1] - a[1][1]]; // past the ends, carry on in the same direction
+      if (i >= m) return [2 * a[m - 1][0] - a[m - 2][0], 2 * a[m - 1][1] - a[m - 2][1]];
+      return a[i];
+    };
+    const out = [a[0]];
+    for (let i = 0; i < m - 1; i++) {
+      const p0 = at(i - 1);
+      const p1 = a[i];
+      const p2 = a[i + 1];
+      const p3 = at(i + 2);
+      out.push([p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6], p2);
     }
     return out;
   }
@@ -4524,12 +4538,15 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
   }
 
   /**
-   * The byte arrays a note keeps its strokes in. curves: [{pts: [[x, y], ...], width, color: [r, g, b]}], already in the
+   * The byte arrays a note keeps its strokes in. curves: [{pts: [[x, y], ...] (3k + 1 of them, see toChain), width, color: [r, g, b]}], already in the
    * note's own units. Little-endian, as written on an iPad.
    */
   function packCurves(curves) {
     const counts = curves.map((c) => c.pts.length);
-    const fracCounts = counts.map((n) => Math.max(Math.floor(n / 3) + 1, 2)); // one width fraction (1.0 = the pen's width) for every three points
+    counts.forEach((n) => {
+      if (n % 3 !== 1 || n < 4) throw new Error('A stroke must have 3k + 1 points (see toChain), not ' + n);
+    });
+    const fracCounts = counts.map((n) => (n - 1) / 3 + 1); // one width fraction (1.0 = the pen's width) for each end point of a segment
     const colors = new Uint8Array(curves.length * 4);
     curves.forEach((c, i) => colors.set([c.color[0], c.color[1], c.color[2], 255], i * 4));
     return {
@@ -4537,7 +4554,7 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
       curveswidth: f32(curves.map((c) => c.width)),
       curvesnumpoints: i32(counts),
       curvescolors: colors,
-      curvesfractionalwidths: f32(new Array(fracCounts.reduce((a, b) => a + b, 0)).fill(1)),
+      curvesfractionalwidths: f32(curves.flatMap((c, i) => (c.fractions && c.fractions.length === fracCounts[i] ? c.fractions : new Array(fracCounts[i]).fill(1)))),
       eventTokens: new Uint8Array(curves.length * 4).fill(255),
       numcurves: curves.length,
       numpoints: counts.reduce((a, b) => a + b, 0),
@@ -4688,52 +4705,60 @@ module.exports = { seal, unseal, isSealed, MIN_LENGTH };
   }
 
   /**
-   * A note from a handwriting layout (synth.layout or math.layout): its strokes become pen strokes, placed at the top left
-   * of the page, in the colour given.
-   * opts: {name, ink '#rrggbb', xhDoc (height of a lowercase letter in note units, default 8.8, which is 10 pt on a letter
-   * page), pen (the line width in note units, default 1.05, a Notability pen at thickness 3), left, top (where the text's top
-   * left corner goes; y goes up), spacing (keep a point about this far apart, default 0.8)}
+   * The curves of a handwriting layout (synth.layout or math.layout), placed on the page: left and top are the distance from
+   * the left of the drawable area and from the top of the page to the text's top left corner.
+   * opts: {ink '#rrggbb', xhDoc (height of a lowercase letter in note units, default 8.8, which is 10 pt on a letter page),
+   * pen (the line width in note units, default 1.05, a Notability pen at thickness 3), left (20), top (40), spacing (keep a point
+   * about this far apart, default 1.2), fractions (a function (pointCount) -> the width fractions, one per end point, default all 1)}
    */
-  function noteFromLayout(layout, opts) {
+  function curvesFromLayout(layout, opts) {
     const o = opts || {};
-    const xhDoc = o.xhDoc || 8.8;
-    const K = xhDoc / (layout.xh || 34);
-    const left = o.left === undefined ? 40 : o.left;
-    const top = o.top === undefined ? PAGE_H - 40 : o.top;
+    const K = (o.xhDoc || 8.8) / (layout.xh || 34);
+    const left = o.left === undefined ? 20 : o.left;
+    const top = o.top === undefined ? 40 : o.top;
     const color = hexToRgb(o.ink);
     const curves = [];
     for (const s of layout.strokes) {
       if (!s.pts || !s.pts.length) continue;
-      const pts = thin(s.pts.map((p) => [left + p.x * K, top - p.y * K]), o.spacing === undefined ? 0.8 : o.spacing);
-      curves.push({ pts: lengthen(pts), width: o.pen || 1.05, color });
+      const pts = toChain(thin(s.pts.map((p) => [left + p.x * K, top + p.y * K]), o.spacing === undefined ? 1.2 : o.spacing));
+      const curve = { pts, width: o.pen || 1.05, color };
+      if (o.fractions) curve.fractions = o.fractions(pts.length);
+      curves.push(curve);
     }
-    return buildNote(curves, { name: o.name, when: o.when });
+    return curves;
+  }
+
+  /** A note from a handwriting layout; opts as for curvesFromLayout, plus {name, when}. */
+  function noteFromLayout(layout, opts) {
+    const o = opts || {};
+    return buildNote(curvesFromLayout(layout, o), { name: o.name, when: o.when });
   }
 
   /**
-   * Strokes to tell what is wrong if a note does not look right: a frame the size of a page, a letter F near the top left
-   * (it shows which way is up and which is left), and a ruler 100 units long.
+   * Strokes to tell what is wrong if a note does not look right: a frame around the drawable area (512 wide, the page tall), a
+   * letter F near the top left (it shows which way is up and which is left) and a ruler 100 units long.
    */
   function calibrationCurves(ink) {
     const color = hexToRgb(ink);
-    const line = (a, b) => ({ pts: lengthen([a, b]), width: 1.05, color });
+    const line = (a, b) => ({ pts: toChain([a, b]), width: 1.05, color });
     const m = 2;
-    const f = [[60, PAGE_H - 60], [60, PAGE_H - 110], [60, PAGE_H - 160]];
+    const R = INNER_W - m;
+    const B = PAGE_H - m;
     return [
-      line([m, m], [PAGE_W - m, m]),
-      line([PAGE_W - m, m], [PAGE_W - m, PAGE_H - m]),
-      line([PAGE_W - m, PAGE_H - m], [m, PAGE_H - m]),
-      line([m, PAGE_H - m], [m, m]),
-      line(f[0], f[2]),
-      line(f[0], [100, PAGE_H - 60]),
-      line(f[1], [90, PAGE_H - 110]),
-      line([60, PAGE_H - 200], [160, PAGE_H - 200]), // the ruler: 100 units
-      line([60, PAGE_H - 195], [60, PAGE_H - 205]),
-      line([160, PAGE_H - 195], [160, PAGE_H - 205]),
+      line([m, m], [R, m]),
+      line([R, m], [R, B]),
+      line([R, B], [m, B]),
+      line([m, B], [m, m]),
+      line([60, 60], [60, 160]), // the F: its stem, then the top arm and the middle arm
+      line([60, 60], [100, 60]),
+      line([60, 110], [90, 110]),
+      line([60, 200], [160, 200]), // the ruler: 100 units
+      line([60, 195], [60, 205]),
+      line([160, 195], [160, 205]),
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, lengthen, thin, buildNote, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
