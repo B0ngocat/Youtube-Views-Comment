@@ -59,7 +59,9 @@ test('the tools are listed with descriptions and schemas', async () => {
 
 test('status reports the loaded handwriting and what is missing', async () => {
   const t = textOf(await call('handwriting_status', { check: 'the 7 fox' }));
-  assert.match(t, /Handwriting loaded: 27 recorded words/);
+  assert.match(t, /Handwriting loaded: 27 recorded words, \d+ letters and symbols cut out of them \(\d+ different characters\)/);
+  const letters = Number(t.match(/, (\d+) letters/)[1]);
+  assert.ok(letters > 27 * 2, 'letters are counted, not words: ' + letters);
   assert.match(t, /No sample for: 7/);
 });
 

@@ -174,7 +174,8 @@ function createTools(config) {
       async run(a) {
         const { style, words } = await load();
         const missing = S.missingChars(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"');
-        return [text(`Handwriting loaded: ${words} recorded words, ${style.count} letters and symbols cut out. ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
+        const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
+        return [text(`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters). ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
       },
     },
     {
