@@ -7,7 +7,7 @@ module.exports = [
       globals: {
         window: 'readonly', document: 'readonly', navigator: 'readonly', localStorage: 'readonly', location: 'readonly', history: 'readonly',
         requestAnimationFrame: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', alert: 'readonly', confirm: 'readonly',
-        Path2D: 'readonly', ResizeObserver: 'readonly', PointerEvent: 'readonly', Event: 'readonly', CustomEvent: 'readonly', atob: 'readonly', TextEncoder: 'readonly', createImageBitmap: 'readonly', Blob: 'readonly', File: 'readonly',
+        Path2D: 'readonly', ResizeObserver: 'readonly', PointerEvent: 'readonly', Event: 'readonly', CustomEvent: 'readonly', atob: 'readonly', TextEncoder: 'readonly', TextDecoder: 'readonly', createImageBitmap: 'readonly', Blob: 'readonly', File: 'readonly',
         URL: 'readonly', globalThis: 'readonly', module: 'writable', require: 'readonly', process: 'readonly', Buffer: 'readonly', __dirname: 'readonly', console: 'readonly',
       },
     },

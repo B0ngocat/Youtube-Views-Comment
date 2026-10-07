@@ -142,7 +142,7 @@ function main() {
     samples: findSamples(argv),
     // the sealed file on the site: given, or the address this copy of the server was published with (see build-site-extras.js)
     samplesUrl: argValue(argv, '--samples-url') || process.env.HANDWRITING_URL || globalThis.__HW_DEFAULT_SAMPLES_URL__,
-    format: argValue(argv, '--format') || process.env.HANDWRITING_FORMAT, // png (default), svg or both: what write_text returns unless asked
+    format: argValue(argv, '--format') || process.env.HANDWRITING_FORMAT, // png (default), svg, both or note: what write_text returns unless asked
     password: argValue(argv, '--password') || process.env.HANDWRITING_PASSWORD,
     out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
     cache: argv.includes('--no-cache') ? false : argValue(argv, '--cache') || process.env.HANDWRITING_CACHE,

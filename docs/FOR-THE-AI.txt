@@ -40,6 +40,8 @@ STEP 3. Use it.
                optional: "format": "svg" | "png" | "both",  "seed": 2 (a different take),  "letter_height_pt": 10
                svg comes back as text (the SVG itself, ready to save as a .svg file). It is also saved to a file; the
                reply says where.
+               "format": "note" makes a Notability note (.note) whose writing is editable pen strokes. It is saved to a
+               file and returned as an embedded file. Tell the person to open it from Files with Share, then Notability.
   write_batch  {"items": [{"text": "one"}, {"text": "two"}]}              many at once. Use this, not a loop.
   inspect_pdf  {"pdf": "/path/worksheet.pdf"}                            where the text and the answer lines are
   fill_pdf     {"pdf": "/path/worksheet.pdf", "answers": [{"page": 1, "x": 72, "line_y": 192, "width": 468,

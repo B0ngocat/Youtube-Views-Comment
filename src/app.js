@@ -746,6 +746,28 @@
     download(blob, 'handwriting.png');
   });
 
+  // A Notability note: the same writing, as pen strokes Notability can edit. The page there is 537.6 units wide, so the
+  // text is laid out again for about 460 of them (the screen's line width is something else), with the same seed and fixes.
+  $('#btnNote').addEventListener('click', async () => {
+    if (!style || !style.count) return;
+    const o = readOpts();
+    const text = $('#text').value;
+    const W = Math.round((460 * o.xh) / 8.8);
+    const pins = pinState && pinState.version === dataVersion && pinState.text === text ? pinState.ids : undefined;
+    const lay = $('#mathMode').checked ? HW.math.layout(style, text, Object.assign({}, o, { width: W, seed })) : HW.synth.layout(style, text, Object.assign({}, o, { width: W, seed, pins }));
+    const bytes = HW.notability.noteFromLayout(lay, { name: text.replace(/\s+/g, ' ').slice(0, 30), ink: $('#ink').value, pen: 1.05 * o.pen });
+    const file = new File([bytes], 'handwriting.note', { type: 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] }); // the share sheet lists Notability
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    download(file, 'handwriting.note');
+  });
+
   if (window.HW_PROFILE_KIND === 'ai') $('#guestNote').hidden = false; // the small part: three steps at the top
 
   // ---- tabs -------------------------------------------------------------------------------------

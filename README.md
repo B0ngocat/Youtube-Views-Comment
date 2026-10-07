@@ -90,6 +90,14 @@ To use it as a web address instead of a program, add `--http 8787 --token <a sec
 
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.
 
+## Notability notes with editable pen strokes
+
+**Save for Notability** (Write tab) makes a Notability note (`.note`) whose writing is real pen strokes, so it can be selected, moved, resized and erased in Notability like anything you drew there. A PDF can't do that, because the writing in a PDF is part of the page. On an iPad it opens the share sheet, where you pick Notability; elsewhere it downloads `handwriting.note`, which you can open from Files with Share, then Notability. The MCP server does the same with `format: "note"`.
+
+How it works: a note is a zip of Apple property lists, and the strokes are packed into a few arrays of numbers. This follows [jvns/svg2notability](https://github.com/jvns/svg2notability), which worked that out in 2018, and the files are checked against a note that Notability itself wrote (same files, same structure, and the stroke arrays match byte for byte for the same strokes). The code is in `src/notability.js` and has no dependencies, so it runs in the page and in Node.
+
+**Not checked against a current Notability.** The format is not documented and the reference note is from Notability 7.2.5 (2018), so I have not seen one of these notes open in today's app. If a note does not open, or the writing comes out the wrong size or upside down, make a test note with `node scripts/make-calibration-note.js` (a page-sized frame, an F near the top left and a ruler), open it in Notability and look at what comes out. The numbers to adjust are `xhDoc` (letter height), `pen` (line width), `left` and `top` in `noteFromLayout`. A note is one page of text: there is no PDF behind it.
+
 ## Downloading everything
 
 On the published (password-protected) site there is a **Download everything** button at the bottom left. It gives one `handwriting-engine.zip` with the app's code, the MCP server (`handwriting-mcp.js`, and the PDF version), and the setup guide as a PDF. Tick the box in its panel to add your own `my-handwriting.json` as well; it is off by default so a zip you send to someone does not carry your handwriting. The package is built into the encrypted page by `scripts/pack.js` and put together as a zip in the browser (`src/download.js`), so it works offline once the page has loaded. It is not there when you run the app locally with `npm run serve`.

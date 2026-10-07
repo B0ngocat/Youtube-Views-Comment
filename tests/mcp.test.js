@@ -276,3 +276,34 @@ test('format svg returns the SVG markup as text, in points, with no PNG; both gi
   const p = await svgServer({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'write_text', arguments: { text: 'the fox', format: 'png' } } });
   assert.equal(p.result.content[0].type, 'image');
 });
+
+test('format note makes a Notability note with real strokes, saved and returned as an embedded file', async () => {
+  const { readZip } = require('./zip-reader');
+  const N = require('../src/notability');
+  const r = await call('write_text', { text: 'the quick fox jumps over the lazy dog', format: 'note', letter_height_pt: 10, ink: '#1749b3' });
+  assert.ok(!r.result.isError, textOf(r));
+  assert.ok(!r.result.content.some((c) => c.type === 'image'), 'no picture');
+  const res = r.result.content.find((c) => c.type === 'resource');
+  assert.equal(res.resource.mimeType, 'application/octet-stream');
+  const saved = textOf(r).match(/Notability note: (\S+\.note)/)[1];
+  assert.ok(fs.existsSync(saved));
+  const bytes = fs.readFileSync(saved);
+  assert.equal(Buffer.from(res.resource.blob, 'base64').equals(bytes), true, 'the embedded file is the saved file');
+  const files = readZip(bytes);
+  const o = N.bplistRead(files.get([...files.keys()].find((k) => k.endsWith('/Session.plist')))).$objects;
+  assert.ok(o[10] >= 10, 'strokes: ' + o[10]);
+  // letter height 10 pt on a 612 pt page = 8.8 units of the 537.6 wide page: the text is narrower than the page
+  const h = o[8];
+  const f = new Float32Array(h.curvespoints.buffer.slice(h.curvespoints.byteOffset, h.curvespoints.byteOffset + h.curvespoints.length));
+  const xs = Array.from(f).filter((_, i) => i % 2 === 0);
+  assert.ok(Math.max(...xs) < N.PAGE_W && Math.min(...xs) >= 39, 'inside the page, from the left margin');
+  assert.ok(!r.result.content.some((c) => c.text && c.text.startsWith('<svg')), 'the svg is only saved');
+  const slim = await call('write_batch', { format: 'note', return_images: false, items: [{ text: 'one' }, { text: 'two' }] });
+  assert.equal(slim.result.content.filter((c) => c.type === 'resource').length, 0);
+  assert.equal((textOf(slim).match(/Notability note: /g) || []).length, 2);
+  const tuned = await call('write_text', { text: 'the fox', format: 'note', pen_width: 2, left: 100, top: 300 });
+  const t = readZip(fs.readFileSync(textOf(tuned).match(/Notability note: (\S+\.note)/)[1]));
+  const to = N.bplistRead(t.get([...t.keys()].find((k) => k.endsWith('/Session.plist')))).$objects[8];
+  const w = new Float32Array(to.curveswidth.buffer.slice(to.curveswidth.byteOffset, to.curveswidth.byteOffset + 4))[0];
+  assert.equal(w, 2);
+});

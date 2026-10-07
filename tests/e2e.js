@@ -282,6 +282,29 @@ async function inkPixels(page, selector) {
   check('the Write tab has a Use my real words slider', (await page.locator('#wordReuse').count()) === 1);
   check('the Teach tab lists a Math round', await page.evaluate(() => window.HW_APP.rounds().some((r) => r.id === 'math')));
 
+  console.log('Notability note');
+  {
+    const { readZip } = require('./zip-reader');
+    const N = require('../src/notability');
+    await page.click('#tab-write');
+    await page.fill('#text', 'the quick brown fox jumps over the lazy dog');
+    await page.waitForTimeout(400);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnNote')]);
+    check('Save for Notability downloads a .note file', dl.suggestedFilename() === 'handwriting.note', dl.suggestedFilename());
+    const notePath = path.join(OUT, 'handwriting.note');
+    await dl.saveAs(notePath);
+    const files = readZip(fs.readFileSync(notePath));
+    const sessionName = [...files.keys()].find((k) => k.endsWith('/Session.plist'));
+    check('it is a note with a Session.plist inside a folder named after the text', /^the quick brown fox jumps over\/Session\.plist$/.test(sessionName || ''), sessionName);
+    const o = N.bplistRead(files.get(sessionName)).$objects;
+    check('its writing is pen strokes (many of them)', o[10] > 15, String(o[10]));
+    const h = o[8];
+    const f = new Float32Array(h.curvespoints.buffer.slice(h.curvespoints.byteOffset, h.curvespoints.byteOffset + h.curvespoints.length));
+    const xs = Array.from(f).filter((_, i) => i % 2 === 0);
+    check('and they sit inside the page', Math.min(...xs) >= 39 && Math.max(...xs) <= N.PAGE_W, `${Math.min(...xs)}..${Math.max(...xs)}`);
+    check('in the pen colour the page shows', [...h.curvescolors.subarray(0, 3)].join() === '23,73,179');
+  }
+
   console.log('Sheet tab');
   {
     const PDFLib = require('../vendor/pdf-lib.min.js');
