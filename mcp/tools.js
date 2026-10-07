@@ -134,7 +134,7 @@ function createTools(config) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
     const { style } = await load();
     const format = formatOf(a);
-    // a Notability note is one page 537.6 units wide, which is a 612 pt page: its text has to fit in about 460 of those units
+    // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
     const placed = Sheet.layoutBox(style, box, lookFrom(a));
     const ink = inkOf(a);
