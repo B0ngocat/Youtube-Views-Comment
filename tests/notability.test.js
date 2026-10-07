@@ -318,7 +318,8 @@ test('the PDF calibration note builds: two rows of seven corner pieces in each c
   const pieces = N.pdfCalibrationPieces(PDF_PAGES);
   assert.equal(pieces.length, PDF_PAGES.length * 4 * 2 * 7);
   const curves = N.pdfCalibrationCurves(PDF_PAGES, '#1749b3');
-  assert.equal(curves.length, pieces.length * 2);
+  assert.equal(curves.length, pieces.length * 2 + PDF_PAGES.length * 4 * N.CORNER_COLORS.length * 2);
+  assert.equal(N.pdfCornerCurves(PDF_PAGES).length, PDF_PAGES.length * 4 * N.CORNER_COLORS.length * 2);
   const note = N.buildNote(curves, { name: 'Cal', pdf: { bytes: PDF_BYTES, pages: PDF_PAGES } });
   assert.ok(readZip(note).has('Cal/Session.plist'));
   for (const c of pieces) {
@@ -332,5 +333,8 @@ test('the PDF calibration note builds: two rows of seven corner pieces in each c
   const p4 = pieces.find((c) => c.page === 0 && c.corner === 'TL' && c.row === 0 && c.n === 4);
   const first = curves[pieces.indexOf(p4) * 2];
   const want = N.pdfPoint(bands, 0, p4.x, p4.y);
+  const black = N.pdfCornerCurves(PDF_PAGES)[3 * 2]; // page 1, top left, colour 4 (black): the middle of the grey flush with the page corner
+  const cp = N.pdfPoint(bands, 0, N.CORNER_THICK / 2, N.CORNER_THICK / 2);
+  assert.ok(Math.abs(black.pts[0][0] - cp[0]) < 1e-6 && Math.abs(black.pts[0][1] - cp[1]) < 1e-6);
   assert.ok(Math.abs(first.pts[0][0] - want[0]) < 1e-6 && Math.abs(first.pts[0][1] - want[1]) < 1e-6);
 });

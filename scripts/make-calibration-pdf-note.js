@@ -4,6 +4,9 @@
  * two pages (letter, then A4). In each corner of each page there are two rows of seven small grey corner pieces numbered 1
  * to 7, each with a thin blue pen L drawn in it. Row 1 moves the pen sideways from piece to piece, row 2 up and down, in steps
  * of 1.5 points; piece 4 is not moved. For each corner and row, say which number has the blue line in the middle of the grey.
+ * Right on each page corner there is also a grey L flush with the page edges, with seven coloured pen Ls over it (purple, blue,
+ * green, black, orange, red, pink: each a step further down and right, black is not moved); say which colour is in the middle
+ * of the grey, on the real corner.
  *
  *   node scripts/make-calibration-pdf-note.js [Calibration-PDF.note]
  */
@@ -33,6 +36,20 @@ async function main() {
     box(c.x - (c.sx * T) / 2, c.y - T / 2, c.x + c.sx * N.PIECE_ARM, c.y + T / 2);
     box(c.x - T / 2, c.y - (c.sy * T) / 2, c.x + T / 2, c.y + c.sy * N.PIECE_ARM);
     pg.drawText(String(c.n), { x: c.x + c.sx * 4 - 2, y: H - (c.y - c.sy * 16) - 3, size: 8, font, color: ink }); // outside the L, away from the page
+  }
+  for (const [page, p] of pages.entries()) {
+    const pg = pdfPages[page];
+    const T = N.CORNER_THICK;
+    const A = N.CORNER_ARM;
+    const rect = (x, y, w, h) => pg.drawRectangle({ x, y: p.h - y - h, width: w, height: h, color: grey }); // y down in
+    rect(0, 0, A, T);
+    rect(0, 0, T, A);
+    rect(p.w - A, 0, A, T);
+    rect(p.w - T, 0, T, A);
+    rect(0, p.h - T, A, T);
+    rect(0, p.h - A, T, A);
+    rect(p.w - A, p.h - T, A, T);
+    rect(p.w - T, p.h - A, T, A);
   }
   pdfPages.forEach((pg, i) => pg.drawText(PAGES[i].label, { x: 72, y: PAGES[i].h / 2, size: 14, font, color: ink }));
   const bytes = await doc.save();

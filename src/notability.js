@@ -728,6 +728,45 @@
     return out;
   }
 
+  // And right on each page corner: a grey L on the PDF, flush with the page edges (CORNER_THICK thick, CORNER_ARM long), with seven
+  // pen Ls in different colours over it, each moved a step further down and to the right (the first one up and to the left).
+  // The colour that sits in the middle of the grey, exactly on the real corner, is the offset. Black is not moved.
+  const CORNER_COLORS = [
+    { name: 'purple', rgb: '#7b2cbf' },
+    { name: 'blue', rgb: '#1f4fff' },
+    { name: 'green', rgb: '#1fa84f' },
+    { name: 'black', rgb: '#000000' },
+    { name: 'orange', rgb: '#ff7f00' },
+    { name: 'red', rgb: '#e00000' },
+    { name: 'pink', rgb: '#ff4fa3' },
+  ];
+  const CORNER_THICK = 6;
+  const CORNER_ARM = 40;
+
+  /** Strokes for the corner Ls (see above). */
+  function pdfCornerCurves(pages) {
+    const bands = pdfBands(pages);
+    const curves = [];
+    pages.forEach((p, page) => {
+      for (const corner of ['TL', 'TR', 'BL', 'BR']) {
+        const sx = corner[1] === 'L' ? 1 : -1;
+        const sy = corner[0] === 'T' ? 1 : -1;
+        const cx = corner[1] === 'L' ? 0 : p.w;
+        const cy = corner[0] === 'T' ? 0 : p.h;
+        CORNER_COLORS.forEach((c, i) => {
+          const d = (i - 3) * PIECE_STEP;
+          const x = cx + sx * (CORNER_THICK / 2 + d); // the centre line of the grey, moved
+          const y = cy + sy * (CORNER_THICK / 2 + d);
+          const color = hexToRgb(c.rgb);
+          const line = (a, b) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 0.8, color });
+          line([x, y], [x + sx * (CORNER_ARM - CORNER_THICK), y]);
+          line([x, y], [x, y + sy * (CORNER_ARM - CORNER_THICK)]);
+        });
+      }
+    });
+    return curves;
+  }
+
   /** Strokes for the calibration note (see above); the grey Ls are drawn on the PDF by scripts/make-calibration-pdf-note.js. */
   function pdfCalibrationCurves(pages, ink) {
     const bands = pdfBands(pages);
@@ -740,7 +779,7 @@
       line(c.page, [x, y], [x + c.sx * PIECE_ARM, y]);
       line(c.page, [x, y], [x, y + c.sy * PIECE_ARM]);
     }
-    return curves;
+    return curves.concat(pdfCornerCurves(pages));
   }
 
   /** A note from a handwriting layout; opts as for curvesFromLayout, plus {name, when}. */
@@ -773,7 +812,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationPieces, PDF_SHIFT_X, PIECE_ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationPieces, pdfCornerCurves, CORNER_COLORS, CORNER_THICK, CORNER_ARM, PDF_SHIFT_X, PIECE_ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
