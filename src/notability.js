@@ -25,6 +25,9 @@
 
   const PAGE_W = 537.5999755859375; // width of a page in Notability's own units on an iPad (pageWidthInDocumentCoordsKey)
   const PAGE_H = 705.6; // the page shape of the thumbnails Notability writes (48 x 63)
+  // Found by opening a calibration note on an iPad: strokes are placed with y going DOWN from the top of the page, and x = 0
+  // is 12.8 units in from the page's left edge (the page has a 12.8 margin each side), so the drawable width is 512.
+  const INNER_W = 512;
   const COCOA_EPOCH = 978307200; // seconds from 1970 to 2001, which is where Apple's dates start
 
   // ---- binary property lists ---------------------------------------------------------------------
@@ -316,8 +319,8 @@
     for (const cv of curves) {
       let prev = null;
       for (const [x, y] of cv.pts) {
-        const px = Math.round(x * sx);
-        const py = Math.round((PAGE_H - y) * sy); // the page's y goes up, the picture's goes down
+        const px = Math.round((x + 12.8) * sx);
+        const py = Math.round(y * sy); // y goes down in a note, as in a picture
         if (prev) {
           const n = Math.max(Math.abs(px - prev[0]), Math.abs(py - prev[1]), 1);
           for (let k = 0; k <= n; k++) dot(Math.round(prev[0] + ((px - prev[0]) * k) / n), Math.round(prev[1] + ((py - prev[1]) * k) / n), cv.color);
@@ -392,7 +395,7 @@
       curveswidth: f32(curves.map((c) => c.width)),
       curvesnumpoints: i32(counts),
       curvescolors: colors,
-      curvesfractionalwidths: f32(new Array(fracCounts.reduce((a, b) => a + b, 0)).fill(1)),
+      curvesfractionalwidths: f32(curves.flatMap((c, i) => (c.fractions && c.fractions.length === fracCounts[i] ? c.fractions : new Array(fracCounts[i]).fill(1)))),
       eventTokens: new Uint8Array(curves.length * 4).fill(255),
       numcurves: curves.length,
       numpoints: counts.reduce((a, b) => a + b, 0),
@@ -543,52 +546,60 @@
   }
 
   /**
-   * A note from a handwriting layout (synth.layout or math.layout): its strokes become pen strokes, placed at the top left
-   * of the page, in the colour given.
-   * opts: {name, ink '#rrggbb', xhDoc (height of a lowercase letter in note units, default 8.8, which is 10 pt on a letter
-   * page), pen (the line width in note units, default 1.05, a Notability pen at thickness 3), left, top (where the text's top
-   * left corner goes; y goes up), spacing (keep a point about this far apart, default 0.8)}
+   * The curves of a handwriting layout (synth.layout or math.layout), placed on the page: left and top are the distance from
+   * the left of the drawable area and from the top of the page to the text's top left corner.
+   * opts: {ink '#rrggbb', xhDoc (height of a lowercase letter in note units, default 8.8, which is 10 pt on a letter page),
+   * pen (the line width in note units, default 1.05, a Notability pen at thickness 3), left (20), top (40), spacing (keep a point
+   * about this far apart, default 0.8), fractions (a function (pointCount) -> the width fractions, default all 1)}
    */
-  function noteFromLayout(layout, opts) {
+  function curvesFromLayout(layout, opts) {
     const o = opts || {};
-    const xhDoc = o.xhDoc || 8.8;
-    const K = xhDoc / (layout.xh || 34);
-    const left = o.left === undefined ? 40 : o.left;
-    const top = o.top === undefined ? PAGE_H - 40 : o.top;
+    const K = (o.xhDoc || 8.8) / (layout.xh || 34);
+    const left = o.left === undefined ? 20 : o.left;
+    const top = o.top === undefined ? 40 : o.top;
     const color = hexToRgb(o.ink);
     const curves = [];
     for (const s of layout.strokes) {
       if (!s.pts || !s.pts.length) continue;
-      const pts = thin(s.pts.map((p) => [left + p.x * K, top - p.y * K]), o.spacing === undefined ? 0.8 : o.spacing);
-      curves.push({ pts: lengthen(pts), width: o.pen || 1.05, color });
+      const pts = lengthen(thin(s.pts.map((p) => [left + p.x * K, top + p.y * K]), o.spacing === undefined ? 0.8 : o.spacing));
+      const curve = { pts, width: o.pen || 1.05, color };
+      if (o.fractions) curve.fractions = o.fractions(pts.length);
+      curves.push(curve);
     }
-    return buildNote(curves, { name: o.name, when: o.when });
+    return curves;
+  }
+
+  /** A note from a handwriting layout; opts as for curvesFromLayout, plus {name, when}. */
+  function noteFromLayout(layout, opts) {
+    const o = opts || {};
+    return buildNote(curvesFromLayout(layout, o), { name: o.name, when: o.when });
   }
 
   /**
-   * Strokes to tell what is wrong if a note does not look right: a frame the size of a page, a letter F near the top left
-   * (it shows which way is up and which is left), and a ruler 100 units long.
+   * Strokes to tell what is wrong if a note does not look right: a frame around the drawable area (512 wide, the page tall), a
+   * letter F near the top left (it shows which way is up and which is left) and a ruler 100 units long.
    */
   function calibrationCurves(ink) {
     const color = hexToRgb(ink);
     const line = (a, b) => ({ pts: lengthen([a, b]), width: 1.05, color });
     const m = 2;
-    const f = [[60, PAGE_H - 60], [60, PAGE_H - 110], [60, PAGE_H - 160]];
+    const R = INNER_W - m;
+    const B = PAGE_H - m;
     return [
-      line([m, m], [PAGE_W - m, m]),
-      line([PAGE_W - m, m], [PAGE_W - m, PAGE_H - m]),
-      line([PAGE_W - m, PAGE_H - m], [m, PAGE_H - m]),
-      line([m, PAGE_H - m], [m, m]),
-      line(f[0], f[2]),
-      line(f[0], [100, PAGE_H - 60]),
-      line(f[1], [90, PAGE_H - 110]),
-      line([60, PAGE_H - 200], [160, PAGE_H - 200]), // the ruler: 100 units
-      line([60, PAGE_H - 195], [60, PAGE_H - 205]),
-      line([160, PAGE_H - 195], [160, PAGE_H - 205]),
+      line([m, m], [R, m]),
+      line([R, m], [R, B]),
+      line([R, B], [m, B]),
+      line([m, B], [m, m]),
+      line([60, 60], [60, 160]), // the F: its stem, then the top arm and the middle arm
+      line([60, 60], [100, 60]),
+      line([60, 110], [90, 110]),
+      line([60, 200], [160, 200]), // the ruler: 100 units
+      line([60, 195], [60, 205]),
+      line([160, 195], [160, 205]),
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, lengthen, thin, buildNote, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, lengthen, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

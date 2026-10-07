@@ -296,7 +296,7 @@ test('format note makes a Notability note with real strokes, saved and returned 
   const h = o[8];
   const f = new Float32Array(h.curvespoints.buffer.slice(h.curvespoints.byteOffset, h.curvespoints.byteOffset + h.curvespoints.length));
   const xs = Array.from(f).filter((_, i) => i % 2 === 0);
-  assert.ok(Math.max(...xs) < N.PAGE_W && Math.min(...xs) >= 39, 'inside the page, from the left margin');
+  assert.ok(Math.max(...xs) < N.INNER_W && Math.min(...xs) >= 19, 'inside the drawable width, from the left margin');
   assert.ok(!r.result.content.some((c) => c.text && c.text.startsWith('<svg')), 'the svg is only saved');
   const slim = await call('write_batch', { format: 'note', return_images: false, items: [{ text: 'one' }, { text: 'two' }] });
   assert.equal(slim.result.content.filter((c) => c.type === 'resource').length, 0);

@@ -301,7 +301,7 @@ async function inkPixels(page, selector) {
     const h = o[8];
     const f = new Float32Array(h.curvespoints.buffer.slice(h.curvespoints.byteOffset, h.curvespoints.byteOffset + h.curvespoints.length));
     const xs = Array.from(f).filter((_, i) => i % 2 === 0);
-    check('and they sit inside the page', Math.min(...xs) >= 39 && Math.max(...xs) <= N.PAGE_W, `${Math.min(...xs)}..${Math.max(...xs)}`);
+    check('and they sit inside the drawable width', Math.min(...xs) >= 19 && Math.max(...xs) <= N.INNER_W, `${Math.min(...xs)}..${Math.max(...xs)}`);
     check('in the pen colour the page shows', [...h.curvescolors.subarray(0, 3)].join() === '23,73,179');
   }
 

@@ -123,14 +123,22 @@ test('the handwriting lands on the page, at the top left, the right way up and t
     xs.push(f[i]);
     ys.push(f[i + 1]);
   }
-  assert.ok(Math.min(...xs) >= 30 && Math.max(...xs) <= N.PAGE_W, 'inside the page width');
-  assert.ok(Math.min(...ys) > 0 && Math.max(...ys) <= N.PAGE_H, 'inside the page height');
-  assert.ok(Math.max(...ys) > N.PAGE_H - 70, 'it starts at the top (y goes up in a note)');
-  // size: a lowercase letter 8.8 units tall means the whole text is 8.8/34 of the layout's own size
-  const layW = Math.max(...lay.strokes.flatMap((s) => s.pts.map((p) => p.x))) - Math.min(...lay.strokes.flatMap((s) => s.pts.map((p) => p.x)));
-  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - (layW * 8.8) / 34) < 1);
+  // measured on an iPad: y goes DOWN from the top of the page, and x = 0 is the left of a 512 wide drawable area
+  assert.ok(Math.min(...xs) >= 19 && Math.max(...xs) <= N.INNER_W, 'inside the drawable width');
+  assert.ok(Math.min(...ys) >= 30 && Math.max(...ys) < 120, 'at the top of the page: ' + Math.min(...ys) + '..' + Math.max(...ys));
+  // y down means the first line comes before the second one: the layout's y (also down) keeps its order
+  const layY = lay.strokes.flatMap((s) => s.pts.map((p) => p.y));
+  assert.ok(Math.abs(Math.max(...ys) - Math.min(...ys) - ((Math.max(...layY) - Math.min(...layY)) * 8.8) / 34) < 2, 'about the layouts height (thinning shaves the tips), not mirrored');
+  const layX = lay.strokes.flatMap((s) => s.pts.map((p) => p.x));
+  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - ((Math.max(...layX) - Math.min(...layX)) * 8.8) / 34) < 1);
   const w = new Float32Array(h.curveswidth.buffer.slice(h.curveswidth.byteOffset, h.curveswidth.byteOffset + 4))[0];
   assert.ok(Math.abs(w - 1.05) < 1e-6);
+});
+
+test('the layout is not flipped: the first stroke of a letter that starts at the top stays above where it ends', () => {
+  const lay = { xh: 34, strokes: [{ pts: [{ x: 10, y: 5 }, { x: 10, y: 20 }, { x: 10, y: 40 }, { x: 10, y: 60 }] }] };
+  const [c] = N.curvesFromLayout(lay, { spacing: 0 });
+  assert.ok(c.pts[0][1] < c.pts[3][1], 'a stroke that goes down the layout goes down the note');
 });
 
 test('the thumbnails are PNGs of the right sizes with the writing on them', () => {
@@ -170,7 +178,11 @@ test('the calibration note builds and has a frame the size of the page', () => {
   const files = readZip(N.buildNote(curves, { name: 'Calibration' }));
   assert.ok(files.has('Calibration/Session.plist'));
   const xs = curves.flatMap((c) => c.pts.map((p) => p[0]));
-  assert.ok(Math.max(...xs) > N.PAGE_W - 5 && Math.min(...xs) < 5);
+  const ys = curves.flatMap((c) => c.pts.map((p) => p[1]));
+  assert.ok(Math.max(...xs) > N.INNER_W - 5 && Math.min(...xs) < 5, 'the width of the drawable area');
+  assert.ok(Math.max(...ys) > N.PAGE_H - 5 && Math.min(...ys) < 5, 'the height of the page');
+  const stem = curves[4];
+  assert.ok(stem.pts[0][1] < stem.pts[3][1] && curves[5].pts[0][1] === stem.pts[0][1], 'the F hangs from the top: its stem goes down and its first arm is at the top');
 });
 
 test('a real note written by Notability (the svg2notability template, if it is around) reads with the same reader', (t) => {

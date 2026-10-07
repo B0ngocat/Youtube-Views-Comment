@@ -150,7 +150,7 @@ function createTools(config) {
     let notePath = null;
     if (format === 'note') {
       const unit = Notability.PAGE_W / 612; // note units per point of a letter-size page
-      note = Notability.noteFromLayout(placed.layout, { name: a.text.slice(0, 30), ink, xhDoc: placed.xhPt * unit, pen: clampNum(a.pen_width, 0.2, 10, 1.05), left: clampNum(a.left, 0, 500, 40), top: clampNum(a.top, 50, 705, Notability.PAGE_H - 40) });
+      note = Notability.noteFromLayout(placed.layout, { name: a.text.slice(0, 30), ink, xhDoc: placed.xhPt * unit, pen: clampNum(a.pen_width, 0.2, 10, 1.05), left: clampNum(a.left, 0, 480, 20), top: clampNum(a.top, 0, 690, 40) });
       notePath = outPath(base + '.note');
       fs.writeFileSync(notePath, note);
     }
@@ -205,10 +205,10 @@ function createTools(config) {
           seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
-          format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; y goes up). The SVG file is saved either way.' },
+          format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; top is measured down from the top of the page). The SVG file is saved either way.' },
           pen_width: { type: 'number', description: 'format note only: the pen width in note units. Default 1.05 (about a Notability pen at thickness 3).' },
-          left: { type: 'number', description: 'format note only: where the text starts, in note units from the left of the page. Default 40.' },
-          top: { type: 'number', description: 'format note only: where the text starts, in note units from the bottom of the page (y goes up; the page is about 705 tall). Default 665.' },
+          left: { type: 'number', description: 'format note only: where the text starts, in note units from the left edge of the drawable area (512 wide). Default 20.' },
+          top: { type: 'number', description: 'format note only: where the text starts, in note units down from the top of the page (about 705 tall). Default 40.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
         },
       },
