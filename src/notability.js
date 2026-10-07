@@ -421,14 +421,71 @@
 
   const safeName = (s) => String(s || 'Handwriting').replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').trim().slice(0, 60) || 'Handwriting';
 
+  // ---- a PDF behind the pages ---------------------------------------------------------------------------------
+  //
+  // From the notes of people who read Notability files (lh/notability-to-pdf, which checked them against thousands of notes):
+  // the PDF sits in the note's PDFs/ folder; Session.plist lists it in `pdfFiles` (objects with pdfFileName, version 2) and has
+  // one entry per page in `pageLayoutArray` (which PDF, which page of it). A note is one long canvas PAGE_W wide, y down, and
+  // the pages are stacked on it top to bottom, each scaled to the canvas width. Not checked here by opening one in Notability:
+  // the class name of the PDF object, and the exact left/top offsets (PDF_X0, PDF_Y0), which the calibration note is for.
+  const PDF_X0 = -12.8; // where the PDF's left edge is, in stroke x (a blank page's edge is 12.8 left of x = 0 too)
+  const PDF_Y0 = 0; // and its top edge, relative to the top of its page's band
+
+  /**
+   * Where each PDF page is on the canvas. pages: [{w, h}] in points. Returns [{top, height, scale}]: the page's band starts
+   * `top` units down the canvas and is `height` units tall, and one note unit is `scale` points.
+   */
+  function pdfBands(pages) {
+    let top = 0;
+    return pages.map((p) => {
+      const scale = p.w / PAGE_W;
+      const band = { top, height: p.h / scale, scale };
+      top += band.height;
+      return band;
+    });
+  }
+
+  /** A point on page `page` (0-based), in points from the page's top left corner, as a point of the canvas. */
+  function pdfPoint(bands, page, x, y) {
+    const b = bands[page];
+    return [x / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
+  }
+
+  /** The objects Session.plist needs to show a PDF, to go after the 45 a blank note has; first is at index `at`. */
+  function pdfObjects(pdf, at) {
+    const U = (n) => new UID(n);
+    const o = [
+      { $classname: 'PDFFile', $classes: ['PDFFile', 'NSObject'] }, // at
+      pdf.fileName, // at + 1
+      { pdfFileName: U(at + 1), highlights: U(3), pageNumbers: U(0), version: 2, type: 0, contentBoxVersion: 1, $class: U(at) }, // at + 2
+      { 'NS.object.0': U(at + 2), $class: U(4) }, // at + 3: pdfFiles
+      'kPageLayoutPDFFileKey', // at + 4
+      'kPageLayoutPDFPageNumberKey', // at + 5
+      'kPageLayoutPDFIsOriginalPageKey', // at + 6
+      true, // at + 7
+    ];
+    const entries = [];
+    for (let i = 0; i < pdf.pageCount; i++) {
+      o.push(i + 1); // the page number, 1-based
+      const num = at + o.length - 1;
+      o.push({ 'NS.key.0': U(at + 4), 'NS.object.0': U(at + 2), 'NS.key.1': U(at + 5), 'NS.object.1': U(num), 'NS.key.2': U(at + 6), 'NS.object.2': U(at + 7), $class: U(24) });
+      entries.push(at + o.length - 1);
+    }
+    const layout = { $class: U(6) };
+    entries.forEach((e, i) => (layout['NS.object.' + i] = U(e)));
+    o.push(layout);
+    return { objects: o, files: at + 3, layout: at + o.length - 1 };
+  }
+
   /** Session.plist: the same 45 objects, in the same order, as a note written by Notability, with the strokes put in. */
-  function sessionPlist(name, packed, when) {
+  function sessionPlist(name, packed, when, pdf) {
     const U = (n) => new UID(n);
     const cocoa = (when.getTime() / 1000 - COCOA_EPOCH);
+    const extra = pdf ? pdfObjects(pdf, 45) : { objects: [], files: 3, layout: 3 };
     const objects = [
       '$null',
       { subject: U(40), NBNoteTakingSessionBundleVersionNumberKey: U(41), contentPlaybackEventManager: U(42), paperLineStyle: 0, NBNoteTakingSessionMinorVersionNumberKey: 3, packagePath: U(37), tags: U(36), sessionFormatVersion: 4, $class: U(44), paperIndex: 12, richText: U(2), isReadOnly: false, creationDate: U(38), name: U(37) },
-      { formatVersion: 4, pageLayoutArray: U(3), attributedString: U(29), 'Handwriting Overlay': U(7), NBAttributedBackingString: U(17), $class: U(35), reflowState: U(14), didBecomeReflowable: true, pdfFiles: U(3), mediaObjects: U(3), 'Handwriting Objects': U(5), recordingTimestampString: U(32) },
+      { formatVersion: 4, pageLayoutArray: U(extra.layout), attributedString: U(29), 'Handwriting Overlay': U(7), NBAttributedBackingString: U(17), $class: U(35), reflowState: U(14), didBecomeReflowable: true, pdfFiles: U(extra.files), mediaObjects: U(3), 'Handwriting Objects': U(5), recordingTimestampString: U(32) },
       { $class: U(4) },
       { $classname: 'NSArray', $classes: ['NSArray', 'NSObject'] },
       { $class: U(6) },
@@ -471,7 +528,7 @@
       { $class: U(43), NBCPTimeManagerSOATimestampsKey: new Uint8Array(0), NBCPTimeManagerSOANumEventsKey: 0, NBCPTimeManagerSOARecordingIDsKey: new Uint8Array(0), NBCPTimeManagerSOADurationsKey: new Uint8Array(0), NBCPTimeManagerSOAEventIDsKey: new Uint8Array(0) },
       { $classname: 'NBCPEventManager', $classes: ['NBCPEventManager', 'NSObject'] },
       { $classname: 'NoteTakingSession', $classes: ['NoteTakingSession', 'NSObject'] },
-    ];
+    ].concat(extra.objects);
     return bplistWrite({ $version: 100000, $objects: objects, $archiver: 'GLKeyedArchiver', $top: { $0: U(1) } });
   }
 
@@ -530,7 +587,8 @@
 
   /**
    * A .note file (a Uint8Array) from curves in the note's units (see packCurves).
-   * opts: {name, when (a Date)}
+   * opts: {name, when (a Date), pdf: {bytes (Uint8Array), pages: [{w, h}] in points}}. With a pdf, the note has that PDF's pages as
+   * its pages (curves are then in canvas units, see pdfBands) instead of blank paper.
    */
   function buildNote(curves, opts) {
     const o = opts || {};
@@ -540,11 +598,17 @@
     const enc = new TextEncoder();
     const dir = name + '/';
     const png = (w, h) => thumbnail(curves, w, h);
+    let pdf = null;
+    if (o.pdf) {
+      if (!o.pdf.pages || !o.pdf.pages.length) throw new Error('The PDF has no pages.');
+      pdf = { fileName: pdfFileName(o.pdf.bytes, name), pageCount: o.pdf.pages.length };
+    }
     return makeZip(
       [
         { name: dir + 'thumbnail', data: imagePlist(png(48, 63), 1) },
         { name: dir + 'Assets/' },
-        { name: dir + 'Session.plist', data: sessionPlist(name, packCurves(curves), when) },
+        { name: dir + 'Session.plist', data: sessionPlist(name, packCurves(curves), when, pdf) },
+        ...(pdf ? [{ name: dir + 'PDFs/' }, { name: dir + 'PDFs/' + pdf.fileName, data: o.pdf.bytes }] : []),
         { name: dir + 'thumb3x.png', data: png(144, 189) },
         { name: dir + 'Recordings/library.plist', data: enc.encode(LIBRARY_PLIST) },
         { name: dir + 'Recordings/' },
@@ -583,6 +647,74 @@
     return curves;
   }
 
+  /** A UUID-shaped name for the PDF inside the note, from the PDF's own bytes so the same file always gets the same one. */
+  function pdfFileName(bytes) {
+    let a = 0x811c9dc5;
+    let b = 0x1b873593;
+    for (let i = 0; i < bytes.length; i++) {
+      a = Math.imul(a ^ bytes[i], 16777619) >>> 0;
+      b = Math.imul(b + bytes[i], 2246822519) >>> 0;
+    }
+    const h = (n) => n.toString(16).toUpperCase().padStart(8, '0');
+    const t = h(a) + h(b) + h(Math.imul(a, b) >>> 0) + h((a ^ b) >>> 0);
+    return `${t.slice(0, 8)}-${t.slice(8, 12)}-4${t.slice(13, 16)}-A${t.slice(17, 20)}-${t.slice(20, 32)}.pdf`;
+  }
+
+  /**
+   * Handwriting placed in boxes on the pages of a PDF, as curves in canvas units. items: [{box, placed}] as the Sheet tab and
+   * sheet.layoutBox give them (box in points from the page's top left; the layout belongs at box.x - dx * K, box.y - dy * K).
+   * pages: [{w, h}] in points. opts: {ink, pen (line width in note units, default 1.05), spacing, fractions}.
+   */
+  function curvesFromBoxes(items, pages, opts) {
+    const o = opts || {};
+    const bands = pdfBands(pages);
+    const color = hexToRgb(o.ink);
+    const curves = [];
+    for (const { box, placed } of items) {
+      if (!bands[box.page]) continue;
+      const ox = box.x - placed.dx * placed.K;
+      const oy = box.y - placed.dy * placed.K;
+      for (const s of placed.layout.strokes) {
+        if (!s.pts || !s.pts.length) continue;
+        const raw = s.pts.map((p) => pdfPoint(bands, box.page, ox + p.x * placed.K, oy + p.y * placed.K));
+        const pts = toChain(thin(raw, o.spacing === undefined ? 1.2 : o.spacing));
+        const curve = { pts, width: o.pen || 1.05, color };
+        if (o.fractions) curve.fractions = o.fractions(pts.length);
+        curves.push(curve);
+      }
+    }
+    return curves;
+  }
+
+  /** A note of a PDF with handwriting on its pages. items as for curvesFromBoxes; opts as there, plus {name, when}. */
+  function noteFromBoxes(pdfBytes, pages, items, opts) {
+    const o = opts || {};
+    return buildNote(curvesFromBoxes(items, pages, o), { name: o.name, when: o.when, pdf: { bytes: pdfBytes, pages } });
+  }
+
+  /**
+   * Strokes for finding out whether a PDF note lines up: on each page a frame at the page's edge, a cross at the corners
+   * and the middle, and a ruler 100 points long near the top left. Draw the same marks on the PDF itself (see
+   * scripts/make-calibration-pdf-note.js) and any offset or scale between them shows.
+   */
+  function pdfCalibrationCurves(pages, ink) {
+    const bands = pdfBands(pages);
+    const color = hexToRgb(ink);
+    const curves = [];
+    const line = (page, a, b) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 1.05, color });
+    pages.forEach((p, i) => {
+      const m = 36;
+      line(i, [m, m], [p.w - m, m]);
+      line(i, [p.w - m, m], [p.w - m, p.h - m]);
+      line(i, [p.w - m, p.h - m], [m, p.h - m]);
+      line(i, [m, p.h - m], [m, m]);
+      line(i, [p.w / 2 - 20, p.h / 2], [p.w / 2 + 20, p.h / 2]);
+      line(i, [p.w / 2, p.h / 2 - 20], [p.w / 2, p.h / 2 + 20]);
+      line(i, [72, 100], [172, 100]); // 100 points
+    });
+    return curves;
+  }
+
   /** A note from a handwriting layout; opts as for curvesFromLayout, plus {name, when}. */
   function noteFromLayout(layout, opts) {
     const o = opts || {};
@@ -613,7 +745,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

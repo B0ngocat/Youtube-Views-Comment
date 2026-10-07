@@ -206,3 +206,114 @@ test('a real note written by Notability (the svg2notability template, if it is a
   assert.deepEqual(loose(skel(session)), loose(JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'notability-skeleton.json'), 'utf8')).session));
   
 });
+
+// ---- a PDF behind the pages -------------------------------------------------------------------------
+
+const SHEET = require('../src/sheet');
+const PDF_PAGES = [{ w: 612, h: 792 }, { w: 595.28, h: 841.89 }, { w: 612, h: 792 }];
+const PDF_BYTES = new Uint8Array(Buffer.from('%PDF-1.4\n% not a real pdf, only its bytes matter here\n'));
+
+function pdfNote(items) {
+  const bytes = N.noteFromBoxes(PDF_BYTES, PDF_PAGES, items, { name: 'Sheet', ink: '#1749b3', when: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)) });
+  const files = readZip(bytes);
+  return { bytes, files, session: N.bplistRead(files.get('Sheet/Session.plist')) };
+}
+
+function boxItems() {
+  const boxes = [
+    { page: 0, x: 72, y: 100, w: 200, h: 40, text: 'the quick fox', kind: 'text', seed: 1 },
+    { page: 2, x: 300, y: 500, w: 220, h: 40, text: 'brown dog', kind: 'text', seed: 2 },
+  ];
+  return boxes.map((box) => ({ box, placed: SHEET.layoutBox(style, box, {}) }));
+}
+
+test('a note with a PDF carries the PDF, lists it, and has one page entry for each page of it', () => {
+  const { files, session } = pdfNote(boxItems());
+  const pdfs = [...files.keys()].filter((n) => n.startsWith('Sheet/PDFs/') && !n.endsWith('/'));
+  assert.equal(pdfs.length, 1);
+  assert.deepEqual(Buffer.from(files.get(pdfs[0])), Buffer.from(PDF_BYTES));
+  const name = pdfs[0].replace('Sheet/PDFs/', '');
+  assert.match(name, /^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-A[0-9A-F]{3}-[0-9A-F]{12}\.pdf$/);
+  const o = session.$objects;
+  const at = (uid) => o[uid.UID === undefined ? uid.value : uid.UID];
+  const rich = o[2];
+  const list = (arr) => Object.keys(arr).filter((k) => k.startsWith('NS.object.')).map((k) => at(arr[k]));
+  const pdfFiles = list(at(rich.pdfFiles));
+  assert.equal(pdfFiles.length, 1);
+  assert.equal(at(pdfFiles[0].pdfFileName), name);
+  assert.equal(pdfFiles[0].version, 2);
+  const layout = list(at(rich.pageLayoutArray));
+  assert.equal(layout.length, PDF_PAGES.length);
+  layout.forEach((entry, i) => {
+    const d = {};
+    for (const k of Object.keys(entry).filter((x) => x.startsWith('NS.key.'))) d[at(entry[k])] = at(entry['NS.object.' + k.slice(7)]);
+    assert.equal(d.kPageLayoutPDFPageNumberKey, i + 1);
+    assert.equal(d.kPageLayoutPDFFileKey, pdfFiles[0], 'the page points at the PDF');
+  });
+});
+
+test('every reference in the archive of a note with a PDF points at an object that exists, and the blank note is unchanged', () => {
+  const { session } = pdfNote(boxItems());
+  const o = session.$objects;
+  const seen = (v) => {
+    if (v && v.constructor && v.constructor.name === 'UID') assert.ok((v.UID !== undefined ? v.UID : v.value) < o.length, 'a reference is out of range');
+    else if (v && typeof v === 'object' && !(v instanceof Uint8Array)) Object.values(v).forEach(seen);
+  };
+  o.forEach(seen);
+  const blank = N.bplistRead(readZip(N.buildNote(N.calibrationCurves('#1749b3'), { name: 'Blank' })).get('Blank/Session.plist'));
+  assert.equal(blank.$objects.length, 45);
+});
+
+test('PDF pages are stacked down the canvas, each as wide as the canvas', () => {
+  const bands = N.pdfBands(PDF_PAGES);
+  assert.equal(bands[0].top, 0);
+  assert.ok(Math.abs(bands[0].height - 792 / (612 / N.PAGE_W)) < 1e-9);
+  assert.ok(Math.abs(bands[1].top - bands[0].height) < 1e-9);
+  assert.ok(Math.abs(bands[1].height - 841.89 / (595.28 / N.PAGE_W)) < 1e-6);
+  const [x0, y0] = N.pdfPoint(bands, 0, 0, 0);
+  const [x1, y1] = N.pdfPoint(bands, 0, 612, 792);
+  assert.ok(Math.abs(x1 - x0 - N.PAGE_W) < 1e-9, 'the page is the canvas wide');
+  assert.ok(Math.abs(y1 - y0 - bands[0].height) < 1e-9);
+  assert.ok(N.pdfPoint(bands, 2, 0, 0)[1] > bands[1].top + bands[1].height - 1e-6, 'the third page starts below the second');
+});
+
+test('handwriting in a box lands inside that box, on that page, as whole Bezier chains', () => {
+  const items = boxItems();
+  const curves = N.curvesFromBoxes(items, PDF_PAGES, { ink: '#1749b3' });
+  assert.ok(curves.length > 5);
+  curves.forEach((c) => assert.equal(c.pts.length % 3, 1));
+  const bands = N.pdfBands(PDF_PAGES);
+  // map back to points on the page: every stroke point is inside the page band it was written for, and the two boxes are on
+  // different pages
+  const tops = [];
+  for (const c of curves) {
+    const ys = c.pts.map((p) => p[1]);
+    const page = bands.findIndex((b) => ys[0] >= b.top && ys[0] < b.top + b.height);
+    assert.ok(page >= 0);
+    tops.push(page);
+    const b = bands[page];
+    for (const [x, y] of c.pts) {
+      const px = (x - -12.8) * b.scale;
+      const py = (y - b.top) * b.scale;
+      assert.ok(px >= 72 - 3 && px <= 612 - 36 && py >= 0 && py <= 792, 'a point is on its page');
+    }
+  }
+  assert.ok(tops.includes(0) && tops.includes(2) && !tops.includes(1));
+  // the first box: its ink is within a few points of the box
+  const box = items[0].box;
+  for (const c of curves.filter((_, i) => tops[i] === 0)) {
+    for (const [x, y] of c.pts) {
+      const px = (x + 12.8) * bands[0].scale;
+      const py = y * bands[0].scale;
+      assert.ok(px > box.x - 4 && px < box.x + box.w + 4, 'inside the box across: ' + px);
+      assert.ok(py > box.y - 4 && py < box.y + box.h + 4, 'inside the box down: ' + py);
+    }
+  }
+});
+
+test('the PDF calibration note builds, with strokes on every page', () => {
+  const curves = N.pdfCalibrationCurves(PDF_PAGES, '#1749b3');
+  assert.equal(curves.length, 7 * PDF_PAGES.length);
+  const note = N.buildNote(curves, { name: 'Cal', pdf: { bytes: PDF_BYTES, pages: PDF_PAGES } });
+  assert.ok(readZip(note).has('Cal/Session.plist'));
+});
