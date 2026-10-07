@@ -1024,7 +1024,7 @@ module.exports = { createTools };
    */
   /** A copy of a unit scaled by f.fx across and f.fy up, from its left edge and the baseline. The original is untouched. */
   function scaleUnit(u, f) {
-    const x0 = u.box.minX;
+    const x0 = f.x0 === undefined ? u.box.minX : f.x0; // a letter of a recorded word is scaled about the word's left edge, so it keeps its place in the word
     const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy });
     const dir = (e) => {
       const dx = e.dx * f.fx;
@@ -1038,7 +1038,7 @@ module.exports = { createTools };
       marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(mapPt) })),
       entry: dir(u.entry),
       exit: dir(u.exit),
-      box: { minX: x0, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
+      box: { minX: x0 + (u.box.minX - x0) * f.fx, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
     };
   }
 
@@ -1164,10 +1164,44 @@ module.exports = { createTools };
     }
   }
 
+  /**
+   * People do not write every word at the same size, and the aligner fits each word on its own, so a word that is mostly
+   * small letters with one tall one (like "brown") comes out with an x-height well under that of the rest, and next to
+   * the other words it looks like it is written half size. Each word is brought to the writer's usual x-height, in steps
+   * of 5% so a new sample does not change every word (copies are kept per word, so the units stay the same objects from
+   * one build to the next, which the other caches rely on).
+   */
+  const XHEIGHT_LETTERS = 'acemnorsuvwxz';
+  const sizedCache = new WeakMap(); // aligned word -> Map(factor -> copy of it)
+  function sizeNormalize(aligned) {
+    const xh = (w) => w.units.filter((u) => XHEIGHT_LETTERS.includes(u.ch) && u.strokes.length).map((u) => { const e = inkExtent(u); return e.h; });
+    const per = aligned.map((w) => (w.ok && w.units.length ? xh(w) : []));
+    const pooled = [].concat(...per.map((h, i) => (aligned[i].units.some((u) => u.iso) ? [] : h)));
+    if (pooled.length < 30) return aligned;
+    const target = Math.round(A.median(pooled) * 40) / 40;
+    return aligned.map((w, i) => {
+      const hs = per[i];
+      if (!w.ok || hs.length < 2 || w.units.some((u) => u.iso)) return w;
+      const raw = target / A.median(hs);
+      const f = Math.round(Math.min(1.3, Math.max(0.75, raw)) * 20) / 20;
+      if (f === 1) return w;
+      let byF = sizedCache.get(w);
+      if (!byF) sizedCache.set(w, (byF = new Map()));
+      if (!byF.has(f)) {
+        const x0 = Math.min(...w.units.map((u) => u.box.minX));
+        // view.s converts the word's own units back to the guide's, and the units are now f times bigger
+        byF.set(f, { ...w, units: w.units.map((u) => scaleUnit(u, { fx: f, fy: f, x0 })), view: w.view ? { ...w.view, s: w.view.s / f } : w.view });
+      }
+      return byF.get(f);
+    });
+  }
+
   function buildStyle(rawWords) {
     const words = rawWords.filter((w) => w && w.strokes && w.strokes.length && w.text);
     const stats = computeStats(words);
-    const { aligned, profile } = alignAll(words, stats);
+    const alignedAll = alignAll(words, stats);
+    const profile = alignedAll.profile;
+    const aligned = sizeNormalize(alignedAll.aligned);
 
     const byChar = new Map();
     const allByChar = new Map();
@@ -1324,7 +1358,7 @@ module.exports = { createTools };
     return o.words;
   }
 
-  const api = { buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
