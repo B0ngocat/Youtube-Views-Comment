@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /*
- * Writes a Notability note to open on the iPad to see whether pen strokes line up with the pages of a PDF in it: a two page
- * PDF (letter, then A4) with a red frame, a cross in the middle and a 100 point ruler drawn on it, and blue pen strokes
- * drawn at the same places. If the blue lies on the red, the page layout in src/notability.js is right. If it does not,
- * note which way and how far each is off (page 1 and page 2 separately, left and top), and the scale.
+ * Writes a Notability note to open on the iPad to see whether pen strokes line up with the pages of a PDF in it. The PDF has
+ * two pages (letter, then A4) with five grey plus signs on each, lettered A to E; over every arm of every plus there are nine
+ * pen lines in different colours. For each plus, say which colour is in the middle of the grey bar, along the horizontal arm
+ * and along the vertical arm. Black is exact; each step towards pink is 1.5 points further down (or right), each step towards
+ * purple 1.5 points up (or left). The same colour everywhere means a plain shift; colours that change from A to E mean the
+ * pen is scaled against the PDF.
  *
  *   node scripts/make-calibration-pdf-note.js [Calibration-PDF.note]
  */
@@ -21,23 +23,19 @@ async function main() {
   const out = process.argv[2] || 'Calibration-PDF.note';
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  const red = rgb(0.85, 0.1, 0.1);
-  for (const p of PAGES) {
-    const page = doc.addPage([p.w, p.h]);
-    const line = (a, b) => page.drawLine({ start: { x: a[0], y: p.h - a[1] }, end: { x: b[0], y: p.h - b[1] }, thickness: 1.2, color: red });
-    const m = 36; // the same marks as pdfCalibrationCurves
-    line([m, m], [p.w - m, m]);
-    line([p.w - m, m], [p.w - m, p.h - m]);
-    line([p.w - m, p.h - m], [m, p.h - m]);
-    line([m, p.h - m], [m, m]);
-    line([p.w / 2 - 20, p.h / 2], [p.w / 2 + 20, p.h / 2]);
-    line([p.w / 2, p.h / 2 - 20], [p.w / 2, p.h / 2 + 20]);
-    line([72, 100], [172, 100]);
-    page.drawText(p.label + ': red is the PDF, blue is pen', { x: 72, y: p.h - 70, size: 12, font, color: red });
-  }
-  const bytes = await doc.save();
   const pages = PAGES.map(({ w, h }) => ({ w, h }));
-  const note = N.buildNote(N.pdfCalibrationCurves(pages, '#1749b3'), { name: 'Calibration PDF', pdf: { bytes, pages } });
+  const grey = rgb(0.78, 0.78, 0.78);
+  const pdfPages = PAGES.map((p) => doc.addPage([p.w, p.h]));
+  for (const { page, x, y, label } of N.pdfCalibrationSites(pages)) {
+    const pg = pdfPages[page];
+    const H = pages[page].h;
+    pg.drawRectangle({ x: x - N.ARM, y: H - y - 7.5, width: 2 * N.ARM, height: 15, color: grey }); // the arms: 15 points thick
+    pg.drawRectangle({ x: x - 7.5, y: H - y - N.ARM, width: 15, height: 2 * N.ARM, color: grey });
+    pg.drawText(label, { x: x + N.ARM + 6, y: H - y - 4, size: 14, font, color: rgb(0.2, 0.2, 0.2) });
+  }
+  pdfPages.forEach((pg, i) => pg.drawText(PAGES[i].label, { x: 72, y: PAGES[i].h - 60, size: 14, font, color: rgb(0.2, 0.2, 0.2) }));
+  const bytes = await doc.save();
+  const note = N.buildNote(N.pdfCalibrationCurves(pages), { name: 'Calibration PDF', pdf: { bytes, pages } });
   fs.writeFileSync(out, note);
   console.log('Wrote ' + out);
 }

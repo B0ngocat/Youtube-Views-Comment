@@ -276,6 +276,8 @@ function createTools(config) {
           out: { type: 'string', description: 'Where to save. Default: <name>-filled.pdf in the output folder.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3.' },
           neatness: { type: 'number' },
+          notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
+          pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           answers: {
             type: 'array',
             items: {
@@ -335,7 +337,13 @@ function createTools(config) {
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, out);
-        return [text(`Saved ${dest}\n` + report.join('\n'))];
+        let noteLine = '';
+        if (a.notability) {
+          const noteDest = dest.replace(/\.pdf$/i, '') + '.note';
+          fs.writeFileSync(noteDest, Notability.noteFromBoxes(bytes, sizes, items, { name: path.basename(noteDest, '.note').slice(0, 30), ink: inkOf(a), pen: clampNum(a.pen_width, 0.2, 10, 1.05) }));
+          noteLine = `\nNotability note: ${noteDest}`;
+        }
+        return [text(`Saved ${dest}${noteLine}\n` + report.join('\n'))];
       },
     },
   ];

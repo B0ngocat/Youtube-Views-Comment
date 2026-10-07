@@ -432,14 +432,17 @@
   const PDF_Y0 = 0; // and its top edge, relative to the top of its page's band
 
   /**
-   * Where each PDF page is on the canvas. pages: [{w, h}] in points. Returns [{top, height, scale}]: the page's band starts
-   * `top` units down the canvas and is `height` units tall, and one note unit is `scale` points.
+   * Where each PDF page is on the canvas. pages: [{w, h}] in points. Returns [{top, height, scale, xoff}]: the page's band starts
+   * `top` units down the canvas and is `height` units tall, one note unit is `scale` points, and the page starts `xoff` points
+   * in from the left. Measured on an iPad with a letter page followed by an A4 one: every page has the same scale (the
+   * widest page fills the canvas width) and a narrower page is centred, rather than each being stretched to the width.
    */
   function pdfBands(pages) {
+    const widest = Math.max(...pages.map((p) => p.w));
+    const scale = widest / PAGE_W;
     let top = 0;
     return pages.map((p) => {
-      const scale = p.w / PAGE_W;
-      const band = { top, height: p.h / scale, scale };
+      const band = { top, height: p.h / scale, scale, xoff: (widest - p.w) / 2 };
       top += band.height;
       return band;
     });
@@ -448,7 +451,7 @@
   /** A point on page `page` (0-based), in points from the page's top left corner, as a point of the canvas. */
   function pdfPoint(bands, page, x, y) {
     const b = bands[page];
-    return [x / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
+    return [(x + b.xoff) / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
   }
 
   /** The objects Session.plist needs to show a PDF, to go after the 45 a blank note has; first is at index `at`. */
@@ -692,26 +695,47 @@
     return buildNote(curvesFromBoxes(items, pages, o), { name: o.name, when: o.when, pdf: { bytes: pdfBytes, pages } });
   }
 
-  /**
-   * Strokes for finding out whether a PDF note lines up: on each page a frame at the page's edge, a cross at the corners
-   * and the middle, and a ruler 100 points long near the top left. Draw the same marks on the PDF itself (see
-   * scripts/make-calibration-pdf-note.js) and any offset or scale between them shows.
-   */
-  function pdfCalibrationCurves(pages, ink) {
-    const bands = pdfBands(pages);
-    const color = hexToRgb(ink);
-    const curves = [];
-    const line = (page, a, b) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 1.05, color });
-    pages.forEach((p, i) => {
-      const m = 36;
-      line(i, [m, m], [p.w - m, m]);
-      line(i, [p.w - m, m], [p.w - m, p.h - m]);
-      line(i, [p.w - m, p.h - m], [m, p.h - m]);
-      line(i, [m, p.h - m], [m, m]);
-      line(i, [p.w / 2 - 20, p.h / 2], [p.w / 2 + 20, p.h / 2]);
-      line(i, [p.w / 2, p.h / 2 - 20], [p.w / 2, p.h / 2 + 20]);
-      line(i, [72, 100], [172, 100]); // 100 points
+  // The calibration note: on each page, plus signs with thick grey arms printed on the PDF at SITES, and over each arm a
+  // ladder of pen lines in nine colours, STEP points apart. Whichever colour lies in the middle of the grey arm says how far
+  // the pen is from the PDF there (colour 4, black, is spot on); the five sites on a page show whether it is also scaled.
+  const LADDER = [
+    { name: 'purple', rgb: '#7b2cbf' },
+    { name: 'blue', rgb: '#1f4fff' },
+    { name: 'cyan', rgb: '#00b8d9' },
+    { name: 'green', rgb: '#1fa84f' },
+    { name: 'black', rgb: '#000000' },
+    { name: 'yellow', rgb: '#f2c200' },
+    { name: 'orange', rgb: '#ff7f00' },
+    { name: 'red', rgb: '#e00000' },
+    { name: 'pink', rgb: '#ff4fa3' },
+  ];
+  const LADDER_STEP = 1.5; // points between two lines
+  const ARM = 30; // half the length of an arm, points
+  const SITE_LABELS = ['A', 'B', 'C', 'D', 'E'];
+
+  /** Where the plus signs go, in points from the page's top left: the four corners (an inch and a half in) and the middle. */
+  function pdfCalibrationSites(pages) {
+    const out = [];
+    pages.forEach((p, page) => {
+      const m = 108;
+      [[m, m], [p.w - m, m], [p.w / 2, p.h / 2], [m, p.h - m], [p.w - m, p.h - m]].forEach(([x, y], i) => out.push({ page, x, y, label: SITE_LABELS[i] }));
     });
+    return out;
+  }
+
+  /** Strokes for the calibration note (see above). Draw grey bars at pdfCalibrationSites on the PDF itself: scripts/make-calibration-pdf-note.js. */
+  function pdfCalibrationCurves(pages) {
+    const bands = pdfBands(pages);
+    const curves = [];
+    const line = (page, a, b, color) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 0.8, color });
+    for (const { page, x, y } of pdfCalibrationSites(pages)) {
+      LADDER.forEach((c, i) => {
+        const d = (i - 4) * LADDER_STEP;
+        const color = hexToRgb(c.rgb);
+        line(page, [x - ARM, y + d], [x + ARM, y + d], color); // across the horizontal arm: its colour in the middle says how far down or up
+        line(page, [x + d, y - ARM], [x + d, y + ARM], color); // along the vertical arm: left or right
+      });
+    }
     return curves;
   }
 
@@ -745,7 +769,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationSites, LADDER, LADDER_STEP, ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

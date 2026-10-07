@@ -264,16 +264,19 @@ test('every reference in the archive of a note with a PDF points at an object th
   assert.equal(blank.$objects.length, 45);
 });
 
-test('PDF pages are stacked down the canvas, each as wide as the canvas', () => {
+test('PDF pages are stacked down the canvas with one scale, the widest page as wide as the canvas and narrower ones centred', () => {
   const bands = N.pdfBands(PDF_PAGES);
+  const k = 612 / N.PAGE_W;
+  assert.ok(bands.every((b) => Math.abs(b.scale - k) < 1e-12), 'one scale for every page');
   assert.equal(bands[0].top, 0);
-  assert.ok(Math.abs(bands[0].height - 792 / (612 / N.PAGE_W)) < 1e-9);
+  assert.ok(Math.abs(bands[0].height - 792 / k) < 1e-9);
   assert.ok(Math.abs(bands[1].top - bands[0].height) < 1e-9);
-  assert.ok(Math.abs(bands[1].height - 841.89 / (595.28 / N.PAGE_W)) < 1e-6);
+  assert.ok(Math.abs(bands[1].height - 841.89 / k) < 1e-6);
   const [x0, y0] = N.pdfPoint(bands, 0, 0, 0);
   const [x1, y1] = N.pdfPoint(bands, 0, 612, 792);
-  assert.ok(Math.abs(x1 - x0 - N.PAGE_W) < 1e-9, 'the page is the canvas wide');
+  assert.ok(Math.abs(x1 - x0 - N.PAGE_W) < 1e-9, 'the widest page is the canvas wide');
   assert.ok(Math.abs(y1 - y0 - bands[0].height) < 1e-9);
+  assert.ok(Math.abs(N.pdfPoint(bands, 1, 0, 0)[0] - x0 - (612 - 595.28) / 2 / k) < 1e-9, 'the A4 page is centred');
   assert.ok(N.pdfPoint(bands, 2, 0, 0)[1] > bands[1].top + bands[1].height - 1e-6, 'the third page starts below the second');
 });
 
@@ -293,9 +296,9 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
     tops.push(page);
     const b = bands[page];
     for (const [x, y] of c.pts) {
-      const px = (x - -12.8) * b.scale;
+      const px = (x + 12.8) * b.scale - b.xoff;
       const py = (y - b.top) * b.scale;
-      assert.ok(px >= 72 - 3 && px <= 612 - 36 && py >= 0 && py <= 792, 'a point is on its page');
+      assert.ok(px >= 72 - 3 && px <= PDF_PAGES[page].w - 36 && py >= 0 && py <= PDF_PAGES[page].h, 'a point is on its page');
     }
   }
   assert.ok(tops.includes(0) && tops.includes(2) && !tops.includes(1));
@@ -303,7 +306,7 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
   const box = items[0].box;
   for (const c of curves.filter((_, i) => tops[i] === 0)) {
     for (const [x, y] of c.pts) {
-      const px = (x + 12.8) * bands[0].scale;
+      const px = (x + 12.8) * bands[0].scale - bands[0].xoff;
       const py = y * bands[0].scale;
       assert.ok(px > box.x - 4 && px < box.x + box.w + 4, 'inside the box across: ' + px);
       assert.ok(py > box.y - 4 && py < box.y + box.h + 4, 'inside the box down: ' + py);
@@ -311,9 +314,18 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
   }
 });
 
-test('the PDF calibration note builds, with strokes on every page', () => {
-  const curves = N.pdfCalibrationCurves(PDF_PAGES, '#1749b3');
-  assert.equal(curves.length, 7 * PDF_PAGES.length);
+test('the PDF calibration note builds: nine coloured lines over each arm of every plus, the middle one exactly on its centre line', () => {
+  const curves = N.pdfCalibrationCurves(PDF_PAGES);
+  assert.equal(N.pdfCalibrationSites(PDF_PAGES).length, 5 * PDF_PAGES.length);
+  assert.equal(curves.length, 5 * PDF_PAGES.length * 2 * N.LADDER.length);
   const note = N.buildNote(curves, { name: 'Cal', pdf: { bytes: PDF_BYTES, pages: PDF_PAGES } });
   assert.ok(readZip(note).has('Cal/Session.plist'));
+  // the middle (black) ladder line of the first site lies on the plus's centre, the ones either side are 1.5 pt away
+  const bands = N.pdfBands(PDF_PAGES);
+  const site = N.pdfCalibrationSites(PDF_PAGES)[0];
+  const horizontals = curves.slice(0, N.LADDER.length * 2).filter((_, i) => i % 2 === 0);
+  const ys = horizontals.map((c) => c.pts[0][1]);
+  assert.ok(Math.abs(ys[4] - N.pdfPoint(bands, 0, site.x, site.y)[1]) < 1e-6);
+  assert.ok(Math.abs((ys[5] - ys[4]) * bands[0].scale - N.LADDER_STEP) < 1e-6);
+  assert.deepEqual([...horizontals[4].color], [0, 0, 0]);
 });

@@ -329,6 +329,7 @@
     $('#sheetPageNo').textContent = have ? 'Page ' + (pageIdx + 1) + ' of ' + n : 'no page';
     $('#sheetSavePdf').disabled = !have;
     $('#sheetSavePng').disabled = !have;
+    $('#sheetSaveNote').disabled = !have;
     $('#sheetDraw').setAttribute('aria-pressed', String(drawing));
     $('#sheetBoxes').classList.toggle('drawing', drawing);
     if (have && !haveStyle()) say('Nothing is written yet because no handwriting has been taught. Use the Teach tab first (or import your file there).');
@@ -511,6 +512,39 @@
     status('');
   });
 
+  // A Notability note: the worksheet's pages, with the answers drawn on them as pen strokes.
+  async function filledNote() {
+    if (!haveStyle()) throw new Error('No handwriting has been taught yet.');
+    const look = lookNow();
+    const pages = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const vp = (await pdf.getPage(i)).getViewport({ scale: 1 });
+      pages.push({ w: vp.width, h: vp.height });
+    }
+    return HW.notability.noteFromBoxes(src.bytes, pages, itemsFor(boxes), { name: baseName().slice(0, 30), ink: look.ink, pen: 1.05 * look.pen });
+  }
+
+  $('#sheetSaveNote').addEventListener('click', async () => {
+    say('');
+    status('Writing the note');
+    try {
+      const file = new File([await filledNote()], baseName() + '.note', { type: 'application/octet-stream' });
+      let shared = false;
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] }); // the share sheet lists Notability
+          shared = true;
+        } catch (e) {
+          if (e && e.name === 'AbortError') shared = true;
+        }
+      }
+      if (!shared) download(file, file.name);
+    } catch (e) {
+      say('Could not save the note: ' + e.message);
+    }
+    status('');
+  });
+
   $('#sheetSavePng').addEventListener('click', async () => {
     say('');
     status('Drawing the page');
@@ -567,6 +601,7 @@
   window.HW_SHEET = {
     open: openBytes,
     filledPdf,
+    filledNote,
     get boxes() {
       return boxes;
     },

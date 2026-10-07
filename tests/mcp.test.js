@@ -142,6 +142,18 @@ test('fill_pdf writes the answers in, reports each one and leaves the original a
   for (const i of [0, 1]) assert.ok(doc.getPage(i).node.normalizedEntries().Contents.size() > 1, 'page ' + (i + 1) + ' has ink');
 });
 
+test('fill_pdf can also save a Notability note with the PDF as its pages', async () => {
+  const pdf = await worksheet();
+  const res = await call('fill_pdf', { pdf, notability: true, answers: [{ page: 2, x: 72, line_y: 192, width: 468, text: 'the quick fox' }] });
+  assert.ok(!res.result.isError, textOf(res));
+  const note = textOf(res).match(/Notability note: (\S+\.note)/)[1];
+  const files = require('./zip-reader').readZip(fs.readFileSync(note));
+  const name = [...files.keys()].find((n) => /\/PDFs\/.+\.pdf$/.test(n));
+  assert.deepEqual(Buffer.from(files.get(name)), fs.readFileSync(pdf));
+  assert.ok(files.has([...files.keys()].find((n) => n.endsWith('/Session.plist'))));
+  assert.ok(!/Notability note/.test(textOf(await call('fill_pdf', { pdf, answers: [{ page: 1, x: 72, line_y: 192, width: 468, text: 'a' }] }))), 'off unless asked');
+});
+
 test('bad requests come back as errors the model can act on', async () => {
   const pdf = await worksheet();
   const bad = async (answers, re) => {

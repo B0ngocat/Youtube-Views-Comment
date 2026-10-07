@@ -398,6 +398,17 @@ async function inkPixels(page, selector) {
     check('and none of it anywhere else on the page', counts.outside === 0, JSON.stringify(counts));
     check('the rest of the worksheet is untouched', counts.pages === 2 && /Question 2/.test(counts.text2), JSON.stringify(counts));
 
+    // the Notability note of the same sheet: a zip with the worksheet inside as the PDF of the note, and strokes on top
+    const [noteDl] = await Promise.all([page.waitForEvent('download'), page.click('#sheetSaveNote')]);
+    const notePath = path.join(OUT, 'worksheet.note');
+    await noteDl.saveAs(notePath);
+    const noteBytes = fs.readFileSync(notePath);
+    const entries = require('./zip-reader').readZip(noteBytes);
+    const pdfEntry = [...entries.keys()].find((n) => /\/PDFs\/.+\.pdf$/.test(n));
+    check('Save for Notability gives a note named after the worksheet', noteDl.suggestedFilename() === 'worksheet.note', noteDl.suggestedFilename());
+    check('the note carries the worksheet as its PDF, all the pages of it', !!pdfEntry && Buffer.compare(Buffer.from(entries.get(pdfEntry)), fs.readFileSync(pdfPath)) === 0);
+    check('and the answer as strokes in Session.plist', entries.has([...entries.keys()].find((n) => n.endsWith('/Session.plist'))) && noteBytes.length > 3000);
+
     // the box can be moved by dragging it, and the ink goes with it
     const before = await page.evaluate(() => ({ x: window.HW_SHEET.boxes[0].x, y: window.HW_SHEET.boxes[0].y }));
     const [mx, my] = at(300, 170);
