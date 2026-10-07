@@ -296,7 +296,7 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
     tops.push(page);
     const b = bands[page];
     for (const [x, y] of c.pts) {
-      const px = (x + 12.8) * b.scale - b.xoff;
+      const px = (x + 12.8) * b.scale - b.xoff - N.PDF_SHIFT_X;
       const py = (y - b.top) * b.scale;
       assert.ok(px >= 72 - 3 && px <= PDF_PAGES[page].w - 36 && py >= 0 && py <= PDF_PAGES[page].h, 'a point is on its page');
     }
@@ -306,7 +306,7 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
   const box = items[0].box;
   for (const c of curves.filter((_, i) => tops[i] === 0)) {
     for (const [x, y] of c.pts) {
-      const px = (x + 12.8) * bands[0].scale - bands[0].xoff;
+      const px = (x + 12.8) * bands[0].scale - bands[0].xoff - N.PDF_SHIFT_X;
       const py = y * bands[0].scale;
       assert.ok(px > box.x - 4 && px < box.x + box.w + 4, 'inside the box across: ' + px);
       assert.ok(py > box.y - 4 && py < box.y + box.h + 4, 'inside the box down: ' + py);

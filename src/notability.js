@@ -430,6 +430,7 @@
   // the class name of the PDF object, and the exact left/top offsets (PDF_X0, PDF_Y0), which the calibration note is for.
   const PDF_X0 = -12.8; // where the PDF's left edge is, in stroke x (a blank page's edge is 12.8 left of x = 0 too)
   const PDF_Y0 = 0; // and its top edge, relative to the top of its page's band
+  const PDF_SHIFT_X = -1.5; // points: measured with the colour ladder note on an iPad, pen lines came out 1.5 pt right of the PDF (up and down was exact)
 
   /**
    * Where each PDF page is on the canvas. pages: [{w, h}] in points. Returns [{top, height, scale, xoff}]: the page's band starts
@@ -451,7 +452,7 @@
   /** A point on page `page` (0-based), in points from the page's top left corner, as a point of the canvas. */
   function pdfPoint(bands, page, x, y) {
     const b = bands[page];
-    return [(x + b.xoff) / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
+    return [(x + b.xoff + PDF_SHIFT_X) / b.scale + PDF_X0, b.top + PDF_Y0 + y / b.scale];
   }
 
   /** The objects Session.plist needs to show a PDF, to go after the 45 a blank note has; first is at index `at`. */
@@ -769,7 +770,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationSites, LADDER, LADDER_STEP, ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationSites, PDF_SHIFT_X, LADDER, LADDER_STEP, ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
