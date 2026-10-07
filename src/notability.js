@@ -696,46 +696,49 @@
     return buildNote(curvesFromBoxes(items, pages, o), { name: o.name, when: o.when, pdf: { bytes: pdfBytes, pages } });
   }
 
-  // The calibration note: on each page, plus signs with thick grey arms printed on the PDF at SITES, and over each arm a
-  // ladder of pen lines in nine colours, STEP points apart. Whichever colour lies in the middle of the grey arm says how far
-  // the pen is from the PDF there (colour 4, black, is spot on); the five sites on a page show whether it is also scaled.
-  const LADDER = [
-    { name: 'purple', rgb: '#7b2cbf' },
-    { name: 'blue', rgb: '#1f4fff' },
-    { name: 'cyan', rgb: '#00b8d9' },
-    { name: 'green', rgb: '#1fa84f' },
-    { name: 'black', rgb: '#000000' },
-    { name: 'yellow', rgb: '#f2c200' },
-    { name: 'orange', rgb: '#ff7f00' },
-    { name: 'red', rgb: '#e00000' },
-    { name: 'pink', rgb: '#ff4fa3' },
-  ];
-  const LADDER_STEP = 1.5; // points between two lines
-  const ARM = 30; // half the length of an arm, points
-  const SITE_LABELS = ['A', 'B', 'C', 'D', 'E'];
+  // The calibration note: in each corner of each page, two rows of seven small corner pieces, numbered 1 to 7. The PDF has each
+  // piece as a grey L; the pen draws a thin L inside it, moved by (number - 4) steps of PIECE_STEP points: sideways in the
+  // first row, up or down in the second. The piece where the pen line sits in the middle of the grey says how far to move the pen.
+  const PIECE_STEP = 1.5; // points between two pieces' offsets
+  const PIECE_ARM = 20; // length of an arm of the L, points
+  const PIECE_PITCH = 34; // points between two pieces along an edge
+  const PIECE_INSET = 24; // from the page edge to the first piece's corner
+  const PIECE_ROW = 52; // points between the two rows
 
-  /** Where the plus signs go, in points from the page's top left: the four corners (an inch and a half in) and the middle. */
-  function pdfCalibrationSites(pages) {
+  /**
+   * The pieces, in points from the page's top left: {page, corner ('TL', 'TR', 'BL', 'BR'), row (0 sideways, 1 up and down),
+   * n (1 to 7), x, y (where the L's corner is), sx, sy (which way its arms point), dx, dy (how far the pen is moved)}.
+   */
+  function pdfCalibrationPieces(pages) {
     const out = [];
     pages.forEach((p, page) => {
-      const m = 108;
-      [[m, m], [p.w - m, m], [p.w / 2, p.h / 2], [m, p.h - m], [p.w - m, p.h - m]].forEach(([x, y], i) => out.push({ page, x, y, label: SITE_LABELS[i] }));
+      for (const corner of ['TL', 'TR', 'BL', 'BR']) {
+        const sx = corner[1] === 'L' ? 1 : -1; // the arms point into the page
+        const sy = corner[0] === 'T' ? 1 : -1;
+        for (let row = 0; row < 2; row++) {
+          for (let n = 1; n <= 7; n++) {
+            const x = (sx > 0 ? PIECE_INSET : p.w - PIECE_INSET) + sx * (n - 1) * PIECE_PITCH;
+            const y = (sy > 0 ? PIECE_INSET : p.h - PIECE_INSET) + sy * row * PIECE_ROW;
+            const off = (n - 4) * PIECE_STEP;
+            out.push({ page, corner, row, n, x, y, sx, sy, dx: row === 0 ? off : 0, dy: row === 1 ? off : 0 });
+          }
+        }
+      }
     });
     return out;
   }
 
-  /** Strokes for the calibration note (see above). Draw grey bars at pdfCalibrationSites on the PDF itself: scripts/make-calibration-pdf-note.js. */
-  function pdfCalibrationCurves(pages) {
+  /** Strokes for the calibration note (see above); the grey Ls are drawn on the PDF by scripts/make-calibration-pdf-note.js. */
+  function pdfCalibrationCurves(pages, ink) {
     const bands = pdfBands(pages);
+    const color = hexToRgb(ink || '#1749b3');
     const curves = [];
-    const line = (page, a, b, color) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 0.8, color });
-    for (const { page, x, y } of pdfCalibrationSites(pages)) {
-      LADDER.forEach((c, i) => {
-        const d = (i - 4) * LADDER_STEP;
-        const color = hexToRgb(c.rgb);
-        line(page, [x - ARM, y + d], [x + ARM, y + d], color); // across the horizontal arm: its colour in the middle says how far down or up
-        line(page, [x + d, y - ARM], [x + d, y + ARM], color); // along the vertical arm: left or right
-      });
+    const line = (page, a, b) => curves.push({ pts: toChain([pdfPoint(bands, page, a[0], a[1]), pdfPoint(bands, page, b[0], b[1])]), width: 0.8, color });
+    for (const c of pdfCalibrationPieces(pages)) {
+      const x = c.x + c.dx;
+      const y = c.y + c.dy;
+      line(c.page, [x, y], [x + c.sx * PIECE_ARM, y]);
+      line(c.page, [x, y], [x, y + c.sy * PIECE_ARM]);
     }
     return curves;
   }
@@ -770,7 +773,7 @@
     ];
   }
 
-  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationSites, PDF_SHIFT_X, LADDER, LADDER_STEP, ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
+  const api = { UID, Real, bplistWrite, bplistRead, makeZip, encodePng, crc32, packCurves, toChain, thin, buildNote, curvesFromLayout, noteFromLayout, curvesFromBoxes, noteFromBoxes, pdfCalibrationCurves, pdfCalibrationPieces, PDF_SHIFT_X, PIECE_ARM, pdfBands, pdfPoint, calibrationCurves, safeName, PAGE_W, PAGE_H, INNER_W };
   root.HW = root.HW || {};
   root.HW.notability = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

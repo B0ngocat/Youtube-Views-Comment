@@ -314,18 +314,23 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
   }
 });
 
-test('the PDF calibration note builds: nine coloured lines over each arm of every plus, the middle one exactly on its centre line', () => {
-  const curves = N.pdfCalibrationCurves(PDF_PAGES);
-  assert.equal(N.pdfCalibrationSites(PDF_PAGES).length, 5 * PDF_PAGES.length);
-  assert.equal(curves.length, 5 * PDF_PAGES.length * 2 * N.LADDER.length);
+test('the PDF calibration note builds: two rows of seven corner pieces in each corner, piece 4 not moved', () => {
+  const pieces = N.pdfCalibrationPieces(PDF_PAGES);
+  assert.equal(pieces.length, PDF_PAGES.length * 4 * 2 * 7);
+  const curves = N.pdfCalibrationCurves(PDF_PAGES, '#1749b3');
+  assert.equal(curves.length, pieces.length * 2);
   const note = N.buildNote(curves, { name: 'Cal', pdf: { bytes: PDF_BYTES, pages: PDF_PAGES } });
   assert.ok(readZip(note).has('Cal/Session.plist'));
-  // the middle (black) ladder line of the first site lies on the plus's centre, the ones either side are 1.5 pt away
+  for (const c of pieces) {
+    assert.equal(c.dx === 0 && c.dy === 0, c.n === 4, 'only piece 4 is unmoved');
+    assert.ok(c.dx === 0 || c.dy === 0, 'a piece moves one way only');
+    assert.ok(Math.abs((c.row === 0 ? c.dx : c.dy) - (c.n - 4) * 1.5) < 1e-9);
+    assert.ok(c.x > 0 && c.x < PDF_PAGES[c.page].w && c.y > 0 && c.y < PDF_PAGES[c.page].h, 'on the page');
+  }
+  // the unmoved piece in the top left corner: its pen line starts exactly where the PDF's L has its corner
   const bands = N.pdfBands(PDF_PAGES);
-  const site = N.pdfCalibrationSites(PDF_PAGES)[0];
-  const horizontals = curves.slice(0, N.LADDER.length * 2).filter((_, i) => i % 2 === 0);
-  const ys = horizontals.map((c) => c.pts[0][1]);
-  assert.ok(Math.abs(ys[4] - N.pdfPoint(bands, 0, site.x, site.y)[1]) < 1e-6);
-  assert.ok(Math.abs((ys[5] - ys[4]) * bands[0].scale - N.LADDER_STEP) < 1e-6);
-  assert.deepEqual([...horizontals[4].color], [0, 0, 0]);
+  const p4 = pieces.find((c) => c.page === 0 && c.corner === 'TL' && c.row === 0 && c.n === 4);
+  const first = curves[pieces.indexOf(p4) * 2];
+  const want = N.pdfPoint(bands, 0, p4.x, p4.y);
+  assert.ok(Math.abs(first.pts[0][0] - want[0]) < 1e-6 && Math.abs(first.pts[0][1] - want[1]) < 1e-6);
 });
