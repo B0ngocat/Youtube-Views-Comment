@@ -134,3 +134,48 @@ test('nearest-ink gap sees the closest approach, not the bounding box', () => {
   // letters that never overlap vertically have no nearest-ink relation
   assert.equal(A.inkBase(unit(line(0, 1.6, 1, 1.9)), unit(line(0, 0, 1, 0.4))), null);
 });
+
+// ---- words written at different sizes are brought to the writer's usual letter height ----------------------------------
+
+const Sty = require('../src/style');
+
+function fakeUnit(ch, x, h, extra) {
+  const pts = [{ x, y: 0, w: 1 }, { x: x + 0.6 * h, y: h, w: 1 }];
+  return Object.assign({ ch, strokes: [{ pts }], marks: [], entry: { x, y: 0, dx: 1, dy: 0 }, exit: { x: x + 0.6 * h, y: h, dx: 1, dy: 0 }, box: { minX: x, maxX: x + 0.6 * h, minY: 0, maxY: h } }, extra);
+}
+const fakeWord = (text, h, extra) => ({ ok: true, text, units: Array.from(text).map((ch, i) => fakeUnit(ch, i * 1.0 * h, h, extra)) });
+
+test('a word written small is brought up to the usual letter height, in place, and the others are left alone', () => {
+  const normal = Array.from({ length: 12 }, (_, i) => fakeWord('onaes', 1 + 0.01 * (i % 3)));
+  const small = fakeWord('rown', 0.8, { }); small.view = { s: 1, dy: 0 };
+  const big = fakeWord('ones', 1.25);
+  const single = fakeWord('o', 0.5, { iso: true });
+  const aligned = [...normal, small, big, single];
+  const out = Sty.sizeNormalize(aligned);
+  const h = (w) => w.units.map((u) => u.box.maxY - u.box.minY);
+  assert.equal(out[0], aligned[0], 'a word of the usual size is the same object');
+  assert.equal(out[aligned.length - 1], single, 'a single letter is left alone');
+  assert.ok(out[12] !== small && h(out[12]).every((v) => Math.abs(v - 1) < 0.08), 'the small word reaches the usual height: ' + h(out[12]));
+  assert.ok(h(out[13]).every((v) => Math.abs(v - 1) < 0.08), 'the big word comes down: ' + h(out[13]));
+  // the letters keep their places in the word: the gaps scale with the word
+  const gap = (w, i) => w.units[i + 1].box.minX - w.units[i].box.minX;
+  const f = h(out[12])[0] / 0.8;
+  assert.ok(Math.abs(gap(out[12], 0) - gap(small, 0) * f) < 1e-9, 'letters stay where they were relative to each other');
+  assert.equal(out[12].units[0].box.minX, small.units[0].box.minX, 'the word keeps its left edge');
+  // the originals are untouched, and asking again gives the same copy (the other caches rely on that)
+  assert.equal(small.units[0].box.maxY, 0.8);
+  assert.ok(Math.abs(out[12].view.s - 1 / f) < 1e-9, 'view.s still converts the units back to the guide');
+  assert.equal(Sty.sizeNormalize(aligned)[12], out[12]);
+  // a word with too little to go on, or too few words altogether, is not touched
+  assert.equal(Sty.sizeNormalize([small])[0], small);
+  const odd = fakeWord('ab', 0.3);
+  assert.equal(Sty.sizeNormalize([...normal, odd])[12], odd, 'fewer than two x-height letters');
+});
+
+test('the size correction is limited, so a tiny word is not blown up', () => {
+  const normal = Array.from({ length: 12 }, () => fakeWord('onaes', 1));
+  const tiny = fakeWord('rown', 0.2);
+  const [, , , , , , , , , , , , t] = Sty.sizeNormalize([...normal, tiny]);
+  const h = t.units[0].box.maxY - t.units[0].box.minY;
+  assert.ok(h > 0.2 * 1.2 && h < 0.2 * 1.35, 'at most 1.3 times: ' + h);
+});
