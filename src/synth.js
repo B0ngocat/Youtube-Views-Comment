@@ -364,6 +364,11 @@
             // a decimal point squeezed against its digits turns 71.45 into 7145
             if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) want = Math.max(want, 0.2);
             tx = prev.tx + want - base;
+            // a decimal point is tiny: whatever the nearest ink says, its digit neighbours keep a small gap from its own box
+            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) {
+              const gap = tx + u.box.minX * sc - (prev.tx + prev.unit.box.maxX * prev.sc);
+              if (gap < 0.12) tx += 0.12 - gap;
+            }
           } else tx = byBox;
         }
       }

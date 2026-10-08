@@ -77,6 +77,11 @@ Math input:  x^2   x_1   \frac{a}{b}   \sqrt{x} or sqrt(x)   \sqrt[3]{x} or cube
   \text{ words }   for plain words inside math.     "\ " (backslash space) for a space that stays.
   Ordinary spaces inside math are ignored, like in TeX.
 
+Digits: they are the weakest part, and now less wobbly in dense math (digits are brought to the person's usual size and baseline,
+  operators sit in the middle of a digit, a decimal point keeps a gap). Still look at every number. If digits look off, say which,
+  and the person can do the Teach tab rounds x and y, dy/dx and calculus, More numbers, and x, y and digits again: a number written
+  there is written back whole when you type it (use math kind, or plain text with the word_reuse option up).
+
 Rules
   - Look at every result before you hand it over. Digits are the weakest part: check numbers carefully.
   - If a character has no sample, the tool says so. Do not guess; tell the person.

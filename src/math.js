@@ -330,16 +330,33 @@
       return p ? drawn(p, sc) : null;
     }
 
+    // Where the middle of a digit is. An operator written on its own sits wherever the writer put it on the pad (a + at the
+    // height of the top of an x, a minus near the top of a digit), which in a line of digits looks like it is floating,
+    // so operators are centred on the middle of the writer's digits.
+    const digitHeights = [];
+    for (const d of '0123456789') for (const u of (style.byChar.get(d) || []).slice(0, 6)) if (u.strokes.length) digitHeights.push(u.box.maxY - u.box.minY);
+    digitHeights.sort((a, b) => a - b);
+    const AXIS = 0.45 * (digitHeights.length >= 3 ? digitHeights[digitHeights.length >> 1] : 1.7);
+
+    /** The box of an operator moved up or down so its middle is on the axis. */
+    function onAxis(box, sc) {
+      if (!box || !box.strokes.length) return box;
+      const m = measure(box.strokes); // the ink itself: box.down cannot say that a symbol floats wholly above the baseline
+      const shift = AXIS * sc - (m.minY + m.maxY) / 2;
+      return Math.abs(shift) < 0.02 * sc ? box : boxOf(clone(box.strokes, 0, shift, 1, 1));
+    }
+
     /** A box for a single symbol: the writer's own if they have written it, else a stand-in. */
     function symbol(c, sc, up, down) {
       const have = style.byChar.get(c);
       const mine = have && have.length >= (OPERATORS.has(c) ? 2 : 1) ? written(c, sc) : null;
-      if (mine) return mine;
+      if (mine) return OPERATORS.has(c) ? onAxis(mine, sc) : mine;
       const stand = standIn(c, sc, up, down);
       if (stand) {
-        stand.stand = true; // drawn, not the writer's own
         ctx.standIns.add(c);
-        return stand;
+        const placed = OPERATORS.has(c) ? onAxis(stand, sc) : stand;
+        placed.stand = true; // drawn, not the writer's own
+        return placed;
       }
       ctx.missing.add(c);
       return null;
