@@ -127,3 +127,15 @@ test('sqrt, cbrt and cubert typed as words become roots', () => {
   assert.ok(!lay('sqrt(x)').missing.length);
   assert.equal(lay('sqrt(x)').strokes.length, lay(String.raw`\sqrt{x}`).strokes.length, 'same picture as the TeX form');
 });
+
+test('math mode writes a word the writer recorded (dy, dx, 12) from their own strokes when asked to', () => {
+  const words = WORDS.concat(['dy', 'dx', 'dy', 'dx', 'dy', 'dx']);
+  const own = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  assert.ok(own.wholeWords.has('dy') && own.wholeWords.has('dx'));
+  const at = (t, wordReuse) => JSON.stringify(M.layout(own, t, { xh: 34, width: 700, seed: 3, messiness: 0, variation: 0, wordReuse }).strokes);
+  for (const t of ['dy', String.raw`\frac{dy}{dx}`]) {
+    assert.notEqual(at(t, 1), at(t, 0), t + ': the recorded word is used');
+    assert.equal(at(t, undefined), at(t, 0), t + ': without the setting nothing changes');
+  }
+  assert.equal(at('xz', 1), at('xz', 0), 'a word the writer did not record is built as before');
+});

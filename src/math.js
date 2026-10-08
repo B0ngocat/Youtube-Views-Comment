@@ -288,7 +288,8 @@
 
   function createEngine(style, rng, opts) {
     const messiness = opts.messiness;
-    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), rhythm: true };
+    // wordReuse: a word the writer recorded (dy, dx, x, 12) is written back from their own strokes, as in plain text
+    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
     const sample = Y.synthWord(style, 'x', G.mulberry32(1), { variation: 0, messiness: 0, usage: new Map(), missing: new Set(), rhythm: true });
     const ws = sample ? sample.strokes.flatMap((s) => s.pts.map((p) => p.w)).sort((a, b) => a - b) : [1.2];
     const PEN = ws[ws.length >> 1] || 1.2;

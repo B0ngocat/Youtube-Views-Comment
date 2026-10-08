@@ -205,6 +205,21 @@ test('Common words gives only words, each at least two letters, and no duplicate
   assert.equal(new Set(toks.map((t) => t.key)).size, toks.length);
 });
 
+test('the math practice rounds cover dy/dx, x, y and plenty of numbers, with every key different', () => {
+  const ids = ['xy', 'calc', 'nums3', 'math2'];
+  for (const id of ids) assert.ok(P.ROUNDS.find((r) => r.id === id), id + ' exists');
+  const text = (id) => P.tokens(P.ROUNDS.find((r) => r.id === id)).map((t) => t.text);
+  const calc = text('calc');
+  for (const w of ['dy', 'dx', 'dy/dx', 'dx/dt', 'f(x)']) assert.ok(calc.includes(w), w);
+  const xy = text('xy');
+  assert.ok(xy.filter((w) => w === 'x').length >= 2 && xy.filter((w) => w === 'y').length >= 2, 'x and y several times each');
+  const digits = text('nums3').join('');
+  for (const d of '0123456789') assert.ok(digits.split(d).length >= 6, 'the digit ' + d + ' at least five times');
+  assert.ok(P.tokens(P.ROUNDS.find((r) => r.id === 'math2')).every((t) => t.iso), 'the last is single letters');
+  const keys = P.ROUNDS.flatMap((r) => P.tokens(r).map((t) => t.key));
+  assert.equal(new Set(keys).size, keys.length);
+});
+
 test('a short flat run-in stroke on a single letter is trimmed off, and a letter without one is left alone', () => {
   const pt = (x, y) => ({ x, y, w: 1 });
   const line = (x0, y0, x1, y1, n) => Array.from({ length: n + 1 }, (_, i) => pt(x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n));
