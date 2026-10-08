@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be 6d88125eaa2db2e0f349322f90518b8851b1769e469591ecebef5e79e8444a84
+  sha256sum handwriting-engine.zip     # should be da3b47d22f7d212d2a98d5998aeb76eed589577c9dac6520b447a2cc2313665b
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be a8496a48d029734d751ca280a2fb5b25c068271a6ba018c1648f4218c28e4980
+  sha256sum handwriting-mcp.js     # should be 724bf7bf962214af377c3e38fb6dd72555a941aaea57b657fffc6ff21074f680
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 546483915a998ad7d9aea0e439d8e9412ac4455f3134e1c5633859eae39e9805
+  sha256 d1db5057766a36cfc24fb91d698711a5d1cc696693e04cddf23ba1cc3c713d7d
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
@@ -43,6 +43,10 @@ Tools
                        (<name>-filled.note) whose pages are the worksheet and whose answers are editable pen
                        strokes. Tell the person to open it from Files with Share, then Notability.
   write_text with format "note" makes a one page Notability note of text (editable pen strokes).
+
+Spanish: send the text with its real characters ("¿Cómo estás? Mañana, pingüino, Ángel"). á é í ó ú ü ñ, the capitals
+and ¿ ¡ all work: drawn in the person's own accents if they wrote them, otherwise as their plain letter with an accent
+over it. Do not remove the accents. Check each accent is over the right letter.
 
 Math input: x^2, \frac{a}{b}, \sqrt{x} or sqrt(x), \sqrt[3]{x} or cubert(x), \int_0^1, \sum_{i=1}^{n},
 \text{ words }, and "\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:

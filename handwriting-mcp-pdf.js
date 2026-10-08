@@ -1118,7 +1118,11 @@ module.exports = { createTools };
 
   function shrinkSingleLetters(byChar, allByChar) {
     const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
-    const kind = (ch) => (/[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null);
+    // an accented letter is sized like its plain letter
+    const kind = (c) => {
+      const ch = c.normalize('NFD')[0];
+      return /[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null;
+    };
     const per = new Map();
     const pooled = { l: { x: [], y: [] }, u: { x: [], y: [] }, d: { x: [], y: [] } };
     for (const [ch, list] of allByChar) {
@@ -1325,7 +1329,7 @@ module.exports = { createTools };
   /** Characters (from `text`) we have no sample for. */
   function missingChars(style, text) {
     const miss = new Set();
-    for (const ch of Array.from(text)) {
+    for (const ch of Array.from(text.normalize('NFC'))) {
       if (/\s/.test(ch)) continue;
       if (!style.byChar.has(normalizeChar(ch)) && !fallbackFor(style, normalizeChar(ch))) miss.add(ch);
     }
@@ -1341,11 +1345,26 @@ module.exports = { createTools };
     return CHAR_MAP[ch] || ch;
   }
 
-  /** {ch, scale} to use when there is no sample for `ch`, or null. */
+  // The marks that can be drawn over a letter the writer has not written with that mark (see synth.assemble)
+  const ACCENTS = { '\u0301': 'acute', '\u0300': 'grave', '\u0303': 'tilde', '\u0308': 'diaer', '\u0302': 'circ' };
+  // Spanish question and exclamation marks are the ordinary ones turned upside down
+  const FLIPPED = { '\u00bf': '?', '\u00a1': '!' };
+
+  /**
+   * {ch, scale, accent?, flip?} to use when there is no sample for `ch`, or null. An accented letter the writer has not written
+   * is their plain letter with an accent drawn over it (accent: 'acute' | 'grave' | 'tilde' | 'diaer' | 'circ'), an inverted
+   * ? or ! is their own ? or ! turned half way round (flip), and a capital they have not written is the small letter, larger.
+   */
   function fallbackFor(style, ch) {
     if (style.byChar.has(ch)) return { ch, scale: 1 };
+    if (FLIPPED[ch] && style.byChar.has(FLIPPED[ch])) return { ch: FLIPPED[ch], scale: 1, flip: true };
     if (ch >= 'A' && ch <= 'Z' && style.byChar.has(ch.toLowerCase())) return { ch: ch.toLowerCase(), scale: 1.55 };
-    const base = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const parts = ch.normalize('NFD');
+    if (parts.length === 2 && ACCENTS[parts[1]]) {
+      const f = fallbackFor(style, parts[0]);
+      return f && Object.assign({}, f, { accent: ACCENTS[parts[1]] });
+    }
+    const base = parts.replace(/[\u0300-\u036f]/g, '');
     if (base !== ch && base.length === 1) return fallbackFor(style, base);
     return null;
   }
@@ -1366,7 +1385,7 @@ module.exports = { createTools };
     return o.words;
   }
 
-  const api = { sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { ACCENTS, sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -1641,6 +1660,10 @@ module.exports = { createTools };
   };
 
   function defaultWidth(ch) {
+    if (ch > '\u007f') {
+      const base = ch.normalize('NFD')[0]; // an accented letter is as wide as its letter
+      if (base !== ch && base <= '\u007f') return defaultWidth(base);
+    }
     if (LOWER[ch] !== undefined) return LOWER[ch];
     if (PUNCT[ch] !== undefined) return PUNCT[ch];
     if (ch >= 'A' && ch <= 'Z') {
@@ -1655,9 +1678,10 @@ module.exports = { createTools };
   }
 
   const classCache = new Map();
-  function heightClass(ch) {
-    let c = classCache.get(ch);
+  function heightClass(ch0) {
+    let c = classCache.get(ch0);
     if (!c) {
+      const ch = ch0 > '\u007f' ? ch0.normalize('NFD')[0] : ch0; // the accent is a separate mark, so an accented letter is measured as its letter
       c = {
         asc: 'bdfhkl'.includes(ch),
         tee: ch === 't',
@@ -1666,7 +1690,7 @@ module.exports = { createTools };
         desc: 'gjpqy'.includes(ch),
         noDesc: 'abcdehiklmnorstuvwx'.includes(ch),
       };
-      classCache.set(ch, c);
+      classCache.set(ch0, c);
     }
     return c;
   }
@@ -2355,7 +2379,7 @@ module.exports = { createTools };
 
   function assignMark(units, stroke) {
     const info = strokeInfo(stroke);
-    const owners = 'ijtf:;!?"\'';
+    const owners = 'ijtf:;!?"\'áéíóúüñÁÉÍÓÚÜÑ¿¡'; // letters that carry a mark or a dot of their own
     const score = (u) => {
       const lo = u.box.minX - 0.1;
       const hi = u.box.maxX + 0.1;
@@ -2907,7 +2931,7 @@ module.exports = { createTools };
           if (nat && nat.ch === fb.ch && !nat.skipped && !list.includes(nat)) list = list.concat([nat]); // never one the writer crossed out
         }
         for (const unit of list) {
-          const cand = { unit, scale: fb.scale };
+          const cand = { unit, scale: fb.scale, accent: fb.accent, flip: fb.flip };
           let c = h.cost + transCost(prev, cand);
           if (!prev && unit.entry.mid) c += 2;
           if (j === n - 1 && unit.exit.mid) c += 0.6;
@@ -3004,6 +3028,78 @@ module.exports = { createTools };
     return { a, b, bridge };
   }
 
+  // ---- accents and upside-down marks ----------------------------------------------------
+
+  // The strokes of an accent, in units of the x-height, centred on x = 0 and sitting on y = 0.
+  const ACCENT_SHAPES = {
+    acute: [[[-0.09, 0], [0.02, 0.13], [0.13, 0.3]]],
+    grave: [[[0.09, 0], [-0.02, 0.13], [-0.13, 0.3]]],
+    circ: [[[-0.14, 0], [0, 0.26], [0.14, 0]]],
+    tilde: [Array.from({ length: 12 }, (_, i) => [-0.27 + (0.54 * i) / 11, 0.15 + 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+    diaer: [[[-0.14, 0.2], [-0.125, 0.1]], [[0.12, 0.2], [0.135, 0.1]]],
+  };
+
+  /**
+   * The strokes of an accent drawn over a letter: kind, where its middle is (cx), where it sits (y0), how big (k) and the
+   * pen width of the letter under it. A little different every time, like a hand's.
+   */
+  function accentStrokes(kind, cx, y0, k, w, rng) {
+    const dx = (rng() - 0.5) * 0.06;
+    const dy = (rng() - 0.5) * 0.05;
+    const tilt = (rng() - 0.5) * 0.25;
+    return (ACCENT_SHAPES[kind] || []).map((poly) => {
+      const pts = [];
+      const at = (p) => ({ x: cx + dx + (p[0] + tilt * p[1]) * k, y: y0 + dy + p[1] * k, w });
+      for (let i = 0; i < poly.length - 1; i++) {
+        const a = poly[i];
+        const b = poly[i + 1];
+        const n = Math.max(1, Math.ceil((Math.hypot(b[0] - a[0], b[1] - a[1]) * k) / 0.04));
+        for (let j = 0; j < n; j++) pts.push(at([a[0] + ((b[0] - a[0]) * j) / n, a[1] + ((b[1] - a[1]) * j) / n]));
+      }
+      pts.push(at(poly[poly.length - 1]));
+      return { pts, taperStart: 0.12, taperEnd: 0.12, delayed: true };
+    });
+  }
+
+  /** A stroke that is only a dot: small, and above the x-height. */
+  function isDot(piece) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    let l = Infinity;
+    let r = -Infinity;
+    for (const p of piece.pts) {
+      lo = Math.min(lo, p.y);
+      hi = Math.max(hi, p.y);
+      l = Math.min(l, p.x);
+      r = Math.max(r, p.x);
+    }
+    return hi - lo < 0.3 && r - l < 0.3 && lo > 0.9;
+  }
+
+  // a copy of a unit turned half way round about the middle of its box (an inverted ? or !), made once per unit
+  const turned = new WeakMap();
+  function turnedUnit(u) {
+    let t = turned.get(u);
+    if (t) return t;
+    const cx = (u.box.minX + u.box.maxX) / 2;
+    const cy = (u.box.minY + u.box.maxY) / 2;
+    const turn = (p) => ({ ...p, x: 2 * cx - p.x, y: 2 * cy - p.y });
+    const strokes = u.strokes.map((st) => ({ ...st, pts: st.pts.map(turn), entryMid: false, exitMid: false }));
+    const first = strokes[0].pts[0];
+    const lastPts = strokes[strokes.length - 1].pts;
+    const last = lastPts[lastPts.length - 1];
+    t = {
+      ...u,
+      strokes,
+      marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(turn) })),
+      entry: { x: first.x, y: first.y, dx: -u.entry.dx, dy: -u.entry.dy, mid: false },
+      exit: { x: last.x, y: last.y, dx: -u.exit.dx, dy: -u.exit.dy, mid: false },
+      turned: true,
+    };
+    turned.set(u, t);
+    return t;
+  }
+
   function assemble(choices, liftGap, clearance, rng) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
@@ -3011,10 +3107,10 @@ module.exports = { createTools };
     let prev = null;
     const spans = []; // where each letter's ink starts and ends, along the word
     for (const ch of choices) {
-      const u = ch.unit;
+      const u = ch.flip ? turnedUnit(ch.unit) : ch.unit;
       const sc = ch.scale;
       let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
-      const natural = !!prev && prev.sc === 1 && sc === 1 && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
+      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
       let bridged = null;
       if (!prev) tx = -u.box.minX * sc;
@@ -3042,6 +3138,7 @@ module.exports = { createTools };
       let lastStroke = null;
       for (let pi = 0; pi < u.strokes.length; pi++) {
         const piece = u.strokes[pi];
+        if (pi > 0 && ch.accent && u.ch === 'i' && isDot(piece)) continue; // the accent takes the dot's place (an i written on its own has its dot as a stroke)
         const pts = piece.pts.map(T);
         let stroke = null;
         if (pi === 0 && natural && piece.entryMid) {
@@ -3068,7 +3165,13 @@ module.exports = { createTools };
         }
         lastStroke = stroke;
       }
-      for (const m of u.marks) marks.push({ pts: m.pts.map(T), taperStart: 0, taperEnd: 0, delayed: true });
+      // an i that carries an accent has no dot: the accent takes its place
+      if (!(ch.accent && u.ch === 'i')) for (const m of u.marks) marks.push({ pts: m.pts.map(T), taperStart: 0, taperEnd: 0, delayed: true });
+      if (ch.accent) {
+        const mid = tx + ((u.box.minX + u.box.maxX) / 2) * sc;
+        const w = u.strokes[0].pts[u.strokes[0].pts.length >> 1].w;
+        for (const m of accentStrokes(ch.accent, mid, u.box.maxY * sc + (u.ch === 'i' ? 0.2 : 0.14), 1 + (sc - 1) * 0.5, w, rng)) marks.push(m);
+      }
       let lo = Infinity;
       let hi = -Infinity;
       for (const piece of u.strokes.concat(u.marks)) {
@@ -3156,7 +3259,7 @@ module.exports = { createTools };
 
   function expandChars(word) {
     const out = [];
-    for (const c of Array.from(word)) for (const d of Array.from(S.normalizeChar(c))) out.push(d);
+    for (const c of Array.from(word.normalize('NFC'))) for (const d of Array.from(S.normalizeChar(c))) out.push(d); // n + a combining tilde is the same as one n with a tilde
     return out;
   }
 
