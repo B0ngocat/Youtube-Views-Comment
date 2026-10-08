@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be d5c9de1ae9e2da2fb94e82f2ee4ec6d770c349e0e571f42e3c1da64f1dbfbc02
+  sha256sum handwriting-engine.zip     # should be b8c127d6ad71d4fd75559b9b0e247f45a857c859108f306cd874b06065076745
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be 3625d7c03938ef94eeea0ff841ad5fbef11dd7febf79e421925237db24c1ee28
+  sha256sum handwriting-mcp.js     # should be 249afa8da1be1785cc63acc593121d9d3595050cbd6f5fe145c2b08360f556af
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 d4b087439ee1e0aca8b2d405de0d87e7b10e7be3c25423870be9531741861e35
+  sha256 9eabe03781a829cafe9283e0ef5fac513a5528874ac7a033a946a5166a1aeb59
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
@@ -43,6 +43,17 @@ Tools
                        (<name>-filled.note) whose pages are the worksheet and whose answers are editable pen
                        strokes. Tell the person to open it from Files with Share, then Notability.
   write_text with format "note" makes a one page Notability note of text (editable pen strokes).
+
+Characters with no sample: write_text, write_batch and fill_pdf check every character before drawing. One the person never
+wrote (a degree sign, a macron, a skipped digit) STOPS the call with the exact characters and the words (and answer or item)
+they are in; nothing is skipped or guessed. Fix the text or have the person teach them, or pass on_missing: "fallback" to draw
+a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
+Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
+
+fill_pdf fitting: too long for a box means wrap onto more lines, then grow the box downward (max_height; default stops above the
+nearest printed text; grow: false forbids it), and only then shrink, never below min_size_ratio (default 0.8) of the size asked
+for. The report says per answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it, and fix the box or the text
+instead of handing in answers at visibly different sizes.
 
 Spanish: send the text with its real characters ("¿Cómo estás? Mañana, pingüino, Ángel"). á é í ó ú ü ñ, the capitals
 and ¿ ¡ all work: drawn in the person's own accents if they wrote them, otherwise as their plain letter with an accent

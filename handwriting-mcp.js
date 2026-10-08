@@ -185,6 +185,7 @@ const crypto = require('crypto');
 const S = __req("src/style.js");
 const R = __req("src/render.js");
 const Sheet = __req("src/sheet.js");
+const Y = __req("src/synth.js");
 const { renderPng } = __req("mcp/raster.js");
 const { isSealed, unseal } = __req("mcp/sealed.js");
 const Notability = __req("src/notability.js");
@@ -300,13 +301,73 @@ function createTools(config) {
   let counter = 0;
   const FORMATS = ['png', 'svg', 'both', 'note'];
   const formatOf = (a) => (FORMATS.includes(a.format) ? a.format : FORMATS.includes(config.format) ? config.format : 'png');
-  async function renderOne(a) {
+
+  // ---- characters the handwriting has no sample of -------------------------------------------------
+  // Everything is checked BEFORE anything is drawn. A character with no sample is never skipped or guessed: the call stops and
+  // says which characters, and which words of the text they are in, or (on_missing: "fallback") a clean drawing stands in for
+  // the ones that have one and the reply says so.
+  const fallbackOn = (a) => a.on_missing === 'fallback';
+  const shown = (ch) => (/[\p{L}\p{N}\p{P}\p{S}]/u.test(ch) ? ch : '');
+  const wordsWith = (txt, ch) => Array.from(new Set(String(txt).split(/[\s{}]+/).filter((w) => w.includes(ch)))).slice(0, 6);
+
+  /** problems: [{where, missing: [{ch, code, words, standIn}]}] -> the error that says what to do. */
+  function missingMessage(problems) {
+    const lines = ['Nothing was written: the loaded handwriting has no sample for some of the characters in the text. Characters are never skipped or guessed.'];
+    const drawable = new Set();
+    const hopeless = new Set();
+    for (const p of problems) {
+      for (const m of p.missing) {
+        (m.standIn ? drawable : hopeless).add(m.ch);
+        const w = m.words.map((x) => `"${x}"`).join(', ');
+        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}`);
+      }
+    }
+    const dl = [...drawable].filter((c) => !hopeless.has(c));
+    const hl = [...hopeless];
+    const fixes = [];
+    if (dl.length) fixes.push(`call again with on_missing: "fallback" to draw clean stand-ins for ${dl.join(' ')} (they will not be the person's own handwriting, and the reply will list them)`);
+    if (hl.length) fixes.push(`${hl.join(' ')} cannot be drawn (letters and digits cannot be faked): the person has to write them in the Teach tab, or the text has to change`);
+    fixes.push('or ask the person to teach the missing ones in the Teach tab');
+    lines.push('What to do: ' + fixes.join('; ') + '.');
+    return lines.join('\n');
+  }
+
+  /** The characters of a plain text with no sample (see Y.checkText), or [] for math (found by laying it out). */
+  const checkPlain = (style, a, kind) => (kind === 'math' ? { missing: [], substituted: [], composed: [] } : Y.checkText(style, a.text, { fallback: fallbackOn(a) }));
+
+  /** The missing characters of a math layout, with the words they are in. */
+  const mathMissing = (txt, placed) => placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(txt, ch), standIn: false }));
+
+  /** Lines for the reply about characters that were drawn rather than written, and ones composed from the writer's letters. */
+  function drawnNotes(chk, placed) {
+    const out = [];
+    const drawn = new Map();
+    for (const m of chk.substituted) drawn.set(m.ch, m);
+    for (const ch of placed.substituted || []) if (!drawn.has(ch)) drawn.set(ch, { ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') });
+    if (drawn.size) out.push('Drawn as clean stand-ins, not the person\'s own handwriting (they have no sample of them): ' + [...drawn.values()].map((m) => `${shown(m.ch) || m.code} (${m.code})`).join(' ') + '.');
+    if (chk.composed.length) out.push('Composed from the person\'s own letter with an accent or mark drawn over it: ' + chk.composed.join(' ') + '.');
+    return out;
+  }
+
+  /** Check and lay out one piece of writing. Writes nothing. Returns what renderOne needs, and the characters that block it. */
+  async function prepare(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
     const { style } = await load();
     const format = formatOf(a);
+    const kind = a.kind === 'math' ? 'math' : 'text';
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
-    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
-    const placed = Sheet.layoutBox(style, box, lookFrom(a));
+    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
+    const chk = checkPlain(style, a, kind);
+    if (chk.missing.length) return { a, format, chk, missing: chk.missing };
+    const placed = Sheet.layoutBox(style, box, Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) }));
+    const missing = kind === 'math' ? mathMissing(a.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(a.text, ch), standIn: false }));
+    return { a, format, chk, placed, missing };
+  }
+
+  async function renderOne(a, prepared) {
+    const p = prepared || (await prepare(a));
+    if (p.missing.length) throw new Error(missingMessage([{ where: '', missing: p.missing }]));
+    const { placed, format, chk } = p;
     const ink = inkOf(a);
     const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
     const pt = (v) => Math.round(v * placed.K * 100) / 100;
@@ -332,7 +393,7 @@ function createTools(config) {
       fs.writeFileSync(pngPath, png);
     }
     const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
-    if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
+    notes.push(...drawnNotes(chk, placed));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
 
@@ -348,16 +409,38 @@ function createTools(config) {
     return out;
   }
 
+  /** One line per answer: how it was fitted (as is, wrapped, box grown, letters shrunk) and anything drawn rather than written. */
+  function fitReport(label, box, placed, extra) {
+    const r1 = (v) => (Math.round(v * 10) / 10).toString();
+    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt`];
+    if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
+    const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
+    if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
+    if (placed.shrunk) bits.push(`SHRUNK from ${r1(placed.shrunk.from)} to ${r1(placed.shrunk.to)} pt (${Math.round((100 * placed.shrunk.to) / placed.shrunk.from)}% of the size asked for) because wrapping${box.growTo > box.h ? ' and growing' : ''} was not enough${stop}`);
+    if (placed.overflow) {
+      const need = Math.ceil(placed.bottom - placed.h);
+      bits.push(placed.tooWide ? 'DOES NOT FIT: a word is wider than the box. Make the box wider, shorten the text, or lower min_size_ratio' : `DOES NOT FIT: it needs about ${need} pt more height than the box may have${stop}. Make the box taller (height, max_height), shorten the text, or lower min_size_ratio`);
+    } else if (!placed.wrapped && !placed.grown && !placed.shrunk) bits.push('fits as it is');
+    return [bits.join('; '), ...extra.map((x) => '    ' + x)].join('\n');
+  }
+
   const defs = [
     {
       name: 'handwriting_status',
-      description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. Characters without a sample are skipped when writing, so check this before writing anything with unusual symbols or digits.",
-      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample.' } } },
+      description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. write_text, write_batch and fill_pdf refuse to write a character with no sample (they never skip or guess it), so check this first for anything with unusual symbols, digits or accents. Give `check` the exact text you mean to write.",
+      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample, and which of them could be drawn as a clean stand-in (on_missing: "fallback").' } } },
       async run(a) {
         const { style, words } = await load();
-        const missing = S.missingChars(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"');
+        const chk = Y.checkText(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"', { fallback: false });
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
-        return [text(`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters). ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
+        const lines = [`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters).`];
+        if (chk.missing.length) {
+          lines.push('No sample for: ' + chk.missing.map((m) => m.ch).join(' '));
+          const drawable = chk.missing.filter((m) => m.standIn);
+          if (drawable.length) lines.push(`Of those, ${drawable.map((m) => m.ch).join(' ')} can be drawn as a clean stand-in (not the person's own handwriting) with on_missing: "fallback". The rest must be taught in the Teach tab.`);
+        } else lines.push('Every character checked has a sample.');
+        if (chk.composed.length) lines.push(`Drawn from the person's own letter with an accent or mark: ${chk.composed.join(' ')}.`);
+        return [text(lines.join(' '))];
       },
     },
     {
@@ -380,6 +463,7 @@ function createTools(config) {
           left: { type: 'number', description: 'format note only: where the text starts, in note units from the left edge of the drawable area (512 wide). Default 20.' },
           top: { type: 'number', description: 'format note only: where the text starts, in note units down from the top of the page (about 705 tall). Default 40.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of (a degree sign, a macron, a symbol they never wrote). error (default): write nothing and say which characters, and which words they are in. fallback: draw a clean vector stand-in for the ones that have one (symbols and punctuation, never letters or digits) and list them in the reply; it still stops if a letter or digit is missing.' },
         },
       },
       async run(a) {
@@ -388,7 +472,7 @@ function createTools(config) {
     },
     {
       name: 'write_batch',
-      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
+      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. Every item is checked first: if any character in any item has no sample, nothing is written and the reply lists the characters and the words they are in, item by item (see on_missing). An item that fails for another reason is reported by its number and the others still come back. Use this instead of calling write_text many times.",
       inputSchema: {
         type: 'object',
         required: ['items'],
@@ -400,6 +484,7 @@ function createTools(config) {
           neatness: { type: 'number' },
           messiness: { type: 'number' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'As in write_text. Default png.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'As in write_text. With the default (error), if ANY character of ANY item has no sample the whole call stops before writing anything and lists them item by item.' },
           return_images: { type: 'boolean', description: 'Default true. False returns only the saved file paths, which is much smaller.' },
           include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
         },
@@ -408,10 +493,25 @@ function createTools(config) {
         if (!Array.isArray(a.items) || !a.items.length) throw new Error('items must be a list with at least one item.');
         if (a.items.length > 100) throw new Error('At most 100 items per call.');
         const { items, return_images: images, ...shared } = a;
-        const out = [];
+        // every item is checked and laid out before any is written, so a missing character stops the whole call with nothing half done
+        const prepared = [];
+        const problems = [];
         for (const [i, item] of a.items.entries()) {
+          const merged = Object.assign({}, shared, item);
           try {
-            out.push(...blocks(await renderOne(Object.assign({}, shared, item)), String(i + 1), a, images));
+            const p = await prepare(merged);
+            prepared.push({ merged, p });
+            if (p.missing.length) problems.push({ where: `item ${i + 1}`, missing: p.missing });
+          } catch (e) {
+            prepared.push({ merged, error: e });
+          }
+        }
+        if (problems.length) throw new Error(missingMessage(problems));
+        const out = [];
+        for (const [i, { merged, p, error }] of prepared.entries()) {
+          try {
+            if (error) throw error;
+            out.push(...blocks(await renderOne(merged, p), String(i + 1), a, images));
           } catch (e) {
             out.push(text(`${i + 1}. FAILED: ${e.message}`));
           }
@@ -437,7 +537,7 @@ function createTools(config) {
     },
     {
       name: 'fill_pdf',
-      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). An answer too long for its box is written smaller, down to 5 pt letters, and the report says so. Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write.",
+      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write.",
       inputSchema: {
         type: 'object',
         required: ['pdf', 'answers'],
@@ -448,6 +548,7 @@ function createTools(config) {
           neatness: { type: 'number' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of. error (default): write nothing, and list the characters and the words (and answers) they are in. fallback: draw a clean vector stand-in for symbols and punctuation that have one (a degree sign, a macron, brackets, ...) and list them in the report; letters and digits can never be faked, so one of those missing still stops the call.' },
           answers: {
             type: 'array',
             items: {
@@ -464,7 +565,10 @@ function createTools(config) {
                 kind: { type: 'string', enum: ['text', 'math'] },
                 letter_height_pt: { type: 'number' },
                 seed: { type: 'integer' },
-                shrink_to_fit: { type: 'boolean', description: 'Default true.' },
+                shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
+                min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
+                grow: { type: 'boolean', description: 'May the box grow downward when the text wraps onto more lines than fit? Default true. Set false when something is printed right under the box.' },
+                max_height: { type: 'number', description: 'The tallest the box may grow, in points from its top. Default: down to just above the nearest printed text under the box, or to 36 pt above the bottom edge of the page if there is none.' },
               },
             },
           },
@@ -480,9 +584,19 @@ function createTools(config) {
           const v = p.getCropBox ? p.getCropBox() : p.getMediaBox();
           return { w: v.width, h: v.height };
         });
-        const look = lookFrom(a);
+        const look = Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) });
         const items = [];
         const report = [];
+        const problems = [];
+        // where the printed text is, so a box that grows stops above it (unless the answer says how far it may grow)
+        let printed = null;
+        if (a.answers.some((x) => x && x.grow !== false && !(x.max_height > 0))) {
+          try {
+            printed = await inspectPdf(bytes, { minRule: 36 });
+          } catch {
+            printed = null; // cannot read it: growth is limited by the bottom margin of the page only
+          }
+        }
         a.answers.forEach((ans, i) => {
           const where = `answer ${i + 1}`;
           const page = Math.round(Number(ans.page)) - 1;
@@ -492,16 +606,39 @@ function createTools(config) {
           if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind: ans.kind === 'math' ? 'math' : 'text', xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: Math.round(clampNum(ans.seed, 1, 1e6, 1)), auto: ans.shrink_to_fit !== false };
+          const kind = ans.kind === 'math' ? 'math' : 'text';
+          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: Math.round(clampNum(ans.seed, 1, 1e6, 1)), auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (box.x < 0 || box.y < -1 || box.x + box.w > sizes[page].w + 1 || box.y + box.h > sizes[page].h + 1) throw new Error(`${where}: the box (x ${box.x}, y ${box.y}, ${box.w} x ${box.h}) is outside page ${page + 1}, which is ${sizes[page].w} x ${sizes[page].h} pt.`);
+          // how far down the box may grow: as far as asked, or down to the bottom margin of the page
+          let room = sizes[page].h - 36 - box.y;
+          let blocker = null;
+          if (printed && ans.grow !== false && !(ans.max_height > 0)) {
+            // printed text under the box (and overlapping it sideways) is as far as the box may grow, less a small gap
+            for (const t of (printed[page] && printed[page].text) || []) {
+              if (t.x < box.x + box.w && t.x + t.w > box.x && t.y >= box.y + box.h - 2 && t.y - 4 - box.y < room) {
+                room = t.y - 4 - box.y;
+                blocker = t;
+              }
+            }
+          }
+          box.growTo = ans.grow === false ? box.h : Math.max(box.h, Math.min(ans.max_height > 0 ? Number(ans.max_height) : room, sizes[page].h - box.y));
+          box.blocker = blocker;
+          const label = `${where} (page ${page + 1})`;
+          const chk = checkPlain(style, { text: ans.text, on_missing: a.on_missing }, kind);
+          if (chk.missing.length) {
+            problems.push({ where: label, missing: chk.missing });
+            return;
+          }
           const placed = Sheet.layoutBox(style, box, look);
+          const gone = kind === 'math' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
+          if (gone.length) {
+            problems.push({ where: label, missing: gone });
+            return;
+          }
           items.push({ box, placed });
-          const bits = [`answer ${i + 1} (page ${page + 1}): written at ${placed.xhPt.toFixed(1)} pt`];
-          if (placed.overflow) bits.push('DOES NOT FIT the box, make it bigger or shorten the text');
-          else if (placed.xhPt < (box.xhPt || Sheet.DEFAULT_XH_PT) - 0.05) bits.push('made smaller to fit');
-          if (placed.missing.length) bits.push('no sample for ' + placed.missing.join(' '));
-          report.push(bits.join('; '));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed)));
         });
+        if (problems.length) throw new Error(missingMessage(problems)); // before a single stroke is drawn
         const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');
@@ -2742,19 +2879,28 @@ module.exports = { createTools };
   }
 
   /**
-   * Write `box.text` in the writer's hand to fit `box`. Text that is too long for the box is made smaller, a little at a
-   * time (unless box.auto === false), down to MIN_XH_PT.
-   * look: the sliders of the Write tab (messiness, variation, slantDelta, wordSpacing, neatness, wordReuse).
-   * Returns {layout, K, xhPt, dx, dy, overflow, missing}: K is points per layout pixel, and the layout belongs at
-   * (box.x - dx * K, box.y - dy * K) in points.
+   * Write `box.text` in the writer's hand to fit `box`. When it does not fit at the size asked for, in this order:
+   *   1. it is wrapped onto more lines (the engine always wraps words to the box's width);
+   *   2. the box grows downward, as far as box.growTo (points, the tallest the box may become; default: it may not grow);
+   *   3. only then is the letter size reduced, a little at a time, down to box.minRatio times the size asked for (unless
+   *      box.auto === false, which never shrinks). Without minRatio it goes down to MIN_XH_PT, as the Sheet tab always did.
+   * look: the sliders of the Write tab (messiness, variation, slantDelta, wordSpacing, neatness, wordReuse), and
+   * fallbackGlyphs (draw clean stand-ins for symbols the writer has not written).
+   * Returns {layout, K, xhPt, dx, dy, overflow, missing, substituted, standIns} and what was done to make it fit:
+   *   wantXh (the size asked for), lines, wrapped (more lines than the text has), h (the box height in the end),
+   *   grown ({from, to} or null), shrunk ({from, to} or null), tooWide (a word wider than the box, which only shrinking fixes).
+   * K is points per layout pixel, and the layout belongs at (box.x - dx * K, box.y - dy * K) in points.
    */
   function layoutBox(style, box, look) {
     const text = String(box.text || '');
-    let xhPt = box.xhPt || DEFAULT_XH_PT;
+    const wantXh = box.xhPt || DEFAULT_XH_PT;
     const gen = box.kind === 'math' ? M : Y;
     const pad = 0.1 * ENGINE_XH;
-    let out = null;
-    for (let tries = 0; tries < 16; tries++) {
+    const floor = box.minRatio ? Math.max(MIN_XH_PT, wantXh * box.minRatio) : MIN_XH_PT;
+    const explicitLines = text.split('\n').length;
+
+    // the writing at one size, in a box h points tall
+    function fitAt(xhPt, h) {
       const K = xhPt / ENGINE_XH;
       const lay = gen.layout(
         style,
@@ -2771,21 +2917,40 @@ module.exports = { createTools };
       const b = inkBounds(lay.strokes);
       // A box about one line tall is an answer line: the writing sits on its bottom edge (descenders cross it, as they
       // do on paper) instead of hanging from the top with a gap above the printed line.
-      const oneLine = box.kind !== 'math' && lay.baselines.length === 1 && box.h <= 3.4 * xhPt;
+      const oneLine = box.kind !== 'math' && lay.baselines.length === 1 && h <= 3.4 * xhPt;
       let dy = moved.dy; // the layout's origin is box.y - dy * K points from the top of the page
       if (oneLine) {
         const top = b.minY - dy; // ink top, below the box top, in layout px
-        const down = box.h / K - 0.45 * ENGINE_XH - (lay.baselines[0] - dy); // to put the baseline there
+        const down = h / K - 0.45 * ENGINE_XH - (lay.baselines[0] - dy); // to put the baseline there
         dy -= Math.max(down, -top); // moving up is limited so the tops of the letters stay in the box
       }
       // where the ink ends, measured from the box's own top-left corner
       const right = (b.maxX - moved.dx) * K;
       const bottom = (b.maxY - dy) * K;
-      const overflow = bottom > box.h + (oneLine ? 0.7 * xhPt : 1) || right > box.w + 1;
-      out = { layout: lay, K, xhPt, dx: moved.dx, dy, overflow, missing: lay.missing || [] };
-      if (!overflow || box.auto === false || xhPt <= MIN_XH_PT) break;
-      xhPt = Math.max(MIN_XH_PT, xhPt * 0.93);
+      const tooWide = right > box.w + 1;
+      const tooTall = bottom > h + (oneLine ? 0.7 * xhPt : 1);
+      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [] };
     }
+
+    const maxH = Math.max(box.h, box.growTo || 0);
+    let xhPt = wantXh;
+    let out = null;
+    for (let tries = 0; tries < 40; tries++) {
+      out = fitAt(xhPt, box.h);
+      if (out.tooTall && !out.tooWide && maxH > box.h) {
+        // too tall, not too wide: let the box grow down to hold it, if it may grow that far
+        const need = Math.ceil(out.bottom + 1);
+        if (need <= maxH + 0.5) out = fitAt(xhPt, Math.max(need, box.h));
+      }
+      if (!out.overflow || box.auto === false || xhPt <= floor + 1e-9) break;
+      xhPt = Math.max(floor, xhPt * 0.93);
+    }
+    const lines = out.layout.baselines.length;
+    out.wantXh = wantXh;
+    out.lines = lines;
+    out.wrapped = box.kind !== 'math' && lines > explicitLines;
+    out.grown = out.h > box.h + 0.01 ? { from: box.h, to: out.h } : null;
+    out.shrunk = out.xhPt < wantXh - 0.05 ? { from: wantXh, to: out.xhPt } : null;
     return out;
   }
 
@@ -2855,6 +3020,7 @@ module.exports = { createTools };
   const G = typeof require !== 'undefined' ? __req("src/geometry.js") : root.HW.geometry;
   const S = typeof require !== 'undefined' ? __req("src/style.js") : root.HW.style;
   const A = typeof require !== 'undefined' ? __req("src/align.js") : root.HW.align;
+  const Gl = typeof require !== 'undefined' ? __req("src/glyphs.js") : root.HW.glyphs;
 
   const STEP = A.STEP;
   const TRIM = 0.12; // how much of each half-ligature is replaced by the bridge
@@ -2904,6 +3070,77 @@ module.exports = { createTools };
     return a.slice(0, k);
   }
 
+  // ---- drawn stand-ins ---------------------------------------------------------------------------
+
+  const penCache = new WeakMap();
+  /** The writer's usual pen width, from the strokes they recorded. */
+  function penWidth(style) {
+    if (penCache.has(style)) return penCache.get(style);
+    const ws = [];
+    for (const list of style.byChar.values()) {
+      for (const u of list.slice(0, 2)) for (const st of u.strokes) for (let i = 0; i < st.pts.length; i += 3) if (st.pts[i].w > 0) ws.push(st.pts[i].w);
+      if (ws.length > 400) break;
+    }
+    ws.sort((a, b) => a - b);
+    const w = ws.length ? ws[ws.length >> 1] : 1.2;
+    penCache.set(style, w);
+    return w;
+  }
+
+  const glyphCache = new WeakMap();
+  /**
+   * A unit (shaped like a letter cut out of a recorded word) for a character the writer has no sample of but that has a clean
+   * drawing in glyphs.js, or null. Made once per style and character. It is a drawing, not their writing, so callers say so.
+   */
+  function glyphUnit(style, ch) {
+    let cache = glyphCache.get(style);
+    if (!cache) glyphCache.set(style, (cache = new Map()));
+    if (cache.has(ch)) return cache.get(ch);
+    const polys = Gl.polys(ch);
+    let unit = null;
+    if (polys) {
+      const w = penWidth(style);
+      const strokes = polys.map((poly) => {
+        const pts = [];
+        for (let i = 0; i < poly.length - 1; i++) {
+          const a = poly[i];
+          const b = poly[i + 1];
+          const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.04));
+          for (let k = 0; k < n; k++) pts.push({ x: a[0] + ((b[0] - a[0]) * k) / n, y: a[1] + ((b[1] - a[1]) * k) / n, w });
+        }
+        const last = poly[poly.length - 1];
+        pts.push({ x: last[0], y: last[1], w });
+        return { pts: pts.length >= 5 ? G.smooth(pts, 2, ['w']) : pts, taperStart: 0.12, taperEnd: 0.12, entryMid: false, exitMid: false };
+      });
+      const all = strokes.flatMap((s) => s.pts);
+      const first = strokes[0].pts;
+      const lastPts = strokes[strokes.length - 1].pts;
+      const fd = G.dirAt(first, 0, 4);
+      const ld = G.dirAt(lastPts, lastPts.length - 1, 4);
+      unit = {
+        ch,
+        id: 'glyph:' + ch,
+        glyph: true,
+        strokes,
+        marks: [],
+        entry: { x: first[0].x, y: first[0].y, dx: fd.dx, dy: fd.dy, mid: false },
+        exit: { x: lastPts[lastPts.length - 1].x, y: lastPts[lastPts.length - 1].y, dx: ld.dx, dy: ld.dy, mid: false },
+        box: {
+          minX: Math.min(...all.map((p) => p.x)),
+          maxX: Math.max(...all.map((p) => p.x)),
+          minY: Math.min(...all.map((p) => p.y)),
+          maxY: Math.max(...all.map((p) => p.y)),
+        },
+        hc: 0,
+        word: { suspect: false, units: [] },
+        wid: 'glyph:' + ch,
+        idx: 0,
+      };
+    }
+    cache.set(ch, unit);
+    return unit;
+  }
+
   /** chars: array of single characters (already normalised). Returns [{unit, scale}] */
   /**
    * pins (optional): one unit id (or null) per character. A pinned character uses exactly that
@@ -2914,14 +3151,21 @@ module.exports = { createTools };
     let beams = [{ cost: 0, seq: [] }];
     const n = chars.length;
     for (let j = 0; j < n; j++) {
-      const fb = S.fallbackFor(style, chars[j]);
+      let fb = S.fallbackFor(style, chars[j]);
+      if (!fb && ctx.glyphs) {
+        const g = glyphUnit(style, chars[j]);
+        if (g) {
+          fb = { ch: chars[j], scale: 1, glyph: g };
+          ctx.substituted.add(chars[j]);
+        }
+      }
       if (!fb) {
         ctx.missing.add(chars[j]);
         continue;
       }
       const pinned = pins && pins[j] && style.unitById ? style.unitById.get(pins[j]) : null;
       const usePin = !!pinned && pinned.ch === fb.ch && !pinned.skipped;
-      const base = usePin ? [pinned] : pickSubset(style.byChar.get(fb.ch), 24, rng);
+      const base = usePin ? [pinned] : fb.glyph ? [fb.glyph] : pickSubset(style.byChar.get(fb.ch), 24, rng);
       const next = [];
       for (const h of beams) {
         const prev = h.seq.length ? h.seq[h.seq.length - 1] : null;
@@ -3090,6 +3334,7 @@ module.exports = { createTools };
     const last = lastPts[lastPts.length - 1];
     t = {
       ...u,
+      _prof: undefined, // the spacing profile is of the letter the right way up
       strokes,
       marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(turn) })),
       entry: { x: first.x, y: first.y, dx: -u.entry.dx, dy: -u.entry.dy, mid: false },
@@ -3263,6 +3508,42 @@ module.exports = { createTools };
     return out;
   }
 
+  const codeOf = (ch) => 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+
+  /**
+   * Before writing anything: which characters of `text` can the writer's handwriting not produce? Returns
+   *   missing:     [{ch, code, words, standIn}]  nothing can draw these (or, without opts.fallback, only a drawing could:
+   *                                              standIn is true then, so the caller can offer it)
+   *   substituted: [{ch, code, words}]           drawn from glyphs.js because opts.fallback is on
+   *   composed:    [ch]                          drawn from the writer's own letter and a mark (an accent, or a turned ? or !)
+   * words are the words of the text each character is in, as typed (up to 6).
+   */
+  function checkText(style, text, opts) {
+    const fallback = !!(opts && opts.fallback);
+    const missing = new Map();
+    const substituted = new Map();
+    const composed = new Set();
+    const note = (map, ch, word, standIn) => {
+      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn });
+      const e = map.get(ch);
+      if (!e.words.includes(word) && e.words.length < 6) e.words.push(word);
+    };
+    for (const word of String(text).normalize('NFC').split(/\s+/).filter(Boolean)) {
+      for (const typed of Array.from(word)) {
+        for (const c of Array.from(S.normalizeChar(typed))) {
+          const fb = S.fallbackFor(style, c);
+          if (fb) {
+            if (fb.accent || fb.flip) composed.add(typed);
+            continue;
+          }
+          const drawable = Gl.has(c);
+          note(drawable && fallback ? substituted : missing, typed, word, drawable);
+        }
+      }
+    }
+    return { missing: Array.from(missing.values()), substituted: Array.from(substituted.values()), composed: Array.from(composed) };
+  }
+
   /**
    * If the writer wrote this very word, pins for its letters so it is written back from their real strokes (the
    * letters of a recorded word fit each other, and none of them can have been cut wrongly out of a *different*
@@ -3329,7 +3610,7 @@ module.exports = { createTools };
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;
@@ -3416,12 +3697,116 @@ module.exports = { createTools };
     });
 
     const height = baselines[baselines.length - 1] + 1.5 * xh + margin * 0.5;
-    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), baselines, xh, lineHeightPx: lineH };
+    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform };
+  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit };
   root.HW = root.HW || {};
   root.HW.synth = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+},
+"src/glyphs.js": function (module, exports, __req) {
+/*
+ * Clean vector drawings for characters, as lists of polylines in engine units (x from 0, baseline 0, x-height 1, y up).
+ * They are what gets drawn when the writer has no sample of a symbol (math mode always, plain text when asked), and the
+ * writing engine turns them into hand-wobbled strokes. There are none for letters and digits: those cannot be faked, so a
+ * letter the writer never wrote is reported, not drawn.
+ */
+(function (root) {
+  'use strict';
+
+  const line = (x0, y0, x1, y1) => [[x0, y0], [x1, y1]];
+  const dot = (x, y) => [[x, y], [x + 0.01, y + 0.02]];
+  const ring = (cx, cy, r, n) => {
+    const p = [];
+    for (let i = 0; i <= n; i++) {
+      const t = (i / n) * 2 * Math.PI;
+      p.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]);
+    }
+    return p;
+  };
+  const wave = (x0, x1, y, amp) => Array.from({ length: 12 }, (_, i) => [x0 + ((x1 - x0) * i) / 11, y + amp * Math.sin((2 * Math.PI * i) / 11)]);
+  const question = () => [[[0.05, 1.4], [0.12, 1.75], [0.38, 1.75], [0.45, 1.45], [0.25, 1.1], [0.22, 0.65]], dot(0.22, 0.05)];
+
+  /**
+   * The polylines for `c`, or null when there is no drawing for it. up and down (in x-heights) are how far a bracket reaches
+   * above the baseline and below it; they only matter for brackets, bars and the integral and sum signs.
+   */
+  function polys(c, up, down) {
+    const U = up === undefined ? 1.8 : up;
+    const D = down === undefined ? 0.4 : down;
+    const mid = (U - D) / 2;
+    switch (c) {
+      case '[': return [[[0.35, U], [0, U], [0, -D], [0.35, -D]]];
+      case ']': return [[[0, U], [0.35, U], [0.35, -D], [0, -D]]];
+      case '{': return [[[0.4, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0.4, -D]]];
+      case '}': return [[[0, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0.4, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0, -D]]];
+      case '(': return [[[0.35, U], [0.08, mid + 0.4], [0.08, mid - 0.4], [0.35, -D]]];
+      case ')': return [[[0, U], [0.27, mid + 0.4], [0.27, mid - 0.4], [0, -D]]];
+      case '|': return [[[0, U], [0.02, -D]]];
+      case '<': return [[[0.55, 0.95], [0, 0.5], [0.55, 0.05]]];
+      case '>': return [[[0, 0.95], [0.55, 0.5], [0, 0.05]]];
+      case '≤': return [[[0.55, 1.0], [0, 0.6], [0.55, 0.2]], line(0, -0.05, 0.55, -0.05)];
+      case '≥': return [[[0, 1.0], [0.55, 0.6], [0, 0.2]], line(0, -0.05, 0.55, -0.05)];
+      case '=': return [line(0, 0.35, 0.7, 0.35), line(0, 0.7, 0.7, 0.7)];
+      case '≠': return [line(0, 0.3, 0.7, 0.3), line(0, 0.65, 0.7, 0.65), line(0.5, 0.95, 0.2, 0.0)];
+      case '≈': return [[[0, 0.3], [0.2, 0.45], [0.45, 0.2], [0.7, 0.35]], [[0, 0.65], [0.2, 0.8], [0.45, 0.55], [0.7, 0.7]]];
+      case '+': return [line(0, 0.5, 0.7, 0.5), line(0.35, 0.85, 0.35, 0.15)];
+      case '-': return [line(0, 0.45, 0.6, 0.45)];
+      case '±': return [line(0, 0.7, 0.7, 0.7), line(0.35, 1.05, 0.35, 0.35), line(0, 0.05, 0.7, 0.05)];
+      case '×': return [line(0, 0.15, 0.6, 0.85), line(0, 0.85, 0.6, 0.15)];
+      case '÷': return [line(0, 0.5, 0.7, 0.5), [[0.35, 0.9], [0.36, 0.92]], [[0.35, 0.1], [0.36, 0.12]]];
+      case '·': return [[[0, 0.5], [0.02, 0.52]]];
+      case '→': return [line(0, 0.5, 1.0, 0.5), [[0.75, 0.8], [1.0, 0.5], [0.75, 0.2]]];
+      case '∞': return [ring(0.5, 0.5, 1, 40).map((_, i) => {
+        const t = (i / 40) * 2 * Math.PI;
+        return [0.5 + 0.5 * Math.sin(t), 0.5 + 0.3 * Math.sin(t) * Math.cos(t)];
+      })];
+      case '∫': return [[[0.5, 1.9], [0.38, 2.0], [0.28, 1.85], [0.25, 1.4], [0.2, 0.5], [0.15, -0.2], [0.05, -0.65], [-0.08, -0.55]]];
+      case '∑': return [[[1.0, 1.5], [0.1, 1.5], [0.7, 0.5], [0.0, -0.45], [1.0, -0.45]]];
+      case '∏': return [line(0, 1.5, 1.0, 1.5), line(0.15, 1.5, 0.12, -0.45), line(0.85, 1.5, 0.88, -0.45)];
+      // marks that sit above the line
+      case '°': return [ring(0.18, 1.5, 0.17, 14)];
+      case '¯': case '‾': case 'ˉ': return [line(0.02, 1.75, 0.62, 1.75)];
+      case '′': return [line(0.12, 1.8, 0.06, 1.4)];
+      case '″': return [line(0.08, 1.8, 0.02, 1.4), line(0.26, 1.8, 0.2, 1.4)];
+      case '´': return [[[0.05, 1.45], [0.25, 1.8]]];
+      case '`': return [[[0.25, 1.45], [0.05, 1.8]]];
+      case '¨': return [dot(0.05, 1.55), dot(0.3, 1.55)];
+      case '^': return [[[0, 1.3], [0.2, 1.75], [0.4, 1.3]]];
+      case '~': case '˜': return [wave(0, 0.7, 0.6, 0.1)];
+      case '•': return [ring(0.1, 0.5, 0.09, 8)];
+      // marks on the line
+      case '_': return [line(0, -0.15, 0.7, -0.15)];
+      case '\\': return [line(0, 1.7, 0.5, -0.2)];
+      case '/': return [line(0.5, 1.7, 0, -0.2)];
+      case '*': return [line(0.35, 0.95, 0.35, 1.65), line(0.05, 1.1, 0.65, 1.5), line(0.05, 1.5, 0.65, 1.1)];
+      case '.': return [dot(0.1, 0.05)];
+      case ',': return [[[0.1, 0.05], [0.12, -0.1], [0.08, -0.3]]];
+      case ':': return [dot(0.1, 0.05), dot(0.1, 0.65)];
+      case ';': return [[[0.1, 0.05], [0.12, -0.1], [0.08, -0.3]], dot(0.1, 0.65)];
+      case '!': return [line(0.1, 1.8, 0.12, 0.5), dot(0.12, 0.05)];
+      case "'": return [line(0.1, 1.8, 0.07, 1.4)];
+      case '"': return [line(0.08, 1.8, 0.05, 1.4), line(0.26, 1.8, 0.23, 1.4)];
+      case '?': return question();
+      // the Spanish marks are the same marks turned upside down
+      case '¿': case '¡': {
+        const base = polys(c === '¿' ? '?' : '!');
+        const cx = 0.25;
+        const cy = 0.925;
+        return base.map((poly) => poly.map(([x, y]) => [2 * cx - x, 2 * cy - y]));
+      }
+      default: return null;
+    }
+  }
+
+  const has = (c) => polys(c) !== null;
+
+  const api = { polys, has };
+  root.HW = root.HW || {};
+  root.HW.glyphs = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
@@ -3439,6 +3824,7 @@ module.exports = { createTools };
 
   const G = typeof require !== 'undefined' ? __req("src/geometry.js") : root.HW.geometry;
   const Y = typeof require !== 'undefined' ? __req("src/synth.js") : root.HW.synth;
+  const Gl = typeof require !== 'undefined' ? __req("src/glyphs.js") : root.HW.glyphs;
 
   // ---- reading the input ----------------------------------------------------------------------
 
@@ -3718,7 +4104,7 @@ module.exports = { createTools };
   function createEngine(style, rng, opts) {
     const messiness = opts.messiness;
     // wordReuse: a word the writer recorded (dy, dx, x, 12) is written back from their own strokes, as in plain text
-    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
+    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
     const sample = Y.synthWord(style, 'x', G.mulberry32(1), { variation: 0, messiness: 0, usage: new Map(), missing: new Set(), rhythm: true });
     const ws = sample ? sample.strokes.flatMap((s) => s.pts.map((p) => p.w)).sort((a, b) => a - b) : [1.2];
     const PEN = ws[ws.length >> 1] || 1.2;
@@ -3752,46 +4138,10 @@ module.exports = { createTools };
 
     const line = (x0, y0, x1, y1) => [[x0, y0], [x1, y1]];
 
-    /** Hand-drawn glyphs for symbols the writer has not written. */
+    /** Hand-drawn glyphs for symbols the writer has not written (the drawings are in glyphs.js). */
     function standIn(c, sc, up, down) {
-      const U = up === undefined ? 1.8 : up;
-      const D = down === undefined ? 0.4 : down;
-      const mid = (U - D) / 2;
-      switch (c) {
-        case '[': return drawn([[[0.35, U], [0, U], [0, -D], [0.35, -D]]], sc);
-        case ']': return drawn([[[0, U], [0.35, U], [0.35, -D], [0, -D]]], sc);
-        case '{': return drawn([[[0.4, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0.4, -D]]], sc);
-        case '}': return drawn([[[0, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0.4, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0, -D]]], sc);
-        case '(': return drawn([[[0.35, U], [0.08, mid + 0.4], [0.08, mid - 0.4], [0.35, -D]]], sc);
-        case ')': return drawn([[[0, U], [0.27, mid + 0.4], [0.27, mid - 0.4], [0, -D]]], sc);
-        case '|': return drawn([[[0, U], [0.02, -D]]], sc);
-        case '<': return drawn([[[0.55, 0.95], [0, 0.5], [0.55, 0.05]]], sc);
-        case '>': return drawn([[[0, 0.95], [0.55, 0.5], [0, 0.05]]], sc);
-        case '≤': return drawn([[[0.55, 1.0], [0, 0.6], [0.55, 0.2]], line(0, -0.05, 0.55, -0.05)], sc);
-        case '≥': return drawn([[[0, 1.0], [0.55, 0.6], [0, 0.2]], line(0, -0.05, 0.55, -0.05)], sc);
-        case '=': return drawn([line(0, 0.35, 0.7, 0.35), line(0, 0.7, 0.7, 0.7)], sc);
-        case '≠': return drawn([line(0, 0.3, 0.7, 0.3), line(0, 0.65, 0.7, 0.65), line(0.5, 0.95, 0.2, 0.0)], sc);
-        case '≈': return drawn([[[0, 0.3], [0.2, 0.45], [0.45, 0.2], [0.7, 0.35]], [[0, 0.65], [0.2, 0.8], [0.45, 0.55], [0.7, 0.7]]], sc);
-        case '+': return drawn([line(0, 0.5, 0.7, 0.5), line(0.35, 0.85, 0.35, 0.15)], sc);
-        case '-': return drawn([line(0, 0.45, 0.6, 0.45)], sc);
-        case '±': return drawn([line(0, 0.7, 0.7, 0.7), line(0.35, 1.05, 0.35, 0.35), line(0, 0.05, 0.7, 0.05)], sc);
-        case '×': return drawn([line(0, 0.15, 0.6, 0.85), line(0, 0.85, 0.6, 0.15)], sc);
-        case '÷': return drawn([line(0, 0.5, 0.7, 0.5), [[0.35, 0.9], [0.36, 0.92]], [[0.35, 0.1], [0.36, 0.12]]], sc);
-        case '·': return drawn([[[0, 0.5], [0.02, 0.52]]], sc);
-        case '→': return drawn([line(0, 0.5, 1.0, 0.5), [[0.75, 0.8], [1.0, 0.5], [0.75, 0.2]]], sc);
-        case '∞': {
-          const p = [];
-          for (let i = 0; i <= 40; i++) {
-            const t = (i / 40) * 2 * Math.PI;
-            p.push([0.5 + 0.5 * Math.sin(t), 0.5 + 0.3 * Math.sin(t) * Math.cos(t)]);
-          }
-          return drawn([p], sc);
-        }
-        case '∫': return drawn([[[0.5, 1.9], [0.38, 2.0], [0.28, 1.85], [0.25, 1.4], [0.2, 0.5], [0.15, -0.2], [0.05, -0.65], [-0.08, -0.55]]], sc);
-        case '∑': return drawn([[[1.0, 1.5], [0.1, 1.5], [0.7, 0.5], [0.0, -0.45], [1.0, -0.45]]], sc);
-        case '∏': return drawn([line(0, 1.5, 1.0, 1.5), line(0.15, 1.5, 0.12, -0.45), line(0.85, 1.5, 0.88, -0.45)], sc);
-        default: return null;
-      }
+      const p = Gl.polys(c, up, down);
+      return p ? drawn(p, sc) : null;
     }
 
     /** A box for a single symbol: the writer's own if they have written it, else a stand-in. */
@@ -3802,6 +4152,7 @@ module.exports = { createTools };
       const stand = standIn(c, sc, up, down);
       if (stand) {
         stand.stand = true; // drawn, not the writer's own
+        ctx.standIns.add(c);
         return stand;
       }
       ctx.missing.add(c);
@@ -4094,6 +4445,7 @@ module.exports = { createTools };
       strokes,
       words: [],
       missing: Array.from(E.ctx.missing),
+      standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])), // symbols drawn for the writer because they have not written them
       baselines,
       xh,
       lineHeightPx: o.lineHeight * xh,
