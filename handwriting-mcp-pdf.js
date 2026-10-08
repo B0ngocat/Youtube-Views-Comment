@@ -1170,12 +1170,13 @@ module.exports = { createTools };
   /** A copy of a unit scaled by f.fx across and f.fy up, from its left edge and the baseline. The original is untouched. */
   function scaleUnit(u, f) {
     const x0 = f.x0 === undefined ? u.box.minX : f.x0; // a letter of a recorded word is scaled about the word's left edge, so it keeps its place in the word
-    const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy });
+    const up = f.dy || 0; // moved up (or down, if negative) by this much after scaling
+    const mapPt = (p) => ({ ...p, x: x0 + (p.x - x0) * f.fx, y: p.y * f.fy + up });
     const dir = (e) => {
       const dx = e.dx * f.fx;
       const dy = e.dy * f.fy;
       const l = Math.hypot(dx, dy) || 1;
-      return { ...e, x: x0 + (e.x - x0) * f.fx, y: e.y * f.fy, dx: dx / l, dy: dy / l };
+      return { ...e, x: x0 + (e.x - x0) * f.fx, y: e.y * f.fy + up, dx: dx / l, dy: dy / l };
     };
     return {
       ...u,
@@ -1183,7 +1184,7 @@ module.exports = { createTools };
       marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(mapPt) })),
       entry: dir(u.entry),
       exit: dir(u.exit),
-      box: { minX: x0 + (u.box.minX - x0) * f.fx, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy, maxY: u.box.maxY * f.fy },
+      box: { minX: x0 + (u.box.minX - x0) * f.fx, maxX: x0 + (u.box.maxX - x0) * f.fx, minY: u.box.minY * f.fy + up, maxY: u.box.maxY * f.fy + up },
     };
   }
 
@@ -1345,12 +1346,99 @@ module.exports = { createTools };
     });
   }
 
+  const digitSized = new WeakMap();
+  /**
+   * Digits cut out of recorded words come out inconsistent. Inside one number the same writer's digits differ by a third of a
+   * digit in height and by up to half a digit in where they sit (in "1234" the 1 is tall and low and the 4 sits high), where
+   * digits written on their own differ by 2%. With no letters to go by, the aligner cannot tell the writer's size and baseline
+   * from its own error, and in dense math that is what looks wobbly. So each digit cut out of a word is brought to the size
+   * and baseline that this writer's digits of that kind usually have (the height their median over all the cut ones, which also
+   * keeps the in-word size a little smaller than their single digits as it should be; the baseline from their single digits,
+   * since digits sit on it), and a decimal point is put on the baseline. Needs a dozen digits to know what usual is; mis-cut ones that are far off (under 0.9 or over 2.6 letter heights)
+   * are left alone, as they are neither measured nor mended. Copies replace the originals; `words` are the raw words, same order.
+   */
+  function digitNormalize(aligned, words) {
+    const per = new Map();
+    const all = { h: [], b: [] };
+    const isDigit = (u) => /[0-9]/.test(u.ch) && u.strokes.length > 0;
+    const plausible = (u) => {
+      const h = u.box.maxY - u.box.minY;
+      return h >= 0.9 && h <= 2.6;
+    };
+    const isoB = new Map(); // where the writer's own single digits sit: the baseline is a fact, so that is where every digit goes
+    const isoAll = [];
+    aligned.forEach((w, wi) => {
+      if (!w.ok || !words[wi] || !words[wi].iso) return;
+      for (const u of w.units) {
+        if (!isDigit(u) || !plausible(u)) continue;
+        if (!isoB.has(u.ch)) isoB.set(u.ch, []);
+        isoB.get(u.ch).push(u.box.minY);
+        isoAll.push(u.box.minY);
+      }
+    });
+    aligned.forEach((w, wi) => {
+      if (!w.ok || (words[wi] && words[wi].iso)) return;
+      for (const u of w.units) {
+        if (!isDigit(u) || !plausible(u)) continue;
+        if (!per.has(u.ch)) per.set(u.ch, { h: [], b: [] });
+        per.get(u.ch).h.push(u.box.maxY - u.box.minY);
+        per.get(u.ch).b.push(u.box.minY);
+        all.h.push(u.box.maxY - u.box.minY);
+        all.b.push(u.box.minY);
+      }
+    });
+    if (all.h.length < 12) return aligned;
+    const poolH = A.median(all.h);
+    const poolB = A.median(all.b);
+    const ref = (ch) => {
+      const r = per.get(ch);
+      const n = r ? r.h.length : 0;
+      const own = n / (n + 3); // a few examples are enough to go on, none at all falls back to digits in general
+      const h = own * (n ? A.median(r.h) : 0) + (1 - own) * poolH;
+      const mine = isoB.get(ch);
+      const b = mine ? A.median(mine) : isoAll.length >= 3 ? A.median(isoAll) : own * (n ? A.median(r.b) : 0) + (1 - own) * poolB;
+      return { h, b };
+    };
+    const q = (v) => Math.round(v * 20) / 20;
+    return aligned.map((w, wi) => {
+      if (!w.ok || (words[wi] && words[wi].iso)) return w;
+      const hasDigit = w.units.some(isDigit);
+      if (!hasDigit) return w;
+      const fixes = w.units.map((u) => {
+        if (isDigit(u) && plausible(u)) {
+          const r = ref(u.ch);
+          const fy = q(Math.min(1.3, Math.max(0.75, r.h / (u.box.maxY - u.box.minY))));
+          const dy = q(Math.min(0.45, Math.max(-0.45, r.b - u.box.minY * fy)));
+          return fy === 1 && dy === 0 ? null : { fy, dy };
+        }
+        if (u.ch === '.' && u.strokes.length) {
+          const dy = q(Math.min(0.4, Math.max(-0.4, 0.05 - u.box.minY))); // a decimal point sits on the baseline
+          return dy === 0 ? null : { fy: 1, dy };
+        }
+        return null;
+      });
+      if (fixes.every((f) => !f)) return w;
+      const sig = fixes.map((f) => (f ? f.fy + ',' + f.dy : '-')).join(' ');
+      const hit = digitSized.get(w);
+      if (hit && hit.sig === sig) return hit.word;
+      const units = w.units.map((u, i) => {
+        const f = fixes[i];
+        if (!f) return u;
+        const x0 = (u.box.minX + u.box.maxX) / 2; // grows or shrinks about its middle, so it does not run into its neighbour
+        return scaleUnit(u, { fx: f.fy, fy: f.fy, x0, dy: f.dy });
+      });
+      const word = { ...w, units };
+      digitSized.set(w, { sig, word });
+      return word;
+    });
+  }
+
   function buildStyle(rawWords) {
     const words = rawWords.filter((w) => w && w.strokes && w.strokes.length && w.text);
     const stats = computeStats(words);
     const alignedAll = alignAll(words, stats);
     const profile = alignedAll.profile;
-    const aligned = sizeNormalize(alignedAll.aligned);
+    const aligned = digitNormalize(sizeNormalize(alignedAll.aligned), words);
 
     const byChar = new Map();
     const allByChar = new Map();
@@ -1522,7 +1610,7 @@ module.exports = { createTools };
     return o.words;
   }
 
-  const api = { ACCENTS, sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { ACCENTS, sizeNormalize, digitNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -3375,6 +3463,11 @@ module.exports = { createTools };
             // a decimal point squeezed against its digits turns 71.45 into 7145
             if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) want = Math.max(want, 0.2);
             tx = prev.tx + want - base;
+            // a decimal point is tiny: whatever the nearest ink says, its digit neighbours keep a small gap from its own box
+            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) {
+              const gap = tx + u.box.minX * sc - (prev.tx + prev.unit.box.maxX * prev.sc);
+              if (gap < 0.12) tx += 0.12 - gap;
+            }
           } else tx = byBox;
         }
       }
@@ -4144,16 +4237,33 @@ module.exports = { createTools };
       return p ? drawn(p, sc) : null;
     }
 
+    // Where the middle of a digit is. An operator written on its own sits wherever the writer put it on the pad (a + at the
+    // height of the top of an x, a minus near the top of a digit), which in a line of digits looks like it is floating,
+    // so operators are centred on the middle of the writer's digits.
+    const digitHeights = [];
+    for (const d of '0123456789') for (const u of (style.byChar.get(d) || []).slice(0, 6)) if (u.strokes.length) digitHeights.push(u.box.maxY - u.box.minY);
+    digitHeights.sort((a, b) => a - b);
+    const AXIS = 0.45 * (digitHeights.length >= 3 ? digitHeights[digitHeights.length >> 1] : 1.7);
+
+    /** The box of an operator moved up or down so its middle is on the axis. */
+    function onAxis(box, sc) {
+      if (!box || !box.strokes.length) return box;
+      const m = measure(box.strokes); // the ink itself: box.down cannot say that a symbol floats wholly above the baseline
+      const shift = AXIS * sc - (m.minY + m.maxY) / 2;
+      return Math.abs(shift) < 0.02 * sc ? box : boxOf(clone(box.strokes, 0, shift, 1, 1));
+    }
+
     /** A box for a single symbol: the writer's own if they have written it, else a stand-in. */
     function symbol(c, sc, up, down) {
       const have = style.byChar.get(c);
       const mine = have && have.length >= (OPERATORS.has(c) ? 2 : 1) ? written(c, sc) : null;
-      if (mine) return mine;
+      if (mine) return OPERATORS.has(c) ? onAxis(mine, sc) : mine;
       const stand = standIn(c, sc, up, down);
       if (stand) {
-        stand.stand = true; // drawn, not the writer's own
         ctx.standIns.add(c);
-        return stand;
+        const placed = OPERATORS.has(c) ? onAxis(stand, sc) : stand;
+        placed.stand = true; // drawn, not the writer's own
+        return placed;
       }
       ctx.missing.add(c);
       return null;
