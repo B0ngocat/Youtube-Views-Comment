@@ -28,6 +28,10 @@
   };
 
   function defaultWidth(ch) {
+    if (ch > '\u007f') {
+      const base = ch.normalize('NFD')[0]; // an accented letter is as wide as its letter
+      if (base !== ch && base <= '\u007f') return defaultWidth(base);
+    }
     if (LOWER[ch] !== undefined) return LOWER[ch];
     if (PUNCT[ch] !== undefined) return PUNCT[ch];
     if (ch >= 'A' && ch <= 'Z') {
@@ -42,9 +46,10 @@
   }
 
   const classCache = new Map();
-  function heightClass(ch) {
-    let c = classCache.get(ch);
+  function heightClass(ch0) {
+    let c = classCache.get(ch0);
     if (!c) {
+      const ch = ch0 > '\u007f' ? ch0.normalize('NFD')[0] : ch0; // the accent is a separate mark, so an accented letter is measured as its letter
       c = {
         asc: 'bdfhkl'.includes(ch),
         tee: ch === 't',
@@ -53,7 +58,7 @@
         desc: 'gjpqy'.includes(ch),
         noDesc: 'abcdehiklmnorstuvwx'.includes(ch),
       };
-      classCache.set(ch, c);
+      classCache.set(ch0, c);
     }
     return c;
   }
@@ -742,7 +747,7 @@
 
   function assignMark(units, stroke) {
     const info = strokeInfo(stroke);
-    const owners = 'ijtf:;!?"\'';
+    const owners = 'ijtf:;!?"\'áéíóúüñÁÉÍÓÚÜÑ¿¡'; // letters that carry a mark or a dot of their own
     const score = (u) => {
       const lo = u.box.minX - 0.1;
       const hi = u.box.maxX + 0.1;

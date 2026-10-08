@@ -570,7 +570,11 @@
 
   function shrinkSingleLetters(byChar, allByChar) {
     const med = (a) => a.slice().sort((x, y) => x - y)[a.length >> 1];
-    const kind = (ch) => (/[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null);
+    // an accented letter is sized like its plain letter
+    const kind = (c) => {
+      const ch = c.normalize('NFD')[0];
+      return /[a-z]/.test(ch) ? 'l' : /[A-Z]/.test(ch) ? 'u' : /[0-9]/.test(ch) ? 'd' : null;
+    };
     const per = new Map();
     const pooled = { l: { x: [], y: [] }, u: { x: [], y: [] }, d: { x: [], y: [] } };
     for (const [ch, list] of allByChar) {
@@ -777,7 +781,7 @@
   /** Characters (from `text`) we have no sample for. */
   function missingChars(style, text) {
     const miss = new Set();
-    for (const ch of Array.from(text)) {
+    for (const ch of Array.from(text.normalize('NFC'))) {
       if (/\s/.test(ch)) continue;
       if (!style.byChar.has(normalizeChar(ch)) && !fallbackFor(style, normalizeChar(ch))) miss.add(ch);
     }
@@ -793,11 +797,26 @@
     return CHAR_MAP[ch] || ch;
   }
 
-  /** {ch, scale} to use when there is no sample for `ch`, or null. */
+  // The marks that can be drawn over a letter the writer has not written with that mark (see synth.assemble)
+  const ACCENTS = { '\u0301': 'acute', '\u0300': 'grave', '\u0303': 'tilde', '\u0308': 'diaer', '\u0302': 'circ' };
+  // Spanish question and exclamation marks are the ordinary ones turned upside down
+  const FLIPPED = { '\u00bf': '?', '\u00a1': '!' };
+
+  /**
+   * {ch, scale, accent?, flip?} to use when there is no sample for `ch`, or null. An accented letter the writer has not written
+   * is their plain letter with an accent drawn over it (accent: 'acute' | 'grave' | 'tilde' | 'diaer' | 'circ'), an inverted
+   * ? or ! is their own ? or ! turned half way round (flip), and a capital they have not written is the small letter, larger.
+   */
   function fallbackFor(style, ch) {
     if (style.byChar.has(ch)) return { ch, scale: 1 };
+    if (FLIPPED[ch] && style.byChar.has(FLIPPED[ch])) return { ch: FLIPPED[ch], scale: 1, flip: true };
     if (ch >= 'A' && ch <= 'Z' && style.byChar.has(ch.toLowerCase())) return { ch: ch.toLowerCase(), scale: 1.55 };
-    const base = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const parts = ch.normalize('NFD');
+    if (parts.length === 2 && ACCENTS[parts[1]]) {
+      const f = fallbackFor(style, parts[0]);
+      return f && Object.assign({}, f, { accent: ACCENTS[parts[1]] });
+    }
+    const base = parts.replace(/[\u0300-\u036f]/g, '');
     if (base !== ch && base.length === 1) return fallbackFor(style, base);
     return null;
   }
@@ -818,7 +837,7 @@
     return o.words;
   }
 
-  const api = { sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { ACCENTS, sizeNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

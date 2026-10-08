@@ -89,6 +89,20 @@ test('write_text returns a PNG of ink and saves the files', async () => {
   assert.ok(!res.result.content.some((c) => c.type === 'text' && c.text.startsWith('<svg')), 'the default is the picture only');
 });
 
+test('write_text writes Spanish with its accents, and the status check does not call them missing', async () => {
+  const text = 'mañana está qué sí pingüino Ángel';
+  const t = textOf(await call('handwriting_status', { check: text }));
+  assert.doesNotMatch(t, /No sample for/, t);
+  const plain = await call('write_text', { text: 'manana esta que si pinguino Angel', seed: 2, format: 'svg' });
+  const accented = await call('write_text', { text, seed: 2, format: 'svg' });
+  assert.ok(!accented.result.isError, textOf(accented));
+  assert.doesNotMatch(textOf(accented), /No sample for/);
+  // the accents are extra ink: the accented text has more strokes than the same words without them
+  const strokes = (r) => (textOf(r).match(/<path/g) || []).length;
+  assert.ok(strokes(accented) >= strokes(plain), 'no less ink');
+  assert.notEqual(textOf(accented), textOf(plain), 'a different picture');
+});
+
 test('write_text takes math and a colour, and another seed is another take', async () => {
   const a = await call('write_text', { text: String.raw`x = \frac{a}{b}`, kind: 'math', ink: '#ff0000', seed: 1 });
   assert.ok(a.result.content.some((c) => c.type === 'image'));

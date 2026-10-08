@@ -99,6 +99,12 @@
             <label for="text" class="lbl">Text to write</label>
             <textarea id="text" rows="5" spellcheck="false">The quick brown fox jumps over the lazy dog.
 Pack my box with five dozen liquor jugs.</textarea>
+<details class="es-keys" data-for="text">
+              <summary>Spanish letters</summary>
+              <div class="es-row" role="group" aria-label="Spanish letters"></div>
+              <button type="button" class="ghost es-caps" aria-pressed="false">Capitals</button>
+              <p class="muted small">Tap one to put it in the text above. If you have not written it yourself, the app draws your plain letter with an accent over it. To teach it your own, see the optional Spanish rounds in the Teach tab.</p>
+            </details>
             <label class="check"><input type="checkbox" id="mathMode"> Math mode</label>
             <p class="muted small" id="mathHelp" hidden>Write math like this: <code>x^2</code>, <code>x_1</code>, <code>\frac{a}{b}</code>, <code>\sqrt{x}</code>, <code>\lim_{x \to 0}</code>, <code>\int_0^1 x\,dx</code>, <code>\sum_{i=1}^{n}</code>, <code>\sqrt[3]{x}</code> (or <code>sqrt(x)</code>, <code>cubert(x)</code>). Plain text inside math: <code>\text{ so }</code>. A space that stays: <code>\ </code> (or <code>\quad</code>); ordinary spaces are ignored, as in TeX. A new line starts a new row. Symbols you have not written yet are drawn for you. Plain paper looks best.</p>
             <p class="warn" id="warn" hidden></p>
@@ -205,6 +211,12 @@ Pack my box with five dozen liquor jugs.</textarea>
             <label>Text
               <textarea id="sheetText" rows="4" spellcheck="false"></textarea>
             </label>
+            <details class="es-keys" data-for="sheetText">
+              <summary>Spanish letters</summary>
+              <div class="es-row" role="group" aria-label="Spanish letters"></div>
+              <button type="button" class="ghost es-caps" aria-pressed="false">Capitals</button>
+              <p class="muted small">Tap one to put it in the answer above. If you have not written it yourself, the app draws your plain letter with an accent over it. To teach it your own, see the optional Spanish rounds in the Teach tab.</p>
+            </details>
             <div class="row">
               <label><input type="radio" name="sheetKind" value="text" checked> Words</label>
               <label><input type="radio" name="sheetKind" value="math"> Math</label>

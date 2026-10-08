@@ -188,3 +188,9 @@ textarea { resize: vertical; font-size: 1rem; }
 .dl-btn { min-height: 40px; padding: 6px 14px; font-size: 0.9rem; background: var(--surface); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22); }
 .dl-panel { width: 320px; max-width: 100%; margin: 0; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3); }
 .dl-panel p { margin: 6px 0; }
+
+.es-keys { margin: 6px 0; }
+.es-keys summary { cursor: pointer; font-size: 0.9rem; color: var(--muted); }
+.es-keys .es-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.es-keys .es-row .chip { min-width: 40px; min-height: 40px; font-size: 1.1rem; }
+.es-keys .es-caps[aria-pressed="true"] { border-color: var(--accent); }

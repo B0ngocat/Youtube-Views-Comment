@@ -186,6 +186,19 @@ async function inkPixels(page, selector) {
   await page.waitForTimeout(300);
   const warn = await page.textContent('#warn');
   check('characters with no sample are called out', /#/.test(warn) && /7/.test(warn), warn);
+  // Spanish letters: the buttons put a letter into the text, capitals toggle, and the page still draws
+  await page.fill('#text', 'ma');
+  await page.click('#write .es-keys summary');
+  await page.click('#write .es-keys .es-row .chip:text-is("\u00f1")');
+  check('a Spanish letter button puts the letter in the text', (await page.inputValue('#text')) === 'ma\u00f1', await page.inputValue('#text'));
+  await page.click('#write .es-keys .es-caps');
+  await page.click('#write .es-keys .es-row .chip:text-is("\u00d3")');
+  await page.click('#write .es-keys .es-row .chip:text-is("\u00bf")');
+  check('Capitals switches the buttons to capitals, and the marks stay as they are', (await page.inputValue('#text')) === 'ma\u00f1\u00d3\u00bf', await page.inputValue('#text'));
+  await page.waitForTimeout(300);
+  check('the page redraws with the new text', (await page.evaluate(() => window.HW_APP.layout.strokes.length)) > 0);
+  const roundNames = await page.evaluate(() => Array.from(document.querySelectorAll('#rounds .round b')).map((b) => b.textContent));
+  check('the Spanish rounds are listed as optional', roundNames.includes('Spanish words (optional)') && roundNames.includes('Spanish letters (optional)'), roundNames.join(' | '));
   await page.fill('#text', 'the quick brown fox jumps over the lazy dog.\nPack my box with five dozen liquor jugs.');
   await page.selectOption('#paperKind', 'grid');
   await page.fill('#xh', '44').catch(() => {});

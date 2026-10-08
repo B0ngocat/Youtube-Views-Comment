@@ -117,6 +117,37 @@
       ],
     },
     {
+      id: 'es',
+      title: 'Spanish words',
+      optional: true,
+      blurb: 'Optional. Spanish words with \u00f1 and the accented vowels. Without this the app already draws your own plain letter with an accent over it. Write these to give it your own accents. Put each accent in with the word, the way you normally write it.',
+      sentences: [
+        'ma\u00f1ana ni\u00f1o a\u00f1o se\u00f1or Espa\u00f1a',
+        'est\u00e1 m\u00e1s pap\u00e1 all\u00e1 tambi\u00e9n',
+        'qu\u00e9 caf\u00e9 aqu\u00ed s\u00ed d\u00eda',
+        'c\u00f3mo adi\u00f3s canci\u00f3n tel\u00e9fono',
+        't\u00fa men\u00fa \u00fanico \u00fatil',
+        'ping\u00fcino verg\u00fcenza',
+        '\u00c1ngela \u00c9dgar \u00cd\u00f1igo \u00d3scar \u00darsula',
+      ],
+    },
+    {
+      id: 'esiso',
+      title: 'Spanish letters',
+      optional: true,
+      kind: 'letter',
+      blurb: 'Optional. Each Spanish letter on its own, with its accent, a little bigger and clearer than usual, then the upside-down ? and !. Skip any you do not need.',
+      chars: [...'\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1', ...'\u00c1\u00c9\u00cd\u00d3\u00da\u00d1', '\u00bf', '\u00a1', ...'\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1'],
+    },
+    {
+      id: 'esln',
+      title: 'Spanish lines',
+      optional: true,
+      kind: 'line',
+      blurb: 'Optional. Whole Spanish sentences on one line, at your normal speed and size.',
+      sentences: ['\u00bfC\u00f3mo est\u00e1s? Muy bien, gracias.', '\u00a1Qu\u00e9 d\u00eda tan bonito!', 'Ma\u00f1ana vamos a la escuela.'],
+    },
+    {
       id: 'more',
       title: 'More variety',
       blurb: 'Common words, so letter pairs look natural. The more you write, the less repetitive the result.',
@@ -150,6 +181,7 @@
     { title: 'Capitals', chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
     { title: 'Digits', chars: '0123456789' },
     { title: 'Punctuation', chars: '.,!?\'"-:;()/&@#%+=$*' },
+    { title: 'Spanish', chars: '\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\u00bf\u00a1' },
     { title: 'Math', chars: '×÷±<>≤≥≠≈→[]{}|∫∑∞πθΔαβλμσφω∂' },
   ];
 

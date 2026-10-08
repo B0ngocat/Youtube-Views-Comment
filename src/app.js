@@ -122,7 +122,7 @@
       const done = toks.filter((t) => keys.has(t.key)).length;
       const b = el('button', 'round' + (r === cur.r ? ' cur' : '') + (done === toks.length ? ' done' : ''));
       b.type = 'button';
-      b.append(el('b', '', round.title), el('span', '', done + ' / ' + toks.length));
+      b.append(el('b', '', round.title + (round.optional ? ' (optional)' : '')), el('span', '', done + ' / ' + toks.length));
       b.addEventListener('click', () => {
         if (commit() === 'failed') return;
         goTo(r, firstOpen(r));
@@ -635,6 +635,40 @@
     saveSettings();
     queueRender();
   });
+  // Spanish letters: buttons that put an accented letter, or an upside-down mark, into the text box they belong to
+  document.querySelectorAll('.es-keys').forEach((host) => {
+    const box = () => document.getElementById(host.dataset.for);
+    let caps = false;
+    const keys = [...'\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1', '\u00bf', '\u00a1'];
+    const row = host.querySelector('.es-row');
+    const draw = () => {
+      row.textContent = '';
+      for (const k of keys) {
+        const ch = caps && /[a-z]/i.test(k.normalize('NFD')[0]) ? k.toUpperCase() : k;
+        const b = el('button', 'chip', ch);
+        b.type = 'button';
+        b.setAttribute('aria-label', ch);
+        b.addEventListener('mousedown', (e) => e.preventDefault()); // keep the cursor in the text box
+        b.addEventListener('click', () => {
+          const t = box();
+          const a = t.selectionStart === undefined ? t.value.length : t.selectionStart;
+          const z = t.selectionEnd === undefined ? a : t.selectionEnd;
+          t.value = t.value.slice(0, a) + ch + t.value.slice(z);
+          t.focus();
+          t.setSelectionRange(a + ch.length, a + ch.length);
+          t.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        row.appendChild(b);
+      }
+    };
+    host.querySelector('.es-caps').addEventListener('click', (e) => {
+      caps = !caps;
+      e.currentTarget.setAttribute('aria-pressed', String(caps));
+      draw();
+    });
+    draw();
+  });
+
   $('#text').addEventListener('input', () => {
     clearFixes();
     saveSettings();

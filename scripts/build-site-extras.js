@@ -80,6 +80,10 @@ Tools
                        strokes. Tell the person to open it from Files with Share, then Notability.
   write_text with format "note" makes a one page Notability note of text (editable pen strokes).
 
+Spanish: send the text with its real characters ("¿Cómo estás? Mañana, pingüino, Ángel"). á é í ó ú ü ñ, the capitals
+and ¿ ¡ all work: drawn in the person's own accents if they wrote them, otherwise as their plain letter with an accent
+over it. Do not remove the accents. Check each accent is over the right letter.
+
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},
 \\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
 check numbers by looking at the picture. Write only what the owner asked for.

@@ -90,6 +90,10 @@ To use it as a web address instead of a program, add `--http 8787 --token <a sec
 
 The assistant can look at the PDF itself as well as read `inspect_pdf`, which only lists text and lines, not pictures. Check the result before you hand it in. It writes only what it is asked to write, and what you hand in is your call.
 
+## Spanish
+
+Type Spanish as you normally would: `ñ`, `á é í ó ú ü`, the capitals (`Ñ Á É Í Ó Ú`) and `¿ ¡`. It works without teaching anything extra. An accented letter you have not written is drawn as your own plain letter with the accent drawn over it in your style (an acute, a tilde, two dots; an `i` loses its dot to the accent), a capital is your small letter made larger, and `¿` and `¡` are your own `?` and `!` turned upside down. In the Write tab and in the Sheet tab's answer box, **Spanish letters** (a folded section under the text) has buttons for them, and **Capitals** switches the vowels and `ñ` to capitals, because the iPad keyboard hides them behind a long press. Your accents are drawn the same way every time in style, but they are not yet *yours*. To make them yours, do the optional rounds at the end of the Teach tab: **Spanish words** (`mañana`, `está`, `qué`...), **Spanish letters** (each one on its own, with its accent, and `¿` `¡`) and **Spanish lines**. A letter you wrote is used instead of the drawn one, the same as any other letter, and the Coverage grid has a Spanish row where you can check them and tap any that came out wrong. The MCP server writes Spanish the same way (just send the text with its accents).
+
 ## Notability notes with editable pen strokes
 
 **Save for Notability** (Write tab) makes a Notability note (`.note`) whose writing is real pen strokes, so it can be selected, moved, resized and erased in Notability like anything you drew there. A PDF can't do that, because the writing in a PDF is part of the page. On an iPad it opens the share sheet, where you pick Notability; elsewhere it downloads `handwriting.note`, which you can open from Files with Share, then Notability. The MCP server does the same with `format: "note"`.

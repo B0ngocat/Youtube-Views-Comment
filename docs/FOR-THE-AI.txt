@@ -52,6 +52,12 @@ STEP 3. Use it.
                 person wants to work on the worksheet in Notability. Tell them to open it from Files with Share, then
                 Notability. Rotated pages are not supported.
 
+Spanish: send the text with its real characters, for example  "text": "¿Cómo estás? ¡Qué día! Mañana vamos al pingüino."
+  The accents (á é í ó ú ü), ñ, the capitals (Á É Í Ó Ú Ñ) and the upside-down ¿ ¡ all work. They are drawn in the
+  person's own style if they wrote them, and otherwise as their plain letter with an accent drawn over it. Do not strip
+  the accents and do not replace them with a different spelling. Look at the result: check that every accent is over
+  the right letter and that ñ has its tilde.
+
 Math input:  x^2   x_1   \frac{a}{b}   \sqrt{x} or sqrt(x)   \sqrt[3]{x} or cubert(x)   \int_0^1   \sum_{i=1}^{n}
   \text{ words }   for plain words inside math.     "\ " (backslash space) for a space that stays.
   Ordinary spaces inside math are ignored, like in TeX.

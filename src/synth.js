@@ -85,7 +85,7 @@
           if (nat && nat.ch === fb.ch && !nat.skipped && !list.includes(nat)) list = list.concat([nat]); // never one the writer crossed out
         }
         for (const unit of list) {
-          const cand = { unit, scale: fb.scale };
+          const cand = { unit, scale: fb.scale, accent: fb.accent, flip: fb.flip };
           let c = h.cost + transCost(prev, cand);
           if (!prev && unit.entry.mid) c += 2;
           if (j === n - 1 && unit.exit.mid) c += 0.6;
@@ -182,6 +182,78 @@
     return { a, b, bridge };
   }
 
+  // ---- accents and upside-down marks ----------------------------------------------------
+
+  // The strokes of an accent, in units of the x-height, centred on x = 0 and sitting on y = 0.
+  const ACCENT_SHAPES = {
+    acute: [[[-0.09, 0], [0.02, 0.13], [0.13, 0.3]]],
+    grave: [[[0.09, 0], [-0.02, 0.13], [-0.13, 0.3]]],
+    circ: [[[-0.14, 0], [0, 0.26], [0.14, 0]]],
+    tilde: [Array.from({ length: 12 }, (_, i) => [-0.27 + (0.54 * i) / 11, 0.15 + 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+    diaer: [[[-0.14, 0.2], [-0.125, 0.1]], [[0.12, 0.2], [0.135, 0.1]]],
+  };
+
+  /**
+   * The strokes of an accent drawn over a letter: kind, where its middle is (cx), where it sits (y0), how big (k) and the
+   * pen width of the letter under it. A little different every time, like a hand's.
+   */
+  function accentStrokes(kind, cx, y0, k, w, rng) {
+    const dx = (rng() - 0.5) * 0.06;
+    const dy = (rng() - 0.5) * 0.05;
+    const tilt = (rng() - 0.5) * 0.25;
+    return (ACCENT_SHAPES[kind] || []).map((poly) => {
+      const pts = [];
+      const at = (p) => ({ x: cx + dx + (p[0] + tilt * p[1]) * k, y: y0 + dy + p[1] * k, w });
+      for (let i = 0; i < poly.length - 1; i++) {
+        const a = poly[i];
+        const b = poly[i + 1];
+        const n = Math.max(1, Math.ceil((Math.hypot(b[0] - a[0], b[1] - a[1]) * k) / 0.04));
+        for (let j = 0; j < n; j++) pts.push(at([a[0] + ((b[0] - a[0]) * j) / n, a[1] + ((b[1] - a[1]) * j) / n]));
+      }
+      pts.push(at(poly[poly.length - 1]));
+      return { pts, taperStart: 0.12, taperEnd: 0.12, delayed: true };
+    });
+  }
+
+  /** A stroke that is only a dot: small, and above the x-height. */
+  function isDot(piece) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    let l = Infinity;
+    let r = -Infinity;
+    for (const p of piece.pts) {
+      lo = Math.min(lo, p.y);
+      hi = Math.max(hi, p.y);
+      l = Math.min(l, p.x);
+      r = Math.max(r, p.x);
+    }
+    return hi - lo < 0.3 && r - l < 0.3 && lo > 0.9;
+  }
+
+  // a copy of a unit turned half way round about the middle of its box (an inverted ? or !), made once per unit
+  const turned = new WeakMap();
+  function turnedUnit(u) {
+    let t = turned.get(u);
+    if (t) return t;
+    const cx = (u.box.minX + u.box.maxX) / 2;
+    const cy = (u.box.minY + u.box.maxY) / 2;
+    const turn = (p) => ({ ...p, x: 2 * cx - p.x, y: 2 * cy - p.y });
+    const strokes = u.strokes.map((st) => ({ ...st, pts: st.pts.map(turn), entryMid: false, exitMid: false }));
+    const first = strokes[0].pts[0];
+    const lastPts = strokes[strokes.length - 1].pts;
+    const last = lastPts[lastPts.length - 1];
+    t = {
+      ...u,
+      strokes,
+      marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(turn) })),
+      entry: { x: first.x, y: first.y, dx: -u.entry.dx, dy: -u.entry.dy, mid: false },
+      exit: { x: last.x, y: last.y, dx: -u.exit.dx, dy: -u.exit.dy, mid: false },
+      turned: true,
+    };
+    turned.set(u, t);
+    return t;
+  }
+
   function assemble(choices, liftGap, clearance, rng) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
@@ -189,10 +261,10 @@
     let prev = null;
     const spans = []; // where each letter's ink starts and ends, along the word
     for (const ch of choices) {
-      const u = ch.unit;
+      const u = ch.flip ? turnedUnit(ch.unit) : ch.unit;
       const sc = ch.scale;
       let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
-      const natural = !!prev && prev.sc === 1 && sc === 1 && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
+      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
       let bridged = null;
       if (!prev) tx = -u.box.minX * sc;
@@ -220,6 +292,7 @@
       let lastStroke = null;
       for (let pi = 0; pi < u.strokes.length; pi++) {
         const piece = u.strokes[pi];
+        if (pi > 0 && ch.accent && u.ch === 'i' && isDot(piece)) continue; // the accent takes the dot's place (an i written on its own has its dot as a stroke)
         const pts = piece.pts.map(T);
         let stroke = null;
         if (pi === 0 && natural && piece.entryMid) {
@@ -246,7 +319,13 @@
         }
         lastStroke = stroke;
       }
-      for (const m of u.marks) marks.push({ pts: m.pts.map(T), taperStart: 0, taperEnd: 0, delayed: true });
+      // an i that carries an accent has no dot: the accent takes its place
+      if (!(ch.accent && u.ch === 'i')) for (const m of u.marks) marks.push({ pts: m.pts.map(T), taperStart: 0, taperEnd: 0, delayed: true });
+      if (ch.accent) {
+        const mid = tx + ((u.box.minX + u.box.maxX) / 2) * sc;
+        const w = u.strokes[0].pts[u.strokes[0].pts.length >> 1].w;
+        for (const m of accentStrokes(ch.accent, mid, u.box.maxY * sc + (u.ch === 'i' ? 0.2 : 0.14), 1 + (sc - 1) * 0.5, w, rng)) marks.push(m);
+      }
       let lo = Infinity;
       let hi = -Infinity;
       for (const piece of u.strokes.concat(u.marks)) {
@@ -334,7 +413,7 @@
 
   function expandChars(word) {
     const out = [];
-    for (const c of Array.from(word)) for (const d of Array.from(S.normalizeChar(c))) out.push(d);
+    for (const c of Array.from(word.normalize('NFC'))) for (const d of Array.from(S.normalizeChar(c))) out.push(d); // n + a combining tilde is the same as one n with a tilde
     return out;
   }
 
