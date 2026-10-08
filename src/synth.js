@@ -9,6 +9,7 @@
   const G = typeof require !== 'undefined' ? require('./geometry') : root.HW.geometry;
   const S = typeof require !== 'undefined' ? require('./style') : root.HW.style;
   const A = typeof require !== 'undefined' ? require('./align') : root.HW.align;
+  const Gl = typeof require !== 'undefined' ? require('./glyphs') : root.HW.glyphs;
 
   const STEP = A.STEP;
   const TRIM = 0.12; // how much of each half-ligature is replaced by the bridge
@@ -58,6 +59,77 @@
     return a.slice(0, k);
   }
 
+  // ---- drawn stand-ins ---------------------------------------------------------------------------
+
+  const penCache = new WeakMap();
+  /** The writer's usual pen width, from the strokes they recorded. */
+  function penWidth(style) {
+    if (penCache.has(style)) return penCache.get(style);
+    const ws = [];
+    for (const list of style.byChar.values()) {
+      for (const u of list.slice(0, 2)) for (const st of u.strokes) for (let i = 0; i < st.pts.length; i += 3) if (st.pts[i].w > 0) ws.push(st.pts[i].w);
+      if (ws.length > 400) break;
+    }
+    ws.sort((a, b) => a - b);
+    const w = ws.length ? ws[ws.length >> 1] : 1.2;
+    penCache.set(style, w);
+    return w;
+  }
+
+  const glyphCache = new WeakMap();
+  /**
+   * A unit (shaped like a letter cut out of a recorded word) for a character the writer has no sample of but that has a clean
+   * drawing in glyphs.js, or null. Made once per style and character. It is a drawing, not their writing, so callers say so.
+   */
+  function glyphUnit(style, ch) {
+    let cache = glyphCache.get(style);
+    if (!cache) glyphCache.set(style, (cache = new Map()));
+    if (cache.has(ch)) return cache.get(ch);
+    const polys = Gl.polys(ch);
+    let unit = null;
+    if (polys) {
+      const w = penWidth(style);
+      const strokes = polys.map((poly) => {
+        const pts = [];
+        for (let i = 0; i < poly.length - 1; i++) {
+          const a = poly[i];
+          const b = poly[i + 1];
+          const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.04));
+          for (let k = 0; k < n; k++) pts.push({ x: a[0] + ((b[0] - a[0]) * k) / n, y: a[1] + ((b[1] - a[1]) * k) / n, w });
+        }
+        const last = poly[poly.length - 1];
+        pts.push({ x: last[0], y: last[1], w });
+        return { pts: pts.length >= 5 ? G.smooth(pts, 2, ['w']) : pts, taperStart: 0.12, taperEnd: 0.12, entryMid: false, exitMid: false };
+      });
+      const all = strokes.flatMap((s) => s.pts);
+      const first = strokes[0].pts;
+      const lastPts = strokes[strokes.length - 1].pts;
+      const fd = G.dirAt(first, 0, 4);
+      const ld = G.dirAt(lastPts, lastPts.length - 1, 4);
+      unit = {
+        ch,
+        id: 'glyph:' + ch,
+        glyph: true,
+        strokes,
+        marks: [],
+        entry: { x: first[0].x, y: first[0].y, dx: fd.dx, dy: fd.dy, mid: false },
+        exit: { x: lastPts[lastPts.length - 1].x, y: lastPts[lastPts.length - 1].y, dx: ld.dx, dy: ld.dy, mid: false },
+        box: {
+          minX: Math.min(...all.map((p) => p.x)),
+          maxX: Math.max(...all.map((p) => p.x)),
+          minY: Math.min(...all.map((p) => p.y)),
+          maxY: Math.max(...all.map((p) => p.y)),
+        },
+        hc: 0,
+        word: { suspect: false, units: [] },
+        wid: 'glyph:' + ch,
+        idx: 0,
+      };
+    }
+    cache.set(ch, unit);
+    return unit;
+  }
+
   /** chars: array of single characters (already normalised). Returns [{unit, scale}] */
   /**
    * pins (optional): one unit id (or null) per character. A pinned character uses exactly that
@@ -68,14 +140,21 @@
     let beams = [{ cost: 0, seq: [] }];
     const n = chars.length;
     for (let j = 0; j < n; j++) {
-      const fb = S.fallbackFor(style, chars[j]);
+      let fb = S.fallbackFor(style, chars[j]);
+      if (!fb && ctx.glyphs) {
+        const g = glyphUnit(style, chars[j]);
+        if (g) {
+          fb = { ch: chars[j], scale: 1, glyph: g };
+          ctx.substituted.add(chars[j]);
+        }
+      }
       if (!fb) {
         ctx.missing.add(chars[j]);
         continue;
       }
       const pinned = pins && pins[j] && style.unitById ? style.unitById.get(pins[j]) : null;
       const usePin = !!pinned && pinned.ch === fb.ch && !pinned.skipped;
-      const base = usePin ? [pinned] : pickSubset(style.byChar.get(fb.ch), 24, rng);
+      const base = usePin ? [pinned] : fb.glyph ? [fb.glyph] : pickSubset(style.byChar.get(fb.ch), 24, rng);
       const next = [];
       for (const h of beams) {
         const prev = h.seq.length ? h.seq[h.seq.length - 1] : null;
@@ -244,6 +323,7 @@
     const last = lastPts[lastPts.length - 1];
     t = {
       ...u,
+      _prof: undefined, // the spacing profile is of the letter the right way up
       strokes,
       marks: u.marks.map((m) => ({ ...m, pts: m.pts.map(turn) })),
       entry: { x: first.x, y: first.y, dx: -u.entry.dx, dy: -u.entry.dy, mid: false },
@@ -417,6 +497,42 @@
     return out;
   }
 
+  const codeOf = (ch) => 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+
+  /**
+   * Before writing anything: which characters of `text` can the writer's handwriting not produce? Returns
+   *   missing:     [{ch, code, words, standIn}]  nothing can draw these (or, without opts.fallback, only a drawing could:
+   *                                              standIn is true then, so the caller can offer it)
+   *   substituted: [{ch, code, words}]           drawn from glyphs.js because opts.fallback is on
+   *   composed:    [ch]                          drawn from the writer's own letter and a mark (an accent, or a turned ? or !)
+   * words are the words of the text each character is in, as typed (up to 6).
+   */
+  function checkText(style, text, opts) {
+    const fallback = !!(opts && opts.fallback);
+    const missing = new Map();
+    const substituted = new Map();
+    const composed = new Set();
+    const note = (map, ch, word, standIn) => {
+      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn });
+      const e = map.get(ch);
+      if (!e.words.includes(word) && e.words.length < 6) e.words.push(word);
+    };
+    for (const word of String(text).normalize('NFC').split(/\s+/).filter(Boolean)) {
+      for (const typed of Array.from(word)) {
+        for (const c of Array.from(S.normalizeChar(typed))) {
+          const fb = S.fallbackFor(style, c);
+          if (fb) {
+            if (fb.accent || fb.flip) composed.add(typed);
+            continue;
+          }
+          const drawable = Gl.has(c);
+          note(drawable && fallback ? substituted : missing, typed, word, drawable);
+        }
+      }
+    }
+    return { missing: Array.from(missing.values()), substituted: Array.from(substituted.values()), composed: Array.from(composed) };
+  }
+
   /**
    * If the writer wrote this very word, pins for its letters so it is written back from their real strokes (the
    * letters of a recorded word fit each other, and none of them can have been cut wrongly out of a *different*
@@ -483,7 +599,7 @@
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;
@@ -570,10 +686,10 @@
     });
 
     const height = baselines[baselines.length - 1] + 1.5 * xh + margin * 0.5;
-    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), baselines, xh, lineHeightPx: lineH };
+    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform };
+  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

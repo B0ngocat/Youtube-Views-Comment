@@ -80,6 +80,17 @@ Tools
                        strokes. Tell the person to open it from Files with Share, then Notability.
   write_text with format "note" makes a one page Notability note of text (editable pen strokes).
 
+Characters with no sample: write_text, write_batch and fill_pdf check every character before drawing. One the person never
+wrote (a degree sign, a macron, a skipped digit) STOPS the call with the exact characters and the words (and answer or item)
+they are in; nothing is skipped or guessed. Fix the text or have the person teach them, or pass on_missing: "fallback" to draw
+a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
+Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
+
+fill_pdf fitting: too long for a box means wrap onto more lines, then grow the box downward (max_height; default stops above the
+nearest printed text; grow: false forbids it), and only then shrink, never below min_size_ratio (default 0.8) of the size asked
+for. The report says per answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it, and fix the box or the text
+instead of handing in answers at visibly different sizes.
+
 Spanish: send the text with its real characters ("¿Cómo estás? Mañana, pingüino, Ángel"). á é í ó ú ü ñ, the capitals
 and ¿ ¡ all work: drawn in the person's own accents if they wrote them, otherwise as their plain letter with an accent
 over it. Do not remove the accents. Check each accent is over the right letter.

@@ -150,7 +150,8 @@ test('fill_pdf writes the answers in, reports each one and leaves the original a
   const saved = t.match(/Saved (\S+)/)[1];
   assert.ok(fs.existsSync(saved));
   assert.deepEqual(fs.readFileSync(pdf), before, 'original untouched');
-  assert.match(t, /answer 3 \(page 1\): written at [\d.]+ pt; (made smaller to fit|DOES NOT FIT)/);
+  assert.match(t, /answer 3 \(page 1\): written at 9\.5 pt; WRAPPED onto \d+ lines; box GROWN downward from 20 to \d+/, 'a long answer wraps and the box grows, at the size asked for');
+  assert.match(t, /answer 1 \(page 1\): written at 9\.5 pt; fits as it is/);
   const doc = await PDFLib.PDFDocument.load(fs.readFileSync(saved));
   assert.equal(doc.getPageCount(), 2);
   for (const i of [0, 1]) assert.ok(doc.getPage(i).node.normalizedEntries().Contents.size() > 1, 'page ' + (i + 1) + ' has ink');
@@ -252,7 +253,7 @@ test('the built handwriting is cached on disk, so a second start does not build 
 });
 
 test('write_batch writes many in one call, reports a bad one by number and can skip the pictures', async () => {
-  const res = await call('write_batch', { ink: '#aa0000', items: [{ text: 'the fox' }, { text: '   ' }, { text: String.raw`x^2`, kind: 'math' }, { text: 'quick', seed: 3 }] });
+  const res = await call('write_batch', { ink: '#aa0000', items: [{ text: 'the fox' }, { text: '   ' }, { text: String.raw`x^y`, kind: 'math' }, { text: 'quick', seed: 3 }] });
   assert.ok(!res.result.isError);
   const c = res.result.content;
   assert.equal(c.filter((x) => x.type === 'image').length, 3);
@@ -271,7 +272,7 @@ test('write_batch writes many in one call, reports a bad one by number and can s
 });
 
 test('math typed the way people type it: sqrt words, \\text and spaces, through write_text', async () => {
-  const r = await call('write_text', { text: String.raw`y\text{-int}: so\ x = sqrt(x + 1)`, kind: 'math' });
+  const r = await call('write_text', { text: String.raw`y\text{-int}: so\ x = sqrt(x + y)`, kind: 'math' });
   assert.ok(!r.result.isError, textOf(r));
 });
 

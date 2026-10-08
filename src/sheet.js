@@ -33,19 +33,28 @@
   }
 
   /**
-   * Write `box.text` in the writer's hand to fit `box`. Text that is too long for the box is made smaller, a little at a
-   * time (unless box.auto === false), down to MIN_XH_PT.
-   * look: the sliders of the Write tab (messiness, variation, slantDelta, wordSpacing, neatness, wordReuse).
-   * Returns {layout, K, xhPt, dx, dy, overflow, missing}: K is points per layout pixel, and the layout belongs at
-   * (box.x - dx * K, box.y - dy * K) in points.
+   * Write `box.text` in the writer's hand to fit `box`. When it does not fit at the size asked for, in this order:
+   *   1. it is wrapped onto more lines (the engine always wraps words to the box's width);
+   *   2. the box grows downward, as far as box.growTo (points, the tallest the box may become; default: it may not grow);
+   *   3. only then is the letter size reduced, a little at a time, down to box.minRatio times the size asked for (unless
+   *      box.auto === false, which never shrinks). Without minRatio it goes down to MIN_XH_PT, as the Sheet tab always did.
+   * look: the sliders of the Write tab (messiness, variation, slantDelta, wordSpacing, neatness, wordReuse), and
+   * fallbackGlyphs (draw clean stand-ins for symbols the writer has not written).
+   * Returns {layout, K, xhPt, dx, dy, overflow, missing, substituted, standIns} and what was done to make it fit:
+   *   wantXh (the size asked for), lines, wrapped (more lines than the text has), h (the box height in the end),
+   *   grown ({from, to} or null), shrunk ({from, to} or null), tooWide (a word wider than the box, which only shrinking fixes).
+   * K is points per layout pixel, and the layout belongs at (box.x - dx * K, box.y - dy * K) in points.
    */
   function layoutBox(style, box, look) {
     const text = String(box.text || '');
-    let xhPt = box.xhPt || DEFAULT_XH_PT;
+    const wantXh = box.xhPt || DEFAULT_XH_PT;
     const gen = box.kind === 'math' ? M : Y;
     const pad = 0.1 * ENGINE_XH;
-    let out = null;
-    for (let tries = 0; tries < 16; tries++) {
+    const floor = box.minRatio ? Math.max(MIN_XH_PT, wantXh * box.minRatio) : MIN_XH_PT;
+    const explicitLines = text.split('\n').length;
+
+    // the writing at one size, in a box h points tall
+    function fitAt(xhPt, h) {
       const K = xhPt / ENGINE_XH;
       const lay = gen.layout(
         style,
@@ -62,21 +71,40 @@
       const b = inkBounds(lay.strokes);
       // A box about one line tall is an answer line: the writing sits on its bottom edge (descenders cross it, as they
       // do on paper) instead of hanging from the top with a gap above the printed line.
-      const oneLine = box.kind !== 'math' && lay.baselines.length === 1 && box.h <= 3.4 * xhPt;
+      const oneLine = box.kind !== 'math' && lay.baselines.length === 1 && h <= 3.4 * xhPt;
       let dy = moved.dy; // the layout's origin is box.y - dy * K points from the top of the page
       if (oneLine) {
         const top = b.minY - dy; // ink top, below the box top, in layout px
-        const down = box.h / K - 0.45 * ENGINE_XH - (lay.baselines[0] - dy); // to put the baseline there
+        const down = h / K - 0.45 * ENGINE_XH - (lay.baselines[0] - dy); // to put the baseline there
         dy -= Math.max(down, -top); // moving up is limited so the tops of the letters stay in the box
       }
       // where the ink ends, measured from the box's own top-left corner
       const right = (b.maxX - moved.dx) * K;
       const bottom = (b.maxY - dy) * K;
-      const overflow = bottom > box.h + (oneLine ? 0.7 * xhPt : 1) || right > box.w + 1;
-      out = { layout: lay, K, xhPt, dx: moved.dx, dy, overflow, missing: lay.missing || [] };
-      if (!overflow || box.auto === false || xhPt <= MIN_XH_PT) break;
-      xhPt = Math.max(MIN_XH_PT, xhPt * 0.93);
+      const tooWide = right > box.w + 1;
+      const tooTall = bottom > h + (oneLine ? 0.7 * xhPt : 1);
+      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [] };
     }
+
+    const maxH = Math.max(box.h, box.growTo || 0);
+    let xhPt = wantXh;
+    let out = null;
+    for (let tries = 0; tries < 40; tries++) {
+      out = fitAt(xhPt, box.h);
+      if (out.tooTall && !out.tooWide && maxH > box.h) {
+        // too tall, not too wide: let the box grow down to hold it, if it may grow that far
+        const need = Math.ceil(out.bottom + 1);
+        if (need <= maxH + 0.5) out = fitAt(xhPt, Math.max(need, box.h));
+      }
+      if (!out.overflow || box.auto === false || xhPt <= floor + 1e-9) break;
+      xhPt = Math.max(floor, xhPt * 0.93);
+    }
+    const lines = out.layout.baselines.length;
+    out.wantXh = wantXh;
+    out.lines = lines;
+    out.wrapped = box.kind !== 'math' && lines > explicitLines;
+    out.grown = out.h > box.h + 0.01 ? { from: box.h, to: out.h } : null;
+    out.shrunk = out.xhPt < wantXh - 0.05 ? { from: wantXh, to: out.xhPt } : null;
     return out;
   }
 

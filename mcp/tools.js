@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const S = require('../src/style');
 const R = require('../src/render');
 const Sheet = require('../src/sheet');
+const Y = require('../src/synth');
 const { renderPng } = require('./raster');
 const { isSealed, unseal } = require('./sealed');
 const Notability = require('../src/notability');
@@ -130,13 +131,73 @@ function createTools(config) {
   let counter = 0;
   const FORMATS = ['png', 'svg', 'both', 'note'];
   const formatOf = (a) => (FORMATS.includes(a.format) ? a.format : FORMATS.includes(config.format) ? config.format : 'png');
-  async function renderOne(a) {
+
+  // ---- characters the handwriting has no sample of -------------------------------------------------
+  // Everything is checked BEFORE anything is drawn. A character with no sample is never skipped or guessed: the call stops and
+  // says which characters, and which words of the text they are in, or (on_missing: "fallback") a clean drawing stands in for
+  // the ones that have one and the reply says so.
+  const fallbackOn = (a) => a.on_missing === 'fallback';
+  const shown = (ch) => (/[\p{L}\p{N}\p{P}\p{S}]/u.test(ch) ? ch : '');
+  const wordsWith = (txt, ch) => Array.from(new Set(String(txt).split(/[\s{}]+/).filter((w) => w.includes(ch)))).slice(0, 6);
+
+  /** problems: [{where, missing: [{ch, code, words, standIn}]}] -> the error that says what to do. */
+  function missingMessage(problems) {
+    const lines = ['Nothing was written: the loaded handwriting has no sample for some of the characters in the text. Characters are never skipped or guessed.'];
+    const drawable = new Set();
+    const hopeless = new Set();
+    for (const p of problems) {
+      for (const m of p.missing) {
+        (m.standIn ? drawable : hopeless).add(m.ch);
+        const w = m.words.map((x) => `"${x}"`).join(', ');
+        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}`);
+      }
+    }
+    const dl = [...drawable].filter((c) => !hopeless.has(c));
+    const hl = [...hopeless];
+    const fixes = [];
+    if (dl.length) fixes.push(`call again with on_missing: "fallback" to draw clean stand-ins for ${dl.join(' ')} (they will not be the person's own handwriting, and the reply will list them)`);
+    if (hl.length) fixes.push(`${hl.join(' ')} cannot be drawn (letters and digits cannot be faked): the person has to write them in the Teach tab, or the text has to change`);
+    fixes.push('or ask the person to teach the missing ones in the Teach tab');
+    lines.push('What to do: ' + fixes.join('; ') + '.');
+    return lines.join('\n');
+  }
+
+  /** The characters of a plain text with no sample (see Y.checkText), or [] for math (found by laying it out). */
+  const checkPlain = (style, a, kind) => (kind === 'math' ? { missing: [], substituted: [], composed: [] } : Y.checkText(style, a.text, { fallback: fallbackOn(a) }));
+
+  /** The missing characters of a math layout, with the words they are in. */
+  const mathMissing = (txt, placed) => placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(txt, ch), standIn: false }));
+
+  /** Lines for the reply about characters that were drawn rather than written, and ones composed from the writer's letters. */
+  function drawnNotes(chk, placed) {
+    const out = [];
+    const drawn = new Map();
+    for (const m of chk.substituted) drawn.set(m.ch, m);
+    for (const ch of placed.substituted || []) if (!drawn.has(ch)) drawn.set(ch, { ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0') });
+    if (drawn.size) out.push('Drawn as clean stand-ins, not the person\'s own handwriting (they have no sample of them): ' + [...drawn.values()].map((m) => `${shown(m.ch) || m.code} (${m.code})`).join(' ') + '.');
+    if (chk.composed.length) out.push('Composed from the person\'s own letter with an accent or mark drawn over it: ' + chk.composed.join(' ') + '.');
+    return out;
+  }
+
+  /** Check and lay out one piece of writing. Writes nothing. Returns what renderOne needs, and the characters that block it. */
+  async function prepare(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
     const { style } = await load();
     const format = formatOf(a);
+    const kind = a.kind === 'math' ? 'math' : 'text';
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
-    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind: a.kind === 'math' ? 'math' : 'text', xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
-    const placed = Sheet.layoutBox(style, box, lookFrom(a));
+    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
+    const chk = checkPlain(style, a, kind);
+    if (chk.missing.length) return { a, format, chk, missing: chk.missing };
+    const placed = Sheet.layoutBox(style, box, Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) }));
+    const missing = kind === 'math' ? mathMissing(a.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(a.text, ch), standIn: false }));
+    return { a, format, chk, placed, missing };
+  }
+
+  async function renderOne(a, prepared) {
+    const p = prepared || (await prepare(a));
+    if (p.missing.length) throw new Error(missingMessage([{ where: '', missing: p.missing }]));
+    const { placed, format, chk } = p;
     const ink = inkOf(a);
     const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
     const pt = (v) => Math.round(v * placed.K * 100) / 100;
@@ -162,7 +223,7 @@ function createTools(config) {
       fs.writeFileSync(pngPath, png);
     }
     const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
-    if (placed.missing.length) notes.push('No sample for: ' + placed.missing.join(' ') + ' (skipped or drawn as a stand-in).');
+    notes.push(...drawnNotes(chk, placed));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
 
@@ -178,16 +239,38 @@ function createTools(config) {
     return out;
   }
 
+  /** One line per answer: how it was fitted (as is, wrapped, box grown, letters shrunk) and anything drawn rather than written. */
+  function fitReport(label, box, placed, extra) {
+    const r1 = (v) => (Math.round(v * 10) / 10).toString();
+    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt`];
+    if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
+    const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
+    if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
+    if (placed.shrunk) bits.push(`SHRUNK from ${r1(placed.shrunk.from)} to ${r1(placed.shrunk.to)} pt (${Math.round((100 * placed.shrunk.to) / placed.shrunk.from)}% of the size asked for) because wrapping${box.growTo > box.h ? ' and growing' : ''} was not enough${stop}`);
+    if (placed.overflow) {
+      const need = Math.ceil(placed.bottom - placed.h);
+      bits.push(placed.tooWide ? 'DOES NOT FIT: a word is wider than the box. Make the box wider, shorten the text, or lower min_size_ratio' : `DOES NOT FIT: it needs about ${need} pt more height than the box may have${stop}. Make the box taller (height, max_height), shorten the text, or lower min_size_ratio`);
+    } else if (!placed.wrapped && !placed.grown && !placed.shrunk) bits.push('fits as it is');
+    return [bits.join('; '), ...extra.map((x) => '    ' + x)].join('\n');
+  }
+
   const defs = [
     {
       name: 'handwriting_status',
-      description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. Characters without a sample are skipped when writing, so check this before writing anything with unusual symbols or digits.",
-      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample.' } } },
+      description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. write_text, write_batch and fill_pdf refuse to write a character with no sample (they never skip or guess it), so check this first for anything with unusual symbols, digits or accents. Give `check` the exact text you mean to write.",
+      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample, and which of them could be drawn as a clean stand-in (on_missing: "fallback").' } } },
       async run(a) {
         const { style, words } = await load();
-        const missing = S.missingChars(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"');
+        const chk = Y.checkText(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"', { fallback: false });
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
-        return [text(`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters). ${missing.length ? 'No sample for: ' + missing.join(' ') : 'Every character checked has a sample.'}`)];
+        const lines = [`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters).`];
+        if (chk.missing.length) {
+          lines.push('No sample for: ' + chk.missing.map((m) => m.ch).join(' '));
+          const drawable = chk.missing.filter((m) => m.standIn);
+          if (drawable.length) lines.push(`Of those, ${drawable.map((m) => m.ch).join(' ')} can be drawn as a clean stand-in (not the person's own handwriting) with on_missing: "fallback". The rest must be taught in the Teach tab.`);
+        } else lines.push('Every character checked has a sample.');
+        if (chk.composed.length) lines.push(`Drawn from the person's own letter with an accent or mark: ${chk.composed.join(' ')}.`);
+        return [text(lines.join(' '))];
       },
     },
     {
@@ -210,6 +293,7 @@ function createTools(config) {
           left: { type: 'number', description: 'format note only: where the text starts, in note units from the left edge of the drawable area (512 wide). Default 20.' },
           top: { type: 'number', description: 'format note only: where the text starts, in note units down from the top of the page (about 705 tall). Default 40.' },
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of (a degree sign, a macron, a symbol they never wrote). error (default): write nothing and say which characters, and which words they are in. fallback: draw a clean vector stand-in for the ones that have one (symbols and punctuation, never letters or digits) and list them in the reply; it still stops if a letter or digit is missing.' },
         },
       },
       async run(a) {
@@ -218,7 +302,7 @@ function createTools(config) {
     },
     {
       name: 'write_batch',
-      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. An item that fails is reported by its number and the others still come back. Use this instead of calling write_text many times.",
+      description: "Writes several pieces of text or math in the user's handwriting in one call, so the handwriting is loaded once. Takes a list of items, each like write_text's arguments (text, kind, seed, ...); options given at the top level are the default for every item. Returns each in order (as a PNG image, SVG text, or both, see format) and saves each as a PNG and SVG. Every item is checked first: if any character in any item has no sample, nothing is written and the reply lists the characters and the words they are in, item by item (see on_missing). An item that fails for another reason is reported by its number and the others still come back. Use this instead of calling write_text many times.",
       inputSchema: {
         type: 'object',
         required: ['items'],
@@ -230,6 +314,7 @@ function createTools(config) {
           neatness: { type: 'number' },
           messiness: { type: 'number' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'As in write_text. Default png.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'As in write_text. With the default (error), if ANY character of ANY item has no sample the whole call stops before writing anything and lists them item by item.' },
           return_images: { type: 'boolean', description: 'Default true. False returns only the saved file paths, which is much smaller.' },
           include_base64: { type: 'boolean', description: 'Also give each PNG as base64 text.' },
         },
@@ -238,10 +323,25 @@ function createTools(config) {
         if (!Array.isArray(a.items) || !a.items.length) throw new Error('items must be a list with at least one item.');
         if (a.items.length > 100) throw new Error('At most 100 items per call.');
         const { items, return_images: images, ...shared } = a;
-        const out = [];
+        // every item is checked and laid out before any is written, so a missing character stops the whole call with nothing half done
+        const prepared = [];
+        const problems = [];
         for (const [i, item] of a.items.entries()) {
+          const merged = Object.assign({}, shared, item);
           try {
-            out.push(...blocks(await renderOne(Object.assign({}, shared, item)), String(i + 1), a, images));
+            const p = await prepare(merged);
+            prepared.push({ merged, p });
+            if (p.missing.length) problems.push({ where: `item ${i + 1}`, missing: p.missing });
+          } catch (e) {
+            prepared.push({ merged, error: e });
+          }
+        }
+        if (problems.length) throw new Error(missingMessage(problems));
+        const out = [];
+        for (const [i, { merged, p, error }] of prepared.entries()) {
+          try {
+            if (error) throw error;
+            out.push(...blocks(await renderOne(merged, p), String(i + 1), a, images));
           } catch (e) {
             out.push(text(`${i + 1}. FAILED: ${e.message}`));
           }
@@ -267,7 +367,7 @@ function createTools(config) {
     },
     {
       name: 'fill_pdf',
-      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). An answer too long for its box is written smaller, down to 5 pt letters, and the report says so. Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write.",
+      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write.",
       inputSchema: {
         type: 'object',
         required: ['pdf', 'answers'],
@@ -278,6 +378,7 @@ function createTools(config) {
           neatness: { type: 'number' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
+          on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of. error (default): write nothing, and list the characters and the words (and answers) they are in. fallback: draw a clean vector stand-in for symbols and punctuation that have one (a degree sign, a macron, brackets, ...) and list them in the report; letters and digits can never be faked, so one of those missing still stops the call.' },
           answers: {
             type: 'array',
             items: {
@@ -294,7 +395,10 @@ function createTools(config) {
                 kind: { type: 'string', enum: ['text', 'math'] },
                 letter_height_pt: { type: 'number' },
                 seed: { type: 'integer' },
-                shrink_to_fit: { type: 'boolean', description: 'Default true.' },
+                shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
+                min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
+                grow: { type: 'boolean', description: 'May the box grow downward when the text wraps onto more lines than fit? Default true. Set false when something is printed right under the box.' },
+                max_height: { type: 'number', description: 'The tallest the box may grow, in points from its top. Default: down to just above the nearest printed text under the box, or to 36 pt above the bottom edge of the page if there is none.' },
               },
             },
           },
@@ -310,9 +414,19 @@ function createTools(config) {
           const v = p.getCropBox ? p.getCropBox() : p.getMediaBox();
           return { w: v.width, h: v.height };
         });
-        const look = lookFrom(a);
+        const look = Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) });
         const items = [];
         const report = [];
+        const problems = [];
+        // where the printed text is, so a box that grows stops above it (unless the answer says how far it may grow)
+        let printed = null;
+        if (a.answers.some((x) => x && x.grow !== false && !(x.max_height > 0))) {
+          try {
+            printed = await inspectPdf(bytes, { minRule: 36 });
+          } catch {
+            printed = null; // cannot read it: growth is limited by the bottom margin of the page only
+          }
+        }
         a.answers.forEach((ans, i) => {
           const where = `answer ${i + 1}`;
           const page = Math.round(Number(ans.page)) - 1;
@@ -322,16 +436,39 @@ function createTools(config) {
           if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind: ans.kind === 'math' ? 'math' : 'text', xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: Math.round(clampNum(ans.seed, 1, 1e6, 1)), auto: ans.shrink_to_fit !== false };
+          const kind = ans.kind === 'math' ? 'math' : 'text';
+          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: Math.round(clampNum(ans.seed, 1, 1e6, 1)), auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (box.x < 0 || box.y < -1 || box.x + box.w > sizes[page].w + 1 || box.y + box.h > sizes[page].h + 1) throw new Error(`${where}: the box (x ${box.x}, y ${box.y}, ${box.w} x ${box.h}) is outside page ${page + 1}, which is ${sizes[page].w} x ${sizes[page].h} pt.`);
+          // how far down the box may grow: as far as asked, or down to the bottom margin of the page
+          let room = sizes[page].h - 36 - box.y;
+          let blocker = null;
+          if (printed && ans.grow !== false && !(ans.max_height > 0)) {
+            // printed text under the box (and overlapping it sideways) is as far as the box may grow, less a small gap
+            for (const t of (printed[page] && printed[page].text) || []) {
+              if (t.x < box.x + box.w && t.x + t.w > box.x && t.y >= box.y + box.h - 2 && t.y - 4 - box.y < room) {
+                room = t.y - 4 - box.y;
+                blocker = t;
+              }
+            }
+          }
+          box.growTo = ans.grow === false ? box.h : Math.max(box.h, Math.min(ans.max_height > 0 ? Number(ans.max_height) : room, sizes[page].h - box.y));
+          box.blocker = blocker;
+          const label = `${where} (page ${page + 1})`;
+          const chk = checkPlain(style, { text: ans.text, on_missing: a.on_missing }, kind);
+          if (chk.missing.length) {
+            problems.push({ where: label, missing: chk.missing });
+            return;
+          }
           const placed = Sheet.layoutBox(style, box, look);
+          const gone = kind === 'math' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
+          if (gone.length) {
+            problems.push({ where: label, missing: gone });
+            return;
+          }
           items.push({ box, placed });
-          const bits = [`answer ${i + 1} (page ${page + 1}): written at ${placed.xhPt.toFixed(1)} pt`];
-          if (placed.overflow) bits.push('DOES NOT FIT the box, make it bigger or shorten the text');
-          else if (placed.xhPt < (box.xhPt || Sheet.DEFAULT_XH_PT) - 0.05) bits.push('made smaller to fit');
-          if (placed.missing.length) bits.push('no sample for ' + placed.missing.join(' '));
-          report.push(bits.join('; '));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed)));
         });
+        if (problems.length) throw new Error(missingMessage(problems)); // before a single stroke is drawn
         const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');

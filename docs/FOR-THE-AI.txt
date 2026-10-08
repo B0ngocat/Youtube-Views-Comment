@@ -52,6 +52,21 @@ STEP 3. Use it.
                 person wants to work on the worksheet in Notability. Tell them to open it from Files with Share, then
                 Notability. Rotated pages are not supported.
 
+Characters with no sample: every character is checked BEFORE anything is drawn. If the person never wrote one (a degree sign,
+  a macron, a digit they skipped), write_text, write_batch and fill_pdf STOP and tell you which characters and which words (and
+  which answer or item) contain them. Nothing is skipped or guessed. Then either ask the person to teach them, change the text,
+  or call again with  "on_missing": "fallback"  to draw a clean stand-in for symbols and punctuation that have one (the reply lists
+  them: they are NOT the person's handwriting, so tell the person). Letters and digits can never be faked. handwriting_status
+  with  "check": "<your text>"  tells you in advance.
+
+Fitting an answer to its box (fill_pdf): too long for the box means, in this order: it wraps onto more lines inside the width,
+  the box grows downward (up to "max_height"; by default it stops above the nearest printed text under the box; "grow": false
+  forbids it), and only as a last resort are the letters made smaller, never below "min_size_ratio" (default 0.8) of the size you
+  asked for. The report says for every answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it. If it says
+  DOES NOT FIT, or SHRUNK to a size that looks different from the other answers on the page, make the box taller or wider or
+  shorten the text; do not hand in a page where answers are at visibly different sizes. Wrapped lines do not follow the printed
+  ruled lines under the box, so look at the page.
+
 Spanish: send the text with its real characters, for example  "text": "¿Cómo estás? ¡Qué día! Mañana vamos al pingüino."
   The accents (á é í ó ú ü), ñ, the capitals (Á É Í Ó Ú Ñ) and the upside-down ¿ ¡ all work. They are drawn in the
   person's own style if they wrote them, and otherwise as their plain letter with an accent drawn over it. Do not strip

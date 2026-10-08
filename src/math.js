@@ -10,6 +10,7 @@
 
   const G = typeof require !== 'undefined' ? require('./geometry') : root.HW.geometry;
   const Y = typeof require !== 'undefined' ? require('./synth') : root.HW.synth;
+  const Gl = typeof require !== 'undefined' ? require('./glyphs') : root.HW.glyphs;
 
   // ---- reading the input ----------------------------------------------------------------------
 
@@ -289,7 +290,7 @@
   function createEngine(style, rng, opts) {
     const messiness = opts.messiness;
     // wordReuse: a word the writer recorded (dy, dx, x, 12) is written back from their own strokes, as in plain text
-    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
+    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
     const sample = Y.synthWord(style, 'x', G.mulberry32(1), { variation: 0, messiness: 0, usage: new Map(), missing: new Set(), rhythm: true });
     const ws = sample ? sample.strokes.flatMap((s) => s.pts.map((p) => p.w)).sort((a, b) => a - b) : [1.2];
     const PEN = ws[ws.length >> 1] || 1.2;
@@ -323,46 +324,10 @@
 
     const line = (x0, y0, x1, y1) => [[x0, y0], [x1, y1]];
 
-    /** Hand-drawn glyphs for symbols the writer has not written. */
+    /** Hand-drawn glyphs for symbols the writer has not written (the drawings are in glyphs.js). */
     function standIn(c, sc, up, down) {
-      const U = up === undefined ? 1.8 : up;
-      const D = down === undefined ? 0.4 : down;
-      const mid = (U - D) / 2;
-      switch (c) {
-        case '[': return drawn([[[0.35, U], [0, U], [0, -D], [0.35, -D]]], sc);
-        case ']': return drawn([[[0, U], [0.35, U], [0.35, -D], [0, -D]]], sc);
-        case '{': return drawn([[[0.4, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0.4, -D]]], sc);
-        case '}': return drawn([[[0, U], [0.2, U - 0.1], [0.2, mid + 0.15], [0.4, mid], [0.2, mid - 0.15], [0.2, -D + 0.1], [0, -D]]], sc);
-        case '(': return drawn([[[0.35, U], [0.08, mid + 0.4], [0.08, mid - 0.4], [0.35, -D]]], sc);
-        case ')': return drawn([[[0, U], [0.27, mid + 0.4], [0.27, mid - 0.4], [0, -D]]], sc);
-        case '|': return drawn([[[0, U], [0.02, -D]]], sc);
-        case '<': return drawn([[[0.55, 0.95], [0, 0.5], [0.55, 0.05]]], sc);
-        case '>': return drawn([[[0, 0.95], [0.55, 0.5], [0, 0.05]]], sc);
-        case '≤': return drawn([[[0.55, 1.0], [0, 0.6], [0.55, 0.2]], line(0, -0.05, 0.55, -0.05)], sc);
-        case '≥': return drawn([[[0, 1.0], [0.55, 0.6], [0, 0.2]], line(0, -0.05, 0.55, -0.05)], sc);
-        case '=': return drawn([line(0, 0.35, 0.7, 0.35), line(0, 0.7, 0.7, 0.7)], sc);
-        case '≠': return drawn([line(0, 0.3, 0.7, 0.3), line(0, 0.65, 0.7, 0.65), line(0.5, 0.95, 0.2, 0.0)], sc);
-        case '≈': return drawn([[[0, 0.3], [0.2, 0.45], [0.45, 0.2], [0.7, 0.35]], [[0, 0.65], [0.2, 0.8], [0.45, 0.55], [0.7, 0.7]]], sc);
-        case '+': return drawn([line(0, 0.5, 0.7, 0.5), line(0.35, 0.85, 0.35, 0.15)], sc);
-        case '-': return drawn([line(0, 0.45, 0.6, 0.45)], sc);
-        case '±': return drawn([line(0, 0.7, 0.7, 0.7), line(0.35, 1.05, 0.35, 0.35), line(0, 0.05, 0.7, 0.05)], sc);
-        case '×': return drawn([line(0, 0.15, 0.6, 0.85), line(0, 0.85, 0.6, 0.15)], sc);
-        case '÷': return drawn([line(0, 0.5, 0.7, 0.5), [[0.35, 0.9], [0.36, 0.92]], [[0.35, 0.1], [0.36, 0.12]]], sc);
-        case '·': return drawn([[[0, 0.5], [0.02, 0.52]]], sc);
-        case '→': return drawn([line(0, 0.5, 1.0, 0.5), [[0.75, 0.8], [1.0, 0.5], [0.75, 0.2]]], sc);
-        case '∞': {
-          const p = [];
-          for (let i = 0; i <= 40; i++) {
-            const t = (i / 40) * 2 * Math.PI;
-            p.push([0.5 + 0.5 * Math.sin(t), 0.5 + 0.3 * Math.sin(t) * Math.cos(t)]);
-          }
-          return drawn([p], sc);
-        }
-        case '∫': return drawn([[[0.5, 1.9], [0.38, 2.0], [0.28, 1.85], [0.25, 1.4], [0.2, 0.5], [0.15, -0.2], [0.05, -0.65], [-0.08, -0.55]]], sc);
-        case '∑': return drawn([[[1.0, 1.5], [0.1, 1.5], [0.7, 0.5], [0.0, -0.45], [1.0, -0.45]]], sc);
-        case '∏': return drawn([line(0, 1.5, 1.0, 1.5), line(0.15, 1.5, 0.12, -0.45), line(0.85, 1.5, 0.88, -0.45)], sc);
-        default: return null;
-      }
+      const p = Gl.polys(c, up, down);
+      return p ? drawn(p, sc) : null;
     }
 
     /** A box for a single symbol: the writer's own if they have written it, else a stand-in. */
@@ -373,6 +338,7 @@
       const stand = standIn(c, sc, up, down);
       if (stand) {
         stand.stand = true; // drawn, not the writer's own
+        ctx.standIns.add(c);
         return stand;
       }
       ctx.missing.add(c);
@@ -665,6 +631,7 @@
       strokes,
       words: [],
       missing: Array.from(E.ctx.missing),
+      standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])), // symbols drawn for the writer because they have not written them
       baselines,
       xh,
       lineHeightPx: o.lineHeight * xh,
