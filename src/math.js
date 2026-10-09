@@ -14,20 +14,39 @@
 
   // ---- reading the input ----------------------------------------------------------------------
 
+  // TeX names for symbols: the character each one is. The writer's own symbol is used if they wrote one (an operator needs two
+  // samples), and otherwise one with a clean drawing in glyphs.js is drawn. Greek letters and the like have no drawing: they
+  // are the writer's own or reported as missing, never faked.
   const COMMANDS = {
-    to: '→', rightarrow: '→', infty: '∞', pi: 'π', theta: 'θ', alpha: 'α', beta: 'β', lambda: 'λ', mu: 'μ',
-    sigma: 'σ', phi: 'φ', omega: 'ω', Delta: 'Δ', partial: '∂', le: '≤', leq: '≤', ge: '≥', geq: '≥',
-    ne: '≠', neq: '≠', approx: '≈', pm: '±', times: '×', cdot: '·', div: '÷', prime: "'",
+    // arrows and relations
+    to: '→', rightarrow: '→', longrightarrow: '→', Rightarrow: '⇒', Longrightarrow: '⇒', implies: '⇒', leftarrow: '←', gets: '←',
+    longleftarrow: '←', Leftarrow: '⇐', Longleftarrow: '⇐', leftrightarrow: '↔', Leftrightarrow: '⇔', Longleftrightarrow: '⇔', iff: '⇔', mapsto: '↦',
+    le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', approx: '≈', equiv: '≡', sim: '∼', propto: '∝', ll: '≪', gg: '≫',
+    perp: '⊥', parallel: '∥', angle: '∠', triangle: '△',
+    // sets and logic
+    in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', cup: '∪', cap: '∩', emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃',
+    therefore: '∴', because: '∵', neg: '¬', lnot: '¬', land: '∧', wedge: '∧', lor: '∨', vee: '∨',
+    // operators and dots
+    pm: '±', mp: '∓', times: '×', cdot: '·', div: '÷', ast: '*', circ: '∘', bullet: '•', ldots: '…', dots: '…', cdots: '⋯', degree: '°',
+    // the rest
+    infty: '∞', partial: '∂', nabla: '∇',
+    // Greek
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'θ', kappa: 'κ',
+    lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
   };
+  // a mark over what is in the braces: \bar{x}, \vec{v}, \hat{x}, \dot{x}, \ddot{x}, \tilde{x}
+  const OVER = { bar: 'bar', overline: 'bar', vec: 'vec', hat: 'hat', widehat: 'hat', dot: 'dot', ddot: 'ddot', tilde: 'tilde', widetilde: 'tilde' };
+  const FRACTIONS = new Set(['frac', 'dfrac', 'tfrac']);
   const TEXT_COMMANDS = new Set(['text', 'textrm', 'textbf', 'textit', 'mathrm', 'mathbf', 'mathit', 'mbox', 'operatorname']);
   // widths, in x-heights, of the spaces TeX has names for (a plain space between things is ignored, as in TeX)
   const SPACES = { ' ': 0.8, ',': 0.45, ';': 0.6, ':': 0.5, quad: 1.2, qquad: 2.4 };
   const spaceOf = (k) => (Object.prototype.hasOwnProperty.call(SPACES, k) ? SPACES[k] : undefined);
-  const WORDS = new Set(['sin', 'cos', 'tan', 'log', 'ln', 'exp', 'lim', 'max', 'min', 'det']);
-  const RELATIONS = new Set(['=', '<', '>', '≤', '≥', '≠', '≈', '→']);
-  const BINARY = new Set(['+', '-', '×', '÷', '±', '·', '*']);
+  const WORDS = new Set(['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp', 'lim', 'max', 'min', 'sup', 'inf', 'det', 'dim', 'ker', 'gcd', 'mod', 'arg', 'deg']);
+  const RELATIONS = new Set(['=', '<', '>', '≤', '≥', '≠', '≈', '→', '←', '↔', '⇒', '⇐', '⇔', '↦', '∈', '∉', '⊂', '⊆', '≡', '∼', '∝', '≪', '≫', '⊥', '∥']);
+  const BINARY = new Set(['+', '-', '×', '÷', '±', '∓', '·', '*', '∘', '∪', '∩', '∧', '∨']);
   // One quick sample of these tends to look like a scribble, so wait for two before using the writer's own
-  const OPERATORS = new Set(['+', '-', '=', '<', '>', '≤', '≥', '≠', '≈', '±', '×', '÷', '·', '→']);
+  const OPERATORS = new Set(['+', '-', '=', '<', '>', '≤', '≥', '≠', '≈', '±', '∓', '×', '÷', '·', '→', '←', '↔', '⇒', '⇐', '⇔', '↦', '∈', '∉', '⊂', '⊆', '∪', '∩', '∘', '∼', '≡', '∝', '≪', '≫', '⋯']);
   const OPEN = new Set(['(', '[', '{']);
   const CLOSE = new Set([')', ']', '}']);
 
@@ -68,7 +87,8 @@
               continue;
             }
           }
-          if (spaceOf(name) !== undefined) out.push({ k: 'gap', v: spaceOf(name) });
+          if (name === 'prime') out.push({ k: 'prime' });
+          else if (spaceOf(name) !== undefined) out.push({ k: 'gap', v: spaceOf(name) });
           else out.push({ k: 'cmd', v: name });
         } else if (spaceOf(s[i + 1]) !== undefined) {
           out.push({ k: 'gap', v: spaceOf(s[i + 1]) }); // "\ " is a space that stays, like \, and \;
@@ -85,9 +105,12 @@
       } else if (c === '√' || c === '∛') {
         out.push({ k: 'cmd', v: c === '√' ? 'sqrt' : 'cbrt' });
         i++;
-      } else if (/[A-Za-z0-9.']/.test(c)) {
+      } else if (c === "'") {
+        out.push({ k: 'prime' }); // y' is a y with a prime over it, not a word with an apostrophe in it
+        i++;
+      } else if (/[A-Za-z0-9.]/.test(c)) {
         let j = i;
-        while (j < s.length && /[A-Za-z0-9.']/.test(s[j])) j++;
+        while (j < s.length && /[A-Za-z0-9.]/.test(s[j])) j++;
         const word = s.slice(i, j);
         const root = /^(sqrt|cbrt|cubert|cuberoot)(\d[\d.]*)?$/i.exec(word); // typed as words: sqrt(x), cubert 8
         if (root) {
@@ -106,6 +129,7 @@
   /** Tokens -> lines of nodes. A node is {t, ...} with optional .sup / .sub (each a node list). */
   function parse(src) {
     const toks = tokenize(src);
+    const unknown = new Set(); // commands that are not supported: they are reported, not written out as words
     let i = 0;
 
     function skipSpace() {
@@ -166,7 +190,7 @@
         n = { t: 'sym', c: t.v };
       } else if (t.k === 'cmd') {
         i++;
-        if (t.v === 'frac') {
+        if (FRACTIONS.has(t.v)) {
           const a = arg();
           const b = arg();
           n = { t: 'frac', a, b };
@@ -191,13 +215,19 @@
           const f = toks[i];
           if (f && f.k === 'ch') i++;
           return f && f.k === 'ch' && f.v !== '.' ? { t: 'sym', c: f.v } : atom();
+        } else if (Object.prototype.hasOwnProperty.call(OVER, t.v)) {
+          n = { t: 'over', k: OVER[t.v], a: arg() };
         } else if (WORDS.has(t.v)) {
           n = { t: 'run', s: t.v };
-        } else if (COMMANDS[t.v]) {
+        } else if (Object.prototype.hasOwnProperty.call(COMMANDS, t.v)) {
           n = { t: 'sym', c: COMMANDS[t.v] };
         } else {
-          n = { t: 'run', s: t.v }; // unknown command: write its name
+          unknown.add(t.v); // not supported: say so, and write nothing for it
+          return null;
         }
+      } else if (t.k === 'prime') {
+        i++;
+        n = { t: 'sym', c: '\u2032' }; // a prime with nothing before it
       } else if (t.k === '^' || t.k === '_') {
         n = { t: 'group', a: [] }; // a script with nothing before it
       } else {
@@ -209,7 +239,10 @@
         const save = i;
         skipSpace();
         const nx = toks[i];
-        if (nx && nx.k === '^' && !n.sup) {
+        if (nx && nx.k === 'prime' && !n.sup && n.t !== 'sym') {
+          i++;
+          n.primes = (n.primes || 0) + 1; // y', f'': marks over the top right of what came before
+        } else if (nx && nx.k === '^' && !n.sup) {
           i++;
           n.sup = arg();
         } else if (nx && nx.k === '_' && !n.sub) {
@@ -245,6 +278,7 @@
       if (i < toks.length && toks[i].k === 'nl') i++;
       else break;
     }
+    lines.unknown = Array.from(unknown);
     return lines;
   }
 
@@ -449,16 +483,28 @@
   }
 
   function attachScripts(E, n, box, sc) {
-    if (!n.sup && !n.sub) return box;
+    if (!n.sup && !n.sub && !n.primes) return box;
     const out = [];
     place(out, box, 0, 0);
     const ssc = sc * 0.7;
     const sup = n.sup ? row(E, n.sup, ssc) : null;
     const sub = n.sub ? row(E, n.sub, ssc) : null;
-    const x = box.w + 0.05 * sc;
+    let x = box.w + 0.05 * sc;
     let w = box.w;
     let up = box.up;
     let down = box.down;
+    if (n.primes) {
+      // y' and f'': a short slanted stroke just over the top right of the letter, whatever height the writer's own apostrophe has
+      const top = Math.max(box.up, sc); // the top of the letter, and at least the x-height
+      for (let k = 0; k < n.primes; k++) {
+        const pr = E.drawn([[[0.09, 0.46], [0.03, 0.0]]], sc);
+        place(out, pr, x, top - 0.26 * sc);
+        x += pr.w + 0.08 * sc;
+        w = Math.max(w, x);
+      }
+      up = Math.max(up, top + 0.22 * sc);
+      x += 0.02 * sc;
+    }
     if (sup) {
       const base = Math.max(0.6 * sc, box.up - 0.45 * sc);
       place(out, sup, x, base);
@@ -492,6 +538,29 @@
       }
       box = attachScripts(E, n, box, sc);
       return { kind: 'run', box };
+    }
+    if (n.t === 'over') {
+      // a mark over what is in the braces
+      const inner = row(E, n.a, sc);
+      const w = Math.max(inner.w, 0.3 * sc);
+      const y = inner.up + 0.2 * sc; // the mark's height, in this box's own scale
+      const u = (v) => v / sc; // E.drawn takes polylines in x-heights and scales them
+      const mid = w / 2;
+      const shapes = {
+        bar: [[[0, 0], [u(w), 0]]],
+        vec: [[[0, 0], [u(w), 0]], [[u(w) - 0.2, 0.13], [u(w), 0], [u(w) - 0.2, -0.13]]],
+        hat: [[[u(mid) - 0.17, -0.1], [u(mid), 0.14], [u(mid) + 0.17, -0.1]]],
+        dot: [[[u(mid), 0], [u(mid) + 0.01, 0.02]]],
+        ddot: [[[u(mid) - 0.12, 0], [u(mid) - 0.11, 0.02]], [[u(mid) + 0.12, 0], [u(mid) + 0.13, 0.02]]],
+        tilde: [Array.from({ length: 12 }, (_, i) => [u(mid) - 0.25 + (0.5 * i) / 11, 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+      };
+      const mark = E.drawn(shapes[n.k] || shapes.bar, sc);
+      const out = [];
+      place(out, inner, (w - inner.w) / 2, 0);
+      // E.drawn moves the ink to start at x = 0: put it back where it was drawn
+      const left = Math.min(...(shapes[n.k] || shapes.bar).flat().map((p) => p[0])) * sc;
+      place(out, mark, left, y);
+      return { kind: 'run', box: attachScripts(E, n, { w, up: y + 0.25 * sc, down: inner.down, strokes: out }, sc) };
     }
     if (n.t === 'gap') return { kind: 'gap', box: { w: n.w * sc, up: 0, down: 0, strokes: [] } };
     if (n.t === 'text') {
@@ -620,7 +689,8 @@
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const tanS = Math.tan(style.slant + (o.slantDelta * Math.PI) / 180);
-    const lines = parse(text).map((nodes) => row(E, nodes, 1));
+    const parsed = parse(text);
+    const lines = parsed.map((nodes) => row(E, nodes, 1));
 
     const baselines = [];
     const strokes = [];
@@ -648,6 +718,7 @@
       strokes,
       words: [],
       missing: Array.from(E.ctx.missing),
+      unknown: parsed.unknown, // TeX commands that are not supported (nothing was written for them)
       standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])), // symbols drawn for the writer because they have not written them
       baselines,
       xh,
@@ -655,7 +726,41 @@
     };
   }
 
-  const api = { layout, parse, tokenize };
+  /** The TeX that works, as plain text for an error message or a help page. */
+  function supportedCommands() {
+    const sym = Object.entries(COMMANDS).map(([k, v]) => `\\${k} ${v}`);
+    return [
+      'Symbols: ' + sym.join('  '),
+      'Words (written as words): ' + Array.from(WORDS).map((w) => '\\' + w).join(' '),
+      'Marks over a letter: ' + Object.keys(OVER).map((w) => '\\' + w + '{x}').join(' ') + "   Primes: y' f'' \\prime",
+      'Structure: x^2 x_1 x_i^2  \\frac{a}{b} \\dfrac \\sqrt{x} \\sqrt[3]{x} sqrt(x) cubert(x)  \\int \\sum \\prod with _ and ^  \\lim_{x \\to 0}  \\left( \\right)  \\text{words} \\mathrm{} \\operatorname{}  \\, \\; \\: \\quad \\qquad \\  and a line break (\\\\ or a new line)',
+    ].join('\n');
+  }
+
+  /** Up to three supported commands that look like an unsupported one (same letters in another case, one inside the other, or a typo). */
+  function suggestCommands(name) {
+    const all = Object.keys(COMMANDS).concat(Array.from(WORDS), Object.keys(OVER), Array.from(FRACTIONS), ['sqrt', 'int', 'sum', 'prod', 'left', 'right', 'text', 'prime', 'quad', 'qquad']);
+    const n = name.toLowerCase();
+    const dist = (a, b) => {
+      const d = Array.from({ length: a.length + 1 }, (_, i) => [i].concat(new Array(b.length).fill(0)));
+      for (let j = 0; j <= b.length; j++) d[0][j] = j;
+      for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      return d[a.length][b.length];
+    };
+    return all
+      .map((c) => {
+        const l = c.toLowerCase();
+        const close = Math.min(l.length, n.length) >= 3 && (l.includes(n) || n.includes(l)); // one inside the other (\\arrow, \\Rightarrow)
+        const typo = n.length >= 4 && dist(l, n) <= (n.length >= 7 ? 2 : 1);
+        return { c, score: l === n ? 0 : typo ? 1 : close ? 2 : 9 };
+      })
+      .filter((x) => x.score < 9)
+      .sort((a, b) => a.score - b.score || a.c.length - b.c.length)
+      .slice(0, 3)
+      .map((x) => x.c);
+  }
+
+  const api = { layout, parse, tokenize, supportedCommands, suggestCommands, COMMANDS };
   root.HW = root.HW || {};
   root.HW.math = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

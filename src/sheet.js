@@ -63,7 +63,7 @@
           xh: ENGINE_XH,
           width: Math.max(60, Math.round(box.w / K)),
           lineHeight: box.kind === 'math' ? 3 : 2.5,
-          seed: box.seed || 1,
+          seed: box.seed === undefined ? 1 : box.seed, // 0 is a seed too
           margin: 8,
         })
       );
@@ -83,7 +83,7 @@
       const bottom = (b.maxY - dy) * K;
       const tooWide = right > box.w + 1;
       const tooTall = bottom > h + (oneLine ? 0.7 * xhPt : 1);
-      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [] };
+      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [], unknown: lay.unknown || [] };
     }
 
     const maxH = Math.max(box.h, box.growTo || 0);

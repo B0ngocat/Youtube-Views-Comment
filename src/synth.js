@@ -189,7 +189,11 @@
           let rep = 0;
           for (const s of h.seq) if (s.unit === unit) rep++;
           c += variation * 1.2 * rep + variation * 0.12 * (ctx.usage.get(unit.id) || 0);
-          c += rng() * 0.35 * variation;
+          // Letters have plenty of near-equal examples, so a little noise is enough to give another take. A digit or symbol has a few
+          // clean examples and a strong preference for them (above): a nudge of 0.14 never made another seed pick another one, so for those
+          // the noise is wider, +-1.0 at the default variation. That is still less than half that preference (2.5, less the repeat penalty),
+          // so another seed swaps between the good examples but never puts a digit cut out of a word in front of a clean one.
+          c += /[A-Za-z]/.test(chars[j]) ? rng() * 0.35 * variation : (rng() * 2 - 1) * 2.5 * variation;
           next.push({ cost: c, seq: h.seq.concat([cand]) });
         }
       }

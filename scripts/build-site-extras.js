@@ -86,6 +86,12 @@ they are in; nothing is skipped or guessed. Fix the text or have the person teac
 a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
 Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
 
+seed (write_text, write_batch, each fill_pdf answer): a whole number from 0, default 1; the same seed is the same writing, another is
+another take. For digits it picks another of the person's clean examples: re-roll one bad digit by changing that answer's seed.
+fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 10 KB) to check digits without rendering pages.
+Math TeX: only commands listed by handwriting_status {math_help: true} work (\\Rightarrow \\implies \\iff \\in \\cup \\bar{x} \\vec{v} y' ...);
+others are refused with suggestions, never written out as words.
+
 fill_pdf fitting: too long for a box means wrap onto more lines, then grow the box downward (max_height; default stops above the
 nearest printed text; grow: false forbids it), and only then shrink, never below min_size_ratio (default 0.8) of the size asked
 for. The report says per answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it, and fix the box or the text

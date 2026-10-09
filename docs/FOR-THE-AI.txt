@@ -82,6 +82,15 @@ Digits: they are the weakest part, and now less wobbly in dense math (digits are
   and the person can do the Teach tab rounds x and y, dy/dx and calculus, More numbers, and x, y and digits again: a number written
   there is written back whole when you type it (use math kind, or plain text with the word_reuse option up).
 
+Seeds: write_text, write_batch and fill_pdf take "seed" (a whole number from 0; default 1, so "seed": 1 is the same as none). The same
+  seed is the same writing; another seed is another take. For digits another seed picks another of the person's clean examples, so
+  to re-roll one bad digit, change the seed of that answer. fill_pdf says (seed N) in the report when you gave one.
+Previews: fill_pdf with "preview": "digits" (or "all") returns a small picture of each answer's ink (5 to 10 KB each) so you can check
+  digits without rendering and cropping whole pages. It shows the writing only, not the page behind it.
+Math TeX: only the commands in handwriting_status {"math_help": true} work (arrows \Rightarrow \implies \iff, sets \in \cup, \bar \vec \hat,
+  primes y' f'', Greek, \frac \sqrt \int \sum ...). Anything else is refused with a short message and suggestions, never written out
+  as a word. Symbols the person never wrote are drawn as clean stand-ins and the reply says so; Greek letters need the person's own.
+
 Rules
   - Look at every result before you hand it over. Digits are the weakest part: check numbers carefully.
   - If a character has no sample, the tool says so. Do not guess; tell the person.

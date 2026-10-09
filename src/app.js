@@ -602,9 +602,13 @@
     }
     const missing = empty ? [] : math ? lay.missing : HW.style.missingChars(style, text);
     const warn = $('#warn');
-    if (missing.length) {
+    const unknownTex = math && !empty && lay.unknown ? lay.unknown : [];
+    if (missing.length || unknownTex.length) {
       warn.hidden = false;
-      warn.textContent = 'No sample yet for: ' + missing.join(' ') + '. Those characters are skipped. Add them in the Teach tab.';
+      warn.textContent = [
+        missing.length ? 'No sample yet for: ' + missing.join(' ') + '. Those characters are skipped. Add them in the Teach tab.' : '',
+        unknownTex.length ? 'Not supported, so skipped: ' + unknownTex.map((c) => '\\' + c).join(' ') + '. Supported commands are listed in the README under Math mode.' : '',
+      ].filter(Boolean).join(' ');
     } else warn.hidden = true;
     lastLayout = lay;
     canvas.width = Math.round(lay.width * dpr);
