@@ -186,6 +186,7 @@ const S = __req("src/style.js");
 const R = __req("src/render.js");
 const Sheet = __req("src/sheet.js");
 const Y = __req("src/synth.js");
+const Math2 = __req("src/math.js");
 const { renderPng } = __req("mcp/raster.js");
 const { isSealed, unseal } = __req("mcp/sealed.js");
 const Notability = __req("src/notability.js");
@@ -282,6 +283,13 @@ function createTools(config) {
   }
 
   const clampNum = (v, lo, hi, d) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Math.max(lo, Math.min(hi, Number(v))) : d);
+  /** The seed of a call: a whole number from 0 up, or 1 when none is given (another number gives another take of the same text). */
+  function seedOf(v, where) {
+    if (v === undefined || v === null || v === '') return { seed: 1, given: false };
+    const n = typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : v;
+    if (!Number.isInteger(n) || n < 0 || n > 2147483647) throw new Error(`${where ? where + ': ' : ''}seed must be a whole number from 0 to 2147483647, not ${JSON.stringify(v)}.`);
+    return { seed: n, given: true };
+  }
   const lookFrom = (a) => ({
     messiness: clampNum(a.messiness, 0, 1, LOOK.messiness),
     variation: clampNum(a.variation, 0, 1, LOOK.variation),
@@ -332,6 +340,20 @@ function createTools(config) {
     return lines.join('\n');
   }
 
+  /** problems: [{where, text, unknown: ['Rightarrow']}] -> the error for TeX commands that are not supported (short: the list is one call away). */
+  function texMessage(problems) {
+    const lines = ['Nothing was written: the math has TeX commands that are not supported (they are never written out as words).'];
+    const names = new Set();
+    for (const p of problems) {
+      for (const c of p.unknown) names.add(c);
+      lines.push(`  ${p.where ? p.where + ': ' : ''}${p.unknown.map((c) => '\\' + c).join(' ')} in "${String(p.text).slice(0, 60)}"`);
+    }
+    const hints = [...names].map((c) => ({ c, s: Math2.suggestCommands(c) })).filter((h) => h.s.length);
+    if (hints.length) lines.push('Did you mean: ' + hints.map((h) => `\\${h.c} -> ${h.s.map((x) => '\\' + x).join(' or ')}`).join('; ') + '?');
+    lines.push('The full list of what works: call handwriting_status with math_help: true (or see mcp.txt). Or use plain symbols.');
+    return lines.join('\n');
+  }
+
   /** The characters of a plain text with no sample (see Y.checkText), or [] for math (found by laying it out). */
   const checkPlain = (style, a, kind) => (kind === 'math' ? { missing: [], substituted: [], composed: [] } : Y.checkText(style, a.text, { fallback: fallbackOn(a) }));
 
@@ -356,16 +378,17 @@ function createTools(config) {
     const format = formatOf(a);
     const kind = a.kind === 'math' ? 'math' : 'text';
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
-    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: Math.round(clampNum(a.seed, 1, 1e6, 1)), auto: false };
+    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: seedOf(a.seed).seed, auto: false };
     const chk = checkPlain(style, a, kind);
     if (chk.missing.length) return { a, format, chk, missing: chk.missing };
     const placed = Sheet.layoutBox(style, box, Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) }));
     const missing = kind === 'math' ? mathMissing(a.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(a.text, ch), standIn: false }));
-    return { a, format, chk, placed, missing };
+    return { a, format, chk, placed, missing, unknown: kind === 'math' ? placed.unknown : [] };
   }
 
   async function renderOne(a, prepared) {
     const p = prepared || (await prepare(a));
+    if (p.unknown && p.unknown.length) throw new Error(texMessage([{ where: '', text: a.text, unknown: p.unknown }]));
     if (p.missing.length) throw new Error(missingMessage([{ where: '', missing: p.missing }]));
     const { placed, format, chk } = p;
     const ink = inkOf(a);
@@ -393,6 +416,7 @@ function createTools(config) {
       fs.writeFileSync(pngPath, png);
     }
     const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
+    if (seedOf(a.seed).given) notes[0] += `  Seed ${seedOf(a.seed).seed}.`;
     notes.push(...drawnNotes(chk, placed));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
@@ -409,10 +433,40 @@ function createTools(config) {
     return out;
   }
 
+  /**
+   * A small picture of one answer's ink, cropped to the ink, on white: enough to check a digit without rendering the page. The
+   * layout itself is not touched (the ink is placed on the page from it). About 3 pixels per point, less for a very long answer
+   * so the picture is never wider than 640 pixels.
+   */
+  function previewOf(placed, ink) {
+    const pad = 3;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const st of placed.layout.strokes) for (const p of st.pts) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    }
+    if (!isFinite(minX)) return null;
+    const crop = {
+      ...placed.layout,
+      strokes: placed.layout.strokes.map((st) => ({ ...st, pts: st.pts.map((p) => ({ ...p, x: p.x - minX + pad, y: p.y - minY + pad })) })),
+      width: maxX - minX + 2 * pad,
+      height: maxY - minY + 2 * pad,
+    };
+    const pxPerPt = Math.min(3, 640 / (crop.width * placed.K));
+    const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
+    const r = renderPng(R.layoutToPath(crop, 1, true), crop.width, Math.ceil(crop.height), pxPerPt * placed.K, rgb);
+    return { b64: r.png.toString('base64'), width: r.width, height: r.height, pxPerPt };
+  }
+
   /** One line per answer: how it was fitted (as is, wrapped, box grown, letters shrunk) and anything drawn rather than written. */
-  function fitReport(label, box, placed, extra) {
+  function fitReport(label, box, placed, extra, seed) {
     const r1 = (v) => (Math.round(v * 10) / 10).toString();
-    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt`];
+    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt${seed === null || seed === undefined ? '' : ' (seed ' + seed + ')'}`];
     if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
     const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
     if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
@@ -428,8 +482,9 @@ function createTools(config) {
     {
       name: 'handwriting_status',
       description: "Says whether the user's handwriting is loaded and which characters it has no sample for yet. write_text, write_batch and fill_pdf refuse to write a character with no sample (they never skip or guess it), so check this first for anything with unusual symbols, digits or accents. Give `check` the exact text you mean to write.",
-      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample, and which of them could be drawn as a clean stand-in (on_missing: "fallback").' } } },
+      inputSchema: { type: 'object', properties: { check: { type: 'string', description: 'Optional text to check: lists the characters in it that have no sample, and which of them could be drawn as a clean stand-in (on_missing: "fallback").' }, math_help: { type: 'boolean', description: 'true: return the list of TeX commands that math mode supports (symbols, words, marks over letters, structure). Anything else is refused, never written out as a word.' } } },
       async run(a) {
+        if (a.math_help === true) return [text('TeX commands that work in kind: "math" (anything else is refused, not written out as a word):\n' + Math2.supportedCommands() + '\nGreek letters and similar have no drawing: they are the person\'s own handwriting or reported as missing.')];
         const { style, words } = await load();
         const chk = Y.checkText(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"', { fallback: false });
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
@@ -455,7 +510,7 @@ function createTools(config) {
           width_pt: { type: 'number', description: 'Line width in points before it wraps. Default 400.' },
           letter_height_pt: { type: 'number', description: 'Height of a lowercase letter in points. Default 9.5, which looks like handwriting on a letter-size page.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3 (blue).' },
-          seed: { type: 'integer', description: 'Another number gives another take of the same text.' },
+          seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number gives another take of the same text: other examples of each letter and digit are chosen, so use it to re-roll a digit that came out badly. The same number always gives the same writing.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; top is measured down from the top of the page). The SVG file is saved either way.' },
@@ -496,17 +551,19 @@ function createTools(config) {
         // every item is checked and laid out before any is written, so a missing character stops the whole call with nothing half done
         const prepared = [];
         const problems = [];
+        const texProblems = [];
         for (const [i, item] of a.items.entries()) {
           const merged = Object.assign({}, shared, item);
           try {
             const p = await prepare(merged);
             prepared.push({ merged, p });
             if (p.missing.length) problems.push({ where: `item ${i + 1}`, missing: p.missing });
+            if (p.unknown && p.unknown.length) texProblems.push({ where: `item ${i + 1}`, text: merged.text, unknown: p.unknown });
           } catch (e) {
             prepared.push({ merged, error: e });
           }
         }
-        if (problems.length) throw new Error(missingMessage(problems));
+        if (problems.length || texProblems.length) throw new Error([texProblems.length ? texMessage(texProblems) : '', problems.length ? missingMessage(problems) : ''].filter(Boolean).join('\n\n'));
         const out = [];
         for (const [i, { merged, p, error }] of prepared.entries()) {
           try {
@@ -548,6 +605,7 @@ function createTools(config) {
           neatness: { type: 'number' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
+          preview: { type: 'string', enum: ['none', 'all', 'digits'], description: 'Return a small picture of each answer\'s ink (cropped to the ink, on white, about 3 pixels per point, at most 640 px wide) with the report, so you can check digits without rendering and cropping whole pages. all: every answer. digits: only the answers that contain a digit. none (default). They show the writing only, not the page behind it, and at most 20 are returned.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of. error (default): write nothing, and list the characters and the words (and answers) they are in. fallback: draw a clean vector stand-in for symbols and punctuation that have one (a degree sign, a macron, brackets, ...) and list them in the report; letters and digits can never be faked, so one of those missing still stops the call.' },
           answers: {
             type: 'array',
@@ -564,7 +622,7 @@ function createTools(config) {
                 text: { type: 'string' },
                 kind: { type: 'string', enum: ['text', 'math'] },
                 letter_height_pt: { type: 'number' },
-                seed: { type: 'integer' },
+                seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. The report says (seed N) when you gave one.' },
                 shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
                 min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
                 grow: { type: 'boolean', description: 'May the box grow downward when the text wraps onto more lines than fit? Default true. Set false when something is printed right under the box.' },
@@ -588,6 +646,8 @@ function createTools(config) {
         const items = [];
         const report = [];
         const problems = [];
+        const texProblems = [];
+        const previewJobs = [];
         // where the printed text is, so a box that grows stops above it (unless the answer says how far it may grow)
         let printed = null;
         if (a.answers.some((x) => x && x.grow !== false && !(x.max_height > 0))) {
@@ -607,7 +667,7 @@ function createTools(config) {
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
           const kind = ans.kind === 'math' ? 'math' : 'text';
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: Math.round(clampNum(ans.seed, 1, 1e6, 1)), auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (box.x < 0 || box.y < -1 || box.x + box.w > sizes[page].w + 1 || box.y + box.h > sizes[page].h + 1) throw new Error(`${where}: the box (x ${box.x}, y ${box.y}, ${box.w} x ${box.h}) is outside page ${page + 1}, which is ${sizes[page].w} x ${sizes[page].h} pt.`);
           // how far down the box may grow: as far as asked, or down to the bottom margin of the page
           let room = sizes[page].h - 36 - box.y;
@@ -630,15 +690,18 @@ function createTools(config) {
             return;
           }
           const placed = Sheet.layoutBox(style, box, look);
+          if (kind === 'math' && placed.unknown.length) texProblems.push({ where: label, text: ans.text, unknown: placed.unknown });
           const gone = kind === 'math' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
           if (gone.length) {
             problems.push({ where: label, missing: gone });
             return;
           }
           items.push({ box, placed });
-          report.push(fitReport(label, box, placed, drawnNotes(chk, placed)));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed), seedOf(ans.seed).given ? seedOf(ans.seed).seed : null));
+          const wantPreview = a.preview === true || a.preview === 'all' || (a.preview === 'digits' && /[0-9]/.test(ans.text));
+          if (wantPreview) previewJobs.push({ label, placed });
         });
-        if (problems.length) throw new Error(missingMessage(problems)); // before a single stroke is drawn
+        if (problems.length || texProblems.length) throw new Error([texProblems.length ? texMessage(texProblems) : '', problems.length ? missingMessage(problems) : ''].filter(Boolean).join('\n\n')); // before a single stroke is drawn
         const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');
@@ -650,7 +713,15 @@ function createTools(config) {
           fs.writeFileSync(noteDest, Notability.noteFromBoxes(bytes, sizes, items, { name: path.basename(noteDest, '.note').slice(0, 30), ink: inkOf(a), pen: clampNum(a.pen_width, 0.2, 10, 1.05) }));
           noteLine = `\nNotability note: ${noteDest}`;
         }
-        return [text(`Saved ${dest}${noteLine}\n` + report.join('\n'))];
+        const reply = [text(`Saved ${dest}${noteLine}\n` + report.join('\n'))];
+        for (const job of previewJobs.slice(0, 20)) {
+          const pv = previewOf(job.placed, inkOf(a));
+          if (!pv) continue;
+          reply.push(text(`${job.label} preview (the writing only, ${pv.width} x ${pv.height} px, ${pv.pxPerPt.toFixed(1)} px per pt):`));
+          reply.push({ type: 'image', data: pv.b64, mimeType: 'image/png' });
+        }
+        if (previewJobs.length > 20) reply.push(text(`${previewJobs.length - 20} more answers were not previewed (at most 20 per call).`));
+        return reply;
       },
     },
   ];
@@ -2997,7 +3068,7 @@ module.exports = { createTools };
           xh: ENGINE_XH,
           width: Math.max(60, Math.round(box.w / K)),
           lineHeight: box.kind === 'math' ? 3 : 2.5,
-          seed: box.seed || 1,
+          seed: box.seed === undefined ? 1 : box.seed, // 0 is a seed too
           margin: 8,
         })
       );
@@ -3017,7 +3088,7 @@ module.exports = { createTools };
       const bottom = (b.maxY - dy) * K;
       const tooWide = right > box.w + 1;
       const tooTall = bottom > h + (oneLine ? 0.7 * xhPt : 1);
-      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [] };
+      return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: tooWide || tooTall, tooWide, tooTall, bottom, h, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [], unknown: lay.unknown || [] };
     }
 
     const maxH = Math.max(box.h, box.growTo || 0);
@@ -3288,7 +3359,11 @@ module.exports = { createTools };
           let rep = 0;
           for (const s of h.seq) if (s.unit === unit) rep++;
           c += variation * 1.2 * rep + variation * 0.12 * (ctx.usage.get(unit.id) || 0);
-          c += rng() * 0.35 * variation;
+          // Letters have plenty of near-equal examples, so a little noise is enough to give another take. A digit or symbol has a few
+          // clean examples and a strong preference for them (above): a nudge of 0.14 never made another seed pick another one, so for those
+          // the noise is wider, +-1.0 at the default variation. That is still less than half that preference (2.5, less the repeat penalty),
+          // so another seed swaps between the good examples but never puts a digit cut out of a word in front of a clean one.
+          c += /[A-Za-z]/.test(chars[j]) ? rng() * 0.35 * variation : (rng() * 2 - 1) * 2.5 * variation;
           next.push({ cost: c, seq: h.seq.concat([cand]) });
         }
       }
@@ -3860,6 +3935,41 @@ module.exports = { createTools };
       case '∫': return [[[0.5, 1.9], [0.38, 2.0], [0.28, 1.85], [0.25, 1.4], [0.2, 0.5], [0.15, -0.2], [0.05, -0.65], [-0.08, -0.55]]];
       case '∑': return [[[1.0, 1.5], [0.1, 1.5], [0.7, 0.5], [0.0, -0.45], [1.0, -0.45]]];
       case '∏': return [line(0, 1.5, 1.0, 1.5), line(0.15, 1.5, 0.12, -0.45), line(0.85, 1.5, 0.88, -0.45)];
+      // arrows and relations
+      case '\u21d2': return [line(0, 0.33, 0.9, 0.33), line(0, 0.67, 0.9, 0.67), [[0.6, 1.0], [1.0, 0.5], [0.6, 0.0]]];
+      case '\u21d0': return [line(0.1, 0.33, 1.0, 0.33), line(0.1, 0.67, 1.0, 0.67), [[0.4, 1.0], [0, 0.5], [0.4, 0.0]]];
+      case '\u21d4': return [line(0.1, 0.33, 1.3, 0.33), line(0.1, 0.67, 1.3, 0.67), [[0.4, 1.0], [0, 0.5], [0.4, 0.0]], [[0.9, 1.0], [1.4, 0.5], [0.9, 0.0]]];
+      case '\u2190': return [line(0, 0.5, 1.0, 0.5), [[0.25, 0.8], [0, 0.5], [0.25, 0.2]]];
+      case '\u2194': return [line(0, 0.5, 1.2, 0.5), [[0.25, 0.8], [0, 0.5], [0.25, 0.2]], [[0.95, 0.8], [1.2, 0.5], [0.95, 0.2]]];
+      case '\u21a6': return [line(0, 0.15, 0, 0.85), line(0, 0.5, 1.0, 0.5), [[0.75, 0.8], [1.0, 0.5], [0.75, 0.2]]];
+      case '\u2208': return [[[0.55, 0.95], [0.25, 0.95], [0.05, 0.7], [0.05, 0.3], [0.25, 0.05], [0.55, 0.05]], line(0.05, 0.5, 0.5, 0.5)];
+      case '\u2209': return [[[0.55, 0.95], [0.25, 0.95], [0.05, 0.7], [0.05, 0.3], [0.25, 0.05], [0.55, 0.05]], line(0.05, 0.5, 0.5, 0.5), line(0.5, 1.0, 0.1, 0.0)];
+      case '\u2282': return [[[0.55, 0.95], [0.25, 0.95], [0.05, 0.7], [0.05, 0.3], [0.25, 0.05], [0.55, 0.05]]];
+      case '\u2286': return [[[0.55, 0.95], [0.25, 0.95], [0.05, 0.7], [0.05, 0.3], [0.25, 0.05], [0.55, 0.05]], line(0, -0.1, 0.55, -0.1)];
+      case '\u222a': return [[[0, 0.95], [0, 0.35], [0.15, 0.08], [0.45, 0.08], [0.6, 0.35], [0.6, 0.95]]];
+      case '\u2229': return [[[0, 0.05], [0, 0.65], [0.15, 0.92], [0.45, 0.92], [0.6, 0.65], [0.6, 0.05]]];
+      case '\u2205': return [ring(0.3, 0.5, 0.3, 16), line(0.05, 0.0, 0.55, 1.0)];
+      case '\u2200': return [[[0, 1.0], [0.3, 0.0], [0.6, 1.0]], line(0.12, 0.62, 0.48, 0.62)];
+      case '\u2203': return [[[0, 1.0], [0.5, 1.0], [0.5, 0.0], [0, 0.0]], line(0.5, 0.5, 0.1, 0.5)];
+      case '\u2234': return [dot(0.3, 0.9), dot(0.05, 0.2), dot(0.55, 0.2)];
+      case '\u2235': return [dot(0.05, 0.9), dot(0.55, 0.9), dot(0.3, 0.2)];
+      case '\u2026': return [dot(0.05, 0.05), dot(0.4, 0.05), dot(0.75, 0.05)];
+      case '\u22ef': return [dot(0.05, 0.5), dot(0.4, 0.5), dot(0.75, 0.5)];
+      case '\u2213': return [line(0, 1.0, 0.7, 1.0), line(0, 0.4, 0.7, 0.4), line(0.35, 0.75, 0.35, 0.05)];
+      case '\u2218': return [ring(0.15, 0.5, 0.15, 10)];
+      case '\u223c': return [wave(0, 0.7, 0.5, 0.12)];
+      case '\u2261': return [line(0, 0.2, 0.7, 0.2), line(0, 0.5, 0.7, 0.5), line(0, 0.8, 0.7, 0.8)];
+      case '\u22a5': return [line(0, 0.0, 0.7, 0.0), line(0.35, 0.0, 0.35, 1.0)];
+      case '\u2225': return [line(0.1, 1.0, 0.1, 0.0), line(0.4, 1.0, 0.4, 0.0)];
+      case '\u2220': return [[[0.65, 0.95], [0, 0], [0.75, 0]]];
+      case '\u25b3': return [[[0, 0], [0.4, 0.95], [0.8, 0], [0, 0]]];
+      case '\u00ac': return [[[0, 0.7], [0.6, 0.7], [0.6, 0.3]]];
+      case '\u2227': return [[[0, 0], [0.3, 0.9], [0.6, 0]]];
+      case '\u2228': return [[[0, 0.9], [0.3, 0], [0.6, 0.9]]];
+      case '\u226a': return [[[0.45, 0.95], [0, 0.5], [0.45, 0.05]], [[0.9, 0.95], [0.45, 0.5], [0.9, 0.05]]];
+      case '\u226b': return [[[0, 0.95], [0.45, 0.5], [0, 0.05]], [[0.45, 0.95], [0.9, 0.5], [0.45, 0.05]]];
+      case '\u2207': return [[[0, 0.9], [0.3, 0], [0.6, 0.9], [0, 0.9]]];
+      case '\u221d': return [[[0.6, 0.85], [0.3, 0.95], [0.05, 0.65], [0.05, 0.35], [0.3, 0.05], [0.6, 0.15]]];
       // marks that sit above the line
       case '°': return [ring(0.18, 1.5, 0.17, 14)];
       case '¯': case '‾': case 'ˉ': return [line(0.02, 1.75, 0.62, 1.75)];
@@ -3921,20 +4031,39 @@ module.exports = { createTools };
 
   // ---- reading the input ----------------------------------------------------------------------
 
+  // TeX names for symbols: the character each one is. The writer's own symbol is used if they wrote one (an operator needs two
+  // samples), and otherwise one with a clean drawing in glyphs.js is drawn. Greek letters and the like have no drawing: they
+  // are the writer's own or reported as missing, never faked.
   const COMMANDS = {
-    to: '→', rightarrow: '→', infty: '∞', pi: 'π', theta: 'θ', alpha: 'α', beta: 'β', lambda: 'λ', mu: 'μ',
-    sigma: 'σ', phi: 'φ', omega: 'ω', Delta: 'Δ', partial: '∂', le: '≤', leq: '≤', ge: '≥', geq: '≥',
-    ne: '≠', neq: '≠', approx: '≈', pm: '±', times: '×', cdot: '·', div: '÷', prime: "'",
+    // arrows and relations
+    to: '→', rightarrow: '→', longrightarrow: '→', Rightarrow: '⇒', Longrightarrow: '⇒', implies: '⇒', leftarrow: '←', gets: '←',
+    longleftarrow: '←', Leftarrow: '⇐', Longleftarrow: '⇐', leftrightarrow: '↔', Leftrightarrow: '⇔', Longleftrightarrow: '⇔', iff: '⇔', mapsto: '↦',
+    le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', approx: '≈', equiv: '≡', sim: '∼', propto: '∝', ll: '≪', gg: '≫',
+    perp: '⊥', parallel: '∥', angle: '∠', triangle: '△',
+    // sets and logic
+    in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', cup: '∪', cap: '∩', emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃',
+    therefore: '∴', because: '∵', neg: '¬', lnot: '¬', land: '∧', wedge: '∧', lor: '∨', vee: '∨',
+    // operators and dots
+    pm: '±', mp: '∓', times: '×', cdot: '·', div: '÷', ast: '*', circ: '∘', bullet: '•', ldots: '…', dots: '…', cdots: '⋯', degree: '°',
+    // the rest
+    infty: '∞', partial: '∂', nabla: '∇',
+    // Greek
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'θ', kappa: 'κ',
+    lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
   };
+  // a mark over what is in the braces: \bar{x}, \vec{v}, \hat{x}, \dot{x}, \ddot{x}, \tilde{x}
+  const OVER = { bar: 'bar', overline: 'bar', vec: 'vec', hat: 'hat', widehat: 'hat', dot: 'dot', ddot: 'ddot', tilde: 'tilde', widetilde: 'tilde' };
+  const FRACTIONS = new Set(['frac', 'dfrac', 'tfrac']);
   const TEXT_COMMANDS = new Set(['text', 'textrm', 'textbf', 'textit', 'mathrm', 'mathbf', 'mathit', 'mbox', 'operatorname']);
   // widths, in x-heights, of the spaces TeX has names for (a plain space between things is ignored, as in TeX)
   const SPACES = { ' ': 0.8, ',': 0.45, ';': 0.6, ':': 0.5, quad: 1.2, qquad: 2.4 };
   const spaceOf = (k) => (Object.prototype.hasOwnProperty.call(SPACES, k) ? SPACES[k] : undefined);
-  const WORDS = new Set(['sin', 'cos', 'tan', 'log', 'ln', 'exp', 'lim', 'max', 'min', 'det']);
-  const RELATIONS = new Set(['=', '<', '>', '≤', '≥', '≠', '≈', '→']);
-  const BINARY = new Set(['+', '-', '×', '÷', '±', '·', '*']);
+  const WORDS = new Set(['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp', 'lim', 'max', 'min', 'sup', 'inf', 'det', 'dim', 'ker', 'gcd', 'mod', 'arg', 'deg']);
+  const RELATIONS = new Set(['=', '<', '>', '≤', '≥', '≠', '≈', '→', '←', '↔', '⇒', '⇐', '⇔', '↦', '∈', '∉', '⊂', '⊆', '≡', '∼', '∝', '≪', '≫', '⊥', '∥']);
+  const BINARY = new Set(['+', '-', '×', '÷', '±', '∓', '·', '*', '∘', '∪', '∩', '∧', '∨']);
   // One quick sample of these tends to look like a scribble, so wait for two before using the writer's own
-  const OPERATORS = new Set(['+', '-', '=', '<', '>', '≤', '≥', '≠', '≈', '±', '×', '÷', '·', '→']);
+  const OPERATORS = new Set(['+', '-', '=', '<', '>', '≤', '≥', '≠', '≈', '±', '∓', '×', '÷', '·', '→', '←', '↔', '⇒', '⇐', '⇔', '↦', '∈', '∉', '⊂', '⊆', '∪', '∩', '∘', '∼', '≡', '∝', '≪', '≫', '⋯']);
   const OPEN = new Set(['(', '[', '{']);
   const CLOSE = new Set([')', ']', '}']);
 
@@ -3975,7 +4104,8 @@ module.exports = { createTools };
               continue;
             }
           }
-          if (spaceOf(name) !== undefined) out.push({ k: 'gap', v: spaceOf(name) });
+          if (name === 'prime') out.push({ k: 'prime' });
+          else if (spaceOf(name) !== undefined) out.push({ k: 'gap', v: spaceOf(name) });
           else out.push({ k: 'cmd', v: name });
         } else if (spaceOf(s[i + 1]) !== undefined) {
           out.push({ k: 'gap', v: spaceOf(s[i + 1]) }); // "\ " is a space that stays, like \, and \;
@@ -3992,9 +4122,12 @@ module.exports = { createTools };
       } else if (c === '√' || c === '∛') {
         out.push({ k: 'cmd', v: c === '√' ? 'sqrt' : 'cbrt' });
         i++;
-      } else if (/[A-Za-z0-9.']/.test(c)) {
+      } else if (c === "'") {
+        out.push({ k: 'prime' }); // y' is a y with a prime over it, not a word with an apostrophe in it
+        i++;
+      } else if (/[A-Za-z0-9.]/.test(c)) {
         let j = i;
-        while (j < s.length && /[A-Za-z0-9.']/.test(s[j])) j++;
+        while (j < s.length && /[A-Za-z0-9.]/.test(s[j])) j++;
         const word = s.slice(i, j);
         const root = /^(sqrt|cbrt|cubert|cuberoot)(\d[\d.]*)?$/i.exec(word); // typed as words: sqrt(x), cubert 8
         if (root) {
@@ -4013,6 +4146,7 @@ module.exports = { createTools };
   /** Tokens -> lines of nodes. A node is {t, ...} with optional .sup / .sub (each a node list). */
   function parse(src) {
     const toks = tokenize(src);
+    const unknown = new Set(); // commands that are not supported: they are reported, not written out as words
     let i = 0;
 
     function skipSpace() {
@@ -4073,7 +4207,7 @@ module.exports = { createTools };
         n = { t: 'sym', c: t.v };
       } else if (t.k === 'cmd') {
         i++;
-        if (t.v === 'frac') {
+        if (FRACTIONS.has(t.v)) {
           const a = arg();
           const b = arg();
           n = { t: 'frac', a, b };
@@ -4098,13 +4232,19 @@ module.exports = { createTools };
           const f = toks[i];
           if (f && f.k === 'ch') i++;
           return f && f.k === 'ch' && f.v !== '.' ? { t: 'sym', c: f.v } : atom();
+        } else if (Object.prototype.hasOwnProperty.call(OVER, t.v)) {
+          n = { t: 'over', k: OVER[t.v], a: arg() };
         } else if (WORDS.has(t.v)) {
           n = { t: 'run', s: t.v };
-        } else if (COMMANDS[t.v]) {
+        } else if (Object.prototype.hasOwnProperty.call(COMMANDS, t.v)) {
           n = { t: 'sym', c: COMMANDS[t.v] };
         } else {
-          n = { t: 'run', s: t.v }; // unknown command: write its name
+          unknown.add(t.v); // not supported: say so, and write nothing for it
+          return null;
         }
+      } else if (t.k === 'prime') {
+        i++;
+        n = { t: 'sym', c: '\u2032' }; // a prime with nothing before it
       } else if (t.k === '^' || t.k === '_') {
         n = { t: 'group', a: [] }; // a script with nothing before it
       } else {
@@ -4116,7 +4256,10 @@ module.exports = { createTools };
         const save = i;
         skipSpace();
         const nx = toks[i];
-        if (nx && nx.k === '^' && !n.sup) {
+        if (nx && nx.k === 'prime' && !n.sup && n.t !== 'sym') {
+          i++;
+          n.primes = (n.primes || 0) + 1; // y', f'': marks over the top right of what came before
+        } else if (nx && nx.k === '^' && !n.sup) {
           i++;
           n.sup = arg();
         } else if (nx && nx.k === '_' && !n.sub) {
@@ -4152,6 +4295,7 @@ module.exports = { createTools };
       if (i < toks.length && toks[i].k === 'nl') i++;
       else break;
     }
+    lines.unknown = Array.from(unknown);
     return lines;
   }
 
@@ -4356,16 +4500,28 @@ module.exports = { createTools };
   }
 
   function attachScripts(E, n, box, sc) {
-    if (!n.sup && !n.sub) return box;
+    if (!n.sup && !n.sub && !n.primes) return box;
     const out = [];
     place(out, box, 0, 0);
     const ssc = sc * 0.7;
     const sup = n.sup ? row(E, n.sup, ssc) : null;
     const sub = n.sub ? row(E, n.sub, ssc) : null;
-    const x = box.w + 0.05 * sc;
+    let x = box.w + 0.05 * sc;
     let w = box.w;
     let up = box.up;
     let down = box.down;
+    if (n.primes) {
+      // y' and f'': a short slanted stroke just over the top right of the letter, whatever height the writer's own apostrophe has
+      const top = Math.max(box.up, sc); // the top of the letter, and at least the x-height
+      for (let k = 0; k < n.primes; k++) {
+        const pr = E.drawn([[[0.09, 0.46], [0.03, 0.0]]], sc);
+        place(out, pr, x, top - 0.26 * sc);
+        x += pr.w + 0.08 * sc;
+        w = Math.max(w, x);
+      }
+      up = Math.max(up, top + 0.22 * sc);
+      x += 0.02 * sc;
+    }
     if (sup) {
       const base = Math.max(0.6 * sc, box.up - 0.45 * sc);
       place(out, sup, x, base);
@@ -4399,6 +4555,29 @@ module.exports = { createTools };
       }
       box = attachScripts(E, n, box, sc);
       return { kind: 'run', box };
+    }
+    if (n.t === 'over') {
+      // a mark over what is in the braces
+      const inner = row(E, n.a, sc);
+      const w = Math.max(inner.w, 0.3 * sc);
+      const y = inner.up + 0.2 * sc; // the mark's height, in this box's own scale
+      const u = (v) => v / sc; // E.drawn takes polylines in x-heights and scales them
+      const mid = w / 2;
+      const shapes = {
+        bar: [[[0, 0], [u(w), 0]]],
+        vec: [[[0, 0], [u(w), 0]], [[u(w) - 0.2, 0.13], [u(w), 0], [u(w) - 0.2, -0.13]]],
+        hat: [[[u(mid) - 0.17, -0.1], [u(mid), 0.14], [u(mid) + 0.17, -0.1]]],
+        dot: [[[u(mid), 0], [u(mid) + 0.01, 0.02]]],
+        ddot: [[[u(mid) - 0.12, 0], [u(mid) - 0.11, 0.02]], [[u(mid) + 0.12, 0], [u(mid) + 0.13, 0.02]]],
+        tilde: [Array.from({ length: 12 }, (_, i) => [u(mid) - 0.25 + (0.5 * i) / 11, 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+      };
+      const mark = E.drawn(shapes[n.k] || shapes.bar, sc);
+      const out = [];
+      place(out, inner, (w - inner.w) / 2, 0);
+      // E.drawn moves the ink to start at x = 0: put it back where it was drawn
+      const left = Math.min(...(shapes[n.k] || shapes.bar).flat().map((p) => p[0])) * sc;
+      place(out, mark, left, y);
+      return { kind: 'run', box: attachScripts(E, n, { w, up: y + 0.25 * sc, down: inner.down, strokes: out }, sc) };
     }
     if (n.t === 'gap') return { kind: 'gap', box: { w: n.w * sc, up: 0, down: 0, strokes: [] } };
     if (n.t === 'text') {
@@ -4527,7 +4706,8 @@ module.exports = { createTools };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const tanS = Math.tan(style.slant + (o.slantDelta * Math.PI) / 180);
-    const lines = parse(text).map((nodes) => row(E, nodes, 1));
+    const parsed = parse(text);
+    const lines = parsed.map((nodes) => row(E, nodes, 1));
 
     const baselines = [];
     const strokes = [];
@@ -4555,6 +4735,7 @@ module.exports = { createTools };
       strokes,
       words: [],
       missing: Array.from(E.ctx.missing),
+      unknown: parsed.unknown, // TeX commands that are not supported (nothing was written for them)
       standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])), // symbols drawn for the writer because they have not written them
       baselines,
       xh,
@@ -4562,7 +4743,41 @@ module.exports = { createTools };
     };
   }
 
-  const api = { layout, parse, tokenize };
+  /** The TeX that works, as plain text for an error message or a help page. */
+  function supportedCommands() {
+    const sym = Object.entries(COMMANDS).map(([k, v]) => `\\${k} ${v}`);
+    return [
+      'Symbols: ' + sym.join('  '),
+      'Words (written as words): ' + Array.from(WORDS).map((w) => '\\' + w).join(' '),
+      'Marks over a letter: ' + Object.keys(OVER).map((w) => '\\' + w + '{x}').join(' ') + "   Primes: y' f'' \\prime",
+      'Structure: x^2 x_1 x_i^2  \\frac{a}{b} \\dfrac \\sqrt{x} \\sqrt[3]{x} sqrt(x) cubert(x)  \\int \\sum \\prod with _ and ^  \\lim_{x \\to 0}  \\left( \\right)  \\text{words} \\mathrm{} \\operatorname{}  \\, \\; \\: \\quad \\qquad \\  and a line break (\\\\ or a new line)',
+    ].join('\n');
+  }
+
+  /** Up to three supported commands that look like an unsupported one (same letters in another case, one inside the other, or a typo). */
+  function suggestCommands(name) {
+    const all = Object.keys(COMMANDS).concat(Array.from(WORDS), Object.keys(OVER), Array.from(FRACTIONS), ['sqrt', 'int', 'sum', 'prod', 'left', 'right', 'text', 'prime', 'quad', 'qquad']);
+    const n = name.toLowerCase();
+    const dist = (a, b) => {
+      const d = Array.from({ length: a.length + 1 }, (_, i) => [i].concat(new Array(b.length).fill(0)));
+      for (let j = 0; j <= b.length; j++) d[0][j] = j;
+      for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      return d[a.length][b.length];
+    };
+    return all
+      .map((c) => {
+        const l = c.toLowerCase();
+        const close = Math.min(l.length, n.length) >= 3 && (l.includes(n) || n.includes(l)); // one inside the other (\\arrow, \\Rightarrow)
+        const typo = n.length >= 4 && dist(l, n) <= (n.length >= 7 ? 2 : 1);
+        return { c, score: l === n ? 0 : typo ? 1 : close ? 2 : 9 };
+      })
+      .filter((x) => x.score < 9)
+      .sort((a, b) => a.score - b.score || a.c.length - b.c.length)
+      .slice(0, 3)
+      .map((x) => x.c);
+  }
+
+  const api = { layout, parse, tokenize, supportedCommands, suggestCommands, COMMANDS };
   root.HW = root.HW || {};
   root.HW.math = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

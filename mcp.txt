@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be 62b291f6aaa9f59e95fd9c7ab97e220619720a7105ba8a70d8b9e4c74eb00f32
+  sha256sum handwriting-engine.zip     # should be 4b53fe3f48bd19682cefd256e3861d75129de34778b6f4e94c336cbc40857b19
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be 68593790c7f028ee33ee0b874d01dd85e7129f0e7f99b4e2b6312a54919a12b2
+  sha256sum handwriting-mcp.js     # should be 29b610e1a7477c18e1ab4faddeb7b77b5adb5229523d8b54981aef469f9607c7
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 e26f3360131d7ba43d12656eac1facdf5b869b465c4b7e5bc374ddb40bba866f
+  sha256 a7f261f7e704db84687ad8329337c47c18b1a3ea7fec253826bcaedd8a4ab4ea
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
@@ -49,6 +49,12 @@ wrote (a degree sign, a macron, a skipped digit) STOPS the call with the exact c
 they are in; nothing is skipped or guessed. Fix the text or have the person teach them, or pass on_missing: "fallback" to draw
 a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
 Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
+
+seed (write_text, write_batch, each fill_pdf answer): a whole number from 0, default 1; the same seed is the same writing, another is
+another take. For digits it picks another of the person's clean examples: re-roll one bad digit by changing that answer's seed.
+fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 10 KB) to check digits without rendering pages.
+Math TeX: only commands listed by handwriting_status {math_help: true} work (\Rightarrow \implies \iff \in \cup \bar{x} \vec{v} y' ...);
+others are refused with suggestions, never written out as words.
 
 fill_pdf fitting: too long for a box means wrap onto more lines, then grow the box downward (max_height; default stops above the
 nearest printed text; grow: false forbids it), and only then shrink, never below min_size_ratio (default 0.8) of the size asked
