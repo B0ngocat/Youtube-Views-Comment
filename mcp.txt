@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be 4b53fe3f48bd19682cefd256e3861d75129de34778b6f4e94c336cbc40857b19
+  sha256sum handwriting-engine.zip     # should be 934525d25e7a43424967a9fad2cf8e61c6f54e12cf47334af61691efbd602645
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be 29b610e1a7477c18e1ab4faddeb7b77b5adb5229523d8b54981aef469f9607c7
+  sha256sum handwriting-mcp.js     # should be 59a44a1fe30f53b6bda7a333dcfe8716de1f400435225b58941f7b71eeb20732
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 a7f261f7e704db84687ad8329337c47c18b1a3ea7fec253826bcaedd8a4ab4ea
+  sha256 3b4e1f798a6bba40cf76b0ededae193ec177f43f9b8f34988bce68ed57978b7a
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
@@ -67,7 +67,8 @@ over it. Do not remove the accents. Check each accent is over the right letter.
 
 Math input: x^2, \frac{a}{b}, \sqrt{x} or sqrt(x), \sqrt[3]{x} or cubert(x), \int_0^1, \sum_{i=1}^{n},
 \text{ words }, and "\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
-check numbers by looking at the picture. Write only what the owner asked for.
+check numbers by looking at the picture. A multiplication sign the person wrote too small to read is left out (handwriting_status says so) and
+a clean one is drawn with on_missing "fallback". Write only what the owner asked for.
 
 The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
 folder (next to the samples file, or in the current folder when it came from the site), so later starts take under

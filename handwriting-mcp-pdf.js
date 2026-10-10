@@ -327,7 +327,7 @@ function createTools(config) {
       for (const m of p.missing) {
         (m.standIn ? drawable : hopeless).add(m.ch);
         const w = m.words.map((x) => `"${x}"`).join(', ');
-        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}`);
+        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}${m.speck ? '  [they wrote one, but too small to read, so it was left out]' : ''}`);
       }
     }
     const dl = [...drawable].filter((c) => !hopeless.has(c));
@@ -490,7 +490,7 @@ function createTools(config) {
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
         const lines = [`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters).`];
         if (chk.missing.length) {
-          lines.push('No sample for: ' + chk.missing.map((m) => m.ch).join(' '));
+          lines.push('No sample for: ' + chk.missing.map((m) => m.ch + (m.speck ? ' (written too small to read)' : '')).join(' '));
           const drawable = chk.missing.filter((m) => m.standIn);
           if (drawable.length) lines.push(`Of those, ${drawable.map((m) => m.ch).join(' ')} can be drawn as a clean stand-in (not the person's own handwriting) with on_missing: "fallback". The rest must be taught in the Teach tab.`);
         } else lines.push('Every character checked has a sample.');
@@ -992,6 +992,23 @@ module.exports = { createTools };
    * u.odd gets large and the synthesizer avoids it. Needs a few examples of the letter. Groups
    * that haven't changed since the last build are skipped.
    */
+  /**
+   * A × written as a speck (a fraction of the size of the writer's own +) is a dot to the reader, and in "9.81 × 4.5" a
+   * second decimal point. Left out of the pools it counts as not written yet, so plain text and math draw a clean one and
+   * the writer is told it is missing. The examples stay in allByChar, marked `speck`.
+   */
+  function dropSpecks(byChar) {
+    const list = byChar.get('×');
+    if (!list || !list.length) return [];
+    const size = (u) => Math.max(u.box.maxX - u.box.minX, u.box.maxY - u.box.minY);
+    const plus = byChar.get('+');
+    const ref = plus && plus.length ? A.median(plus.map(size)) : 1;
+    if (A.median(list.map(size)) >= 0.4 * ref) return [];
+    for (const u of list) u.speck = true;
+    byChar.delete('×');
+    return ['×'];
+  }
+
   function markOddOnes(byChar) {
     for (const [ch, list] of byChar) {
       const prev = oddCache.get(ch);
@@ -1274,6 +1291,27 @@ module.exports = { createTools };
         const h = u.box.maxY - Math.min(0, u.box.minY);
         if (h <= top) return;
         const c = scaleUnit(u, { fx: top / h, fy: top / h });
+        list[i] = c;
+        if (pool) pool.forEach((p, k) => p === u && (pool[k] = c));
+      });
+    }
+  }
+
+  /**
+   * An apostrophe or a quote written on its own has nothing on the pad to size it against, so it lands wherever the writer
+   * put it: 3.3 x-heights above the baseline in one writer's data, a line and a half over the tops of their letters, so
+   * "Withey's" came out with the mark floating above the line above. Marks like these hang from the tops of the ascenders.
+   * A mark that is too high is replaced by a copy moved down; the originals are left alone, so this can run on every rebuild.
+   */
+  function lowerHighMarks(byChar, allByChar, profile) {
+    const top = profile && profile.asc ? profile.asc : 1.85;
+    for (const ch of ["'", '"', '`']) {
+      const list = allByChar.get(ch);
+      if (!list) continue;
+      const pool = byChar.get(ch);
+      list.forEach((u, i) => {
+        if (u.box.maxY <= top + 0.25) return;
+        const c = scaleUnit(u, { fx: 1, fy: 1, dy: top - u.box.maxY });
         list[i] = c;
         if (pool) pool.forEach((p, k) => p === u && (pool[k] = c));
       });
@@ -1566,6 +1604,7 @@ module.exports = { createTools };
       }
     });
 
+    const specks = dropSpecks(byChar);
     markOddOnes(byChar);
     markWrongOnes(byChar);
     markFarOnes(byChar);
@@ -1573,6 +1612,7 @@ module.exports = { createTools };
     markStrayOnes(byChar);
     shrinkSingleLetters(byChar, allByChar);
     tidyTallSymbols(byChar, allByChar, profile);
+    lowerHighMarks(byChar, allByChar, profile);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
     const clears = [];
@@ -1587,6 +1627,27 @@ module.exports = { createTools };
       }
     }
     const clearance = clears.length >= 20 ? { median: A.median(clears), sd: robustSd(clears) } : null;
+
+    // Digits and decimal points keep their own distances. Numbers are written airier than words (0.53 against 0.30
+    // x-heights between neighbours in one writer's data), and spacing digits like letters made them touch.
+    const isDigit = (c) => /[0-9]/.test(c);
+    const pairClearance = (test, cap) => {
+      const c = [];
+      for (const w of aligned) {
+        if (!w.ok) continue;
+        for (let i = 1; i < w.units.length; i++) {
+          const p = w.units[i - 1];
+          const u = w.units[i];
+          if (p.exit.mid || u.entry.mid || !test(p.ch, u.ch)) continue;
+          const b = A.inkBase(p, u);
+          if (b !== null) c.push(b);
+        }
+      }
+      return c.length >= 8 ? { median: Math.min(cap, A.median(c)), sd: Math.min(0.25, robustSd(c)) } : null;
+    };
+    const digitClearance = pairClearance((a, b) => isDigit(a) && isDigit(b), 1);
+    // never past 0.6: a point further from its digits than that reads as two numbers
+    const dotClearance = pairClearance((a, b) => (a === '.' && isDigit(b)) || (b === '.' && isDigit(a)), 0.6);
 
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     const unitById = new Map();
@@ -1610,6 +1671,9 @@ module.exports = { createTools };
       wholeWords,
       profile,
       clearance,
+      digitClearance,
+      dotClearance,
+      specks, // characters the writer wrote too small to read (left out of the pools)
       rhythm: computeRhythm(words, aligned),
       slant: slants.length ? A.median(slants) : 0,
       liftGap,
@@ -1681,7 +1745,7 @@ module.exports = { createTools };
     return o.words;
   }
 
-  const api = { ACCENTS, sizeNormalize, digitNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { ACCENTS, sizeNormalize, digitNormalize, lowerHighMarks, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -3508,7 +3572,7 @@ module.exports = { createTools };
     return t;
   }
 
-  function assemble(choices, liftGap, clearance, rng) {
+  function assemble(choices, liftGap, clearance, rng, gaps) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
     const marks = [];
@@ -3532,14 +3596,19 @@ module.exports = { createTools };
         if (!conn) {
           const base = prev.sc === 1 && sc === 1 ? A.inkBase(prev.unit, u) : null;
           const byBox = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
-          if (clearance && base !== null) {
+          const dotPair = (prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch));
+          const digitPair = /[0-9]/.test(prev.unit.ch) && /[0-9]/.test(u.ch);
+          // digits and decimal points keep the distance the writer leaves in their numbers, when they have written enough of them
+          const clear = (digitPair && gaps && gaps.digit) || (dotPair && gaps && gaps.dot) || clearance;
+          if (clear && base !== null) {
             // nearest ink of the two letters ends up `want` apart, which varies a little like the writer's does
-            let want = Math.max(0.02, clearance.median + clearance.sd * 0.5 * G.gaussian(rng));
-            // a decimal point squeezed against its digits turns 71.45 into 7145
-            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) want = Math.max(want, 0.2);
+            let want = Math.max(0.02, clear.median + clear.sd * 0.5 * G.gaussian(rng));
+            // a decimal point squeezed against its digits turns 71.45 into 7145, and digits that touch read as one
+            if (dotPair) want = Math.max(want, 0.2);
+            if (digitPair) want = Math.max(want, 0.15);
             tx = prev.tx + want - base;
             // a decimal point is tiny: whatever the nearest ink says, its digit neighbours keep a small gap from its own box
-            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) {
+            if (dotPair) {
               const gap = tx + u.box.minX * sc - (prev.tx + prev.unit.box.maxX * prev.sc);
               if (gap < 0.12) tx += 0.12 - gap;
             }
@@ -3680,8 +3749,9 @@ module.exports = { createTools };
 
   /**
    * Before writing anything: which characters of `text` can the writer's handwriting not produce? Returns
-   *   missing:     [{ch, code, words, standIn}]  nothing can draw these (or, without opts.fallback, only a drawing could:
-   *                                              standIn is true then, so the caller can offer it)
+   *   missing:     [{ch, code, words, standIn, speck}]  nothing can draw these (or, without opts.fallback, only a drawing could:
+   *                                              standIn is true then, so the caller can offer it; speck: the writer did write
+   *                                              one, too small to read, and it was left out)
    *   substituted: [{ch, code, words}]           drawn from glyphs.js because opts.fallback is on
    *   composed:    [ch]                          drawn from the writer's own letter and a mark (an accent, or a turned ? or !)
    * words are the words of the text each character is in, as typed (up to 6).
@@ -3692,7 +3762,7 @@ module.exports = { createTools };
     const substituted = new Map();
     const composed = new Set();
     const note = (map, ch, word, standIn) => {
-      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn });
+      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn, speck: !!(style.specks && style.specks.includes(ch)) });
       const e = map.get(ch);
       if (!e.words.includes(word) && e.words.length < 6) e.words.push(word);
     };
@@ -3751,7 +3821,7 @@ module.exports = { createTools };
     const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
-    const strokes = assemble(choices, style.liftGap, style.clearance, arng);
+    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance });
     const spans = strokes.spans;
     deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
@@ -4468,9 +4538,9 @@ module.exports = { createTools };
     if (!a) return 0;
     const unary = b.c === '-' && (atStart || a.kind === 'open' || a.kind === 'rel' || a.kind === 'bin');
     if (a.kind === 'gap' || b.kind === 'gap') return 0; // a space that was asked for is the whole gap
-    if (a.kind === 'rel' || b.kind === 'rel') return 0.55;
-    if (a.kind === 'bin' && !(a.unary)) return 0.35;
-    if (b.kind === 'bin' && !unary) return 0.35;
+    if (a.kind === 'rel' || b.kind === 'rel') return 0.7;
+    if (a.kind === 'bin' && !(a.unary)) return 0.45;
+    if (b.kind === 'bin' && !unary) return 0.45;
     if (a.kind === 'open' || b.kind === 'close') return 0.05;
     if (a.kind === 'punct') return 0.3;
     if (b.kind === 'punct') return 0.04;
