@@ -8,7 +8,7 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be 934525d25e7a43424967a9fad2cf8e61c6f54e12cf47334af61691efbd602645
+  sha256sum handwriting-engine.zip     # should be 1886ad9d84cb9448f159eba971888f2bea082d3bab5d366d7ac522ff6dad59c5
   unzip handwriting-engine.zip
 
 Just the server
