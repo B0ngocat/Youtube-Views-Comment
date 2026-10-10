@@ -40,6 +40,7 @@ function tracked() {
 const PROFILES = {
   niko: { kind: 'full' }, // a person who can run and host everything: the full package, data of their own
   seba: { kind: 'ai' }, // a person whose AI can only run a program: the small zip
+  friend: { kind: 'simple' }, // a person who only teaches the app her handwriting and sends it back: a small page with no tabs, no download
 };
 const AI_PACK = { top: 'handwriting-for-ai/', keep: ['docs/handwriting-engine-guide.pdf'], rename: { 'docs/FOR-THE-AI.txt': 'FOR-THE-AI.txt' } };
 

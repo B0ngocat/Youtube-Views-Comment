@@ -33,6 +33,18 @@
               <li>Give that zip to your AI and tell it: "Unzip this and read FOR-THE-AI.txt."</li>
             </ol>
           </div>
+          <div class="card" id="simpleBar" hidden>
+            <p id="spWelcome" class="small"><b>Hi! This page is just for you.</b> You are teaching the app your handwriting, one word at a time. It takes about half an hour and you can stop and come back: it remembers where you were. At the end, tap <b>Send my handwriting</b> and send the file back to the person who gave you this link.</p>
+            <div class="sp-top"><b id="spStep">Teach the app your handwriting</b><span id="spEta" class="muted"></span></div>
+            <div class="sp-track" id="spTrack" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="spFill"></i></div>
+            <div class="sp-top small"><span id="spCount"></span><span class="muted">Write each one on the solid line. It moves on by itself when you stop for 3 seconds (or tap Next).</span></div>
+          </div>
+          <div class="card" id="simpleDone" hidden>
+            <h2>All done, thank you!</h2>
+            <p id="spDoneText">Tap the button to send your handwriting back.</p>
+            <button id="spSend" class="primary" type="button">Send my handwriting</button>
+            <p id="spSent" class="small muted" aria-live="polite"></p>
+          </div>
           <div class="rounds" id="rounds" role="group" aria-label="Rounds"></div>
 
           <div class="card prompt-card">
@@ -84,7 +96,7 @@
         </aside>
       </div>
 
-      <div class="card">
+      <div class="card" id="learnedCard">
         <h2>What it learned <span class="muted small" id="samplesNote"></span></h2>
         <p class="muted small">Each colour is one letter the engine cut out of your word. If a word looks wrong, tap it to write it again. To check the letters themselves, tap a letter in the grid above and cross out any example that does not look like it.</p>
         <div class="gallery" id="gallery"></div>
@@ -259,6 +271,7 @@ Pack my box with five dozen liquor jugs.</textarea>
   <script src="src/lines.js"></script>
   <script src="src/capture.js"></script>
   <script src="src/prompts.js"></script>
+  <script src="src/simple.js"></script>
   <script src="src/sheet.js"></script>
   <script src="src/notability.js"></script>
   <script src="src/app.js"></script>

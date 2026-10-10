@@ -26,16 +26,17 @@ function read(rel) {
 
 /** index.html with its stylesheet and scripts inlined, so it is one self-contained document. */
 function inlineApp(opts) {
-  const kind = (opts && opts.kind) || 'full'; // 'ai' is the small part of the site (see PROFILES in pack.js)
+  const kind = (opts && opts.kind) || 'full'; // 'ai' and 'simple' are the small parts of the site (see PROFILES in pack.js)
   let html = read('index.html');
   html = html.replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, href) => `<style>\n${read(href)}\n</style>`);
   // Big libraries (vendor/) go in as plain text and only run when the app asks for them (loadLib in src/sheetui.js), so
   // they cost nothing at start-up. In a plain checkout loadLib fetches the same files by name instead.
   const libs = fs.readdirSync(path.join(ROOT, 'vendor')).filter((f) => f.endsWith('.js')).sort();
-  const table = libs.map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
+  const simple = kind === 'simple'; // no Sheet tab and no Download button there: neither the PDF libraries nor the package is needed
+  const table = (simple ? [] : libs).map((f) => `${JSON.stringify('vendor/' + f)}: ${JSON.stringify(read('vendor/' + f)).replace(/<\//g, '<\\/')}`);
   // The Download button's package (project files, the servers, the guide): deflated here, put into a .zip by src/download.js
   // (it goes just before download.js, which looks for it when it starts)
-  const pack = opts && opts.pack === false ? '' : `<script>${packScript(kind)}</script>\n`;
+  const pack = (opts && opts.pack === false) || simple ? '' : `<script>${packScript(kind)}</script>\n`;
   html = html.replace('</body>', () => `<script>window.HW_LIBS = {${table.join(',\n')}};</script>\n</body>`);
   html = html.replace('<script src="src/download.js"></script>', () => `${pack}<script src="src/download.js"></script>`);
   html = html.replace(/<script src="([^"]+)"><\/script>/g, (_, src) => `<script>\n${read(src).replace(/<\/script/gi, '<\\/script')}\n</script>`);

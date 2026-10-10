@@ -194,3 +194,11 @@ textarea { resize: vertical; font-size: 1rem; }
 .es-keys .es-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .es-keys .es-row .chip { min-width: 40px; min-height: 40px; font-size: 1.1rem; }
 .es-keys .es-caps[aria-pressed="true"] { border-color: var(--accent); }
+
+/* ---- the simple part of the site (a friend who only teaches and sends) ---- */
+body.simple .tabs, body.simple #status, body.simple #rounds, body.simple .teach-side, body.simple #learnedCard, body.simple #btnLock, body.simple #dl { display: none !important; }
+body.simple .teach-grid { grid-template-columns: minmax(0, 1fr); max-width: 860px; margin: 0 auto; }
+.sp-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.sp-track { height: 14px; border-radius: 7px; background: var(--chip); overflow: hidden; margin: 8px 0; }
+.sp-track i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 7px; transition: width 0.3s ease; }
+#simpleDone h2 { margin: 0 0 6px; }

@@ -13,6 +13,8 @@
   // ---- persistence (all wrapped: Safari private mode / quota can throw) -------------------
   // another part of the site (a different password) keeps its own data, so two people on one browser never mix
   const NS = window.HW_PROFILE ? window.HW_PROFILE + ':' : '';
+  // the simple part of the site (a friend who teaches the app and sends it back): fewer rounds, no tabs, words to redo, time left. ?simple tries it locally.
+  const SIMPLE = window.HW_PROFILE_KIND === 'simple' || /[?&]simple\b/.test(location.search);
   const store = {
     get(key, dflt) {
       try {
@@ -49,7 +51,13 @@
   let rebuildTimer = null;
   let renderQueued = false;
 
+  let fixWords = []; // simple part: the words that did not come out clearly, to write again ({key, text, iso})
+  const fixTries = store.get('hw.fixTries.v1', {}); // how often each has been put in front of her
+  let paceLog = store.get('hw.pace.v1', []); // how long her words and lines take, for the time left
+  let lastAt = 0; // when she last moved on
+
   const rounds = () => {
+    if (SIMPLE) return HW.simple.rounds(HW.prompts.ROUNDS, fixWords);
     const list = HW.prompts.ROUNDS.slice();
     customSentences.forEach((s, n) => list.push({ id: 'c' + n, title: 'Mine ' + (n + 1), blurb: 'Your own sentence.', sentences: [s], custom: true }));
     return list;
@@ -129,6 +137,7 @@
       });
       host.appendChild(b);
     });
+    if (SIMPLE) renderSimple();
   }
 
   function firstOpen(r) {
@@ -150,6 +159,8 @@
     host.textContent = '';
     if (tok.kind === 'line') {
       host.appendChild(el('span', 'w cur', tok.text));
+    } else if (round.words) {
+      host.append(el('span', 'muted small', 'Write this again, slowly: '), el('span', 'big', tok.text));
     } else if (round.chars) {
       host.append(el('span', 'muted small', tok.iso ? 'Write this letter: ' : 'Write this mark: '), el('span', 'big', tok.text));
     } else {
@@ -202,12 +213,16 @@
       pad.load(parts.flatMap((w) => w.strokes));
       return;
     }
-    const existing = words.find((w) => w.key === tok.key);
+    const existing = tok.fix ? null : words.find((w) => w.key === tok.key); // a word to write again starts on a clean pad
     pad.load(existing ? existing.strokes : []);
   }
 
   function goTo(r, i) {
     cur = { r, i };
+    if (SIMPLE) {
+      window.scrollTo(0, 0); // the progress and the word are always in view
+      disarmIdle();
+    }
     loadCurrentInk();
     renderRounds();
     renderPrompt();
@@ -222,6 +237,7 @@
     const tok = tokensOf(cur.r)[cur.i];
     const snap = pad.snapshot(tok.text);
     if (!snap) return 'empty';
+    const wasNew = SIMPLE && !capturedKeys().has(tok.key);
     if (tok.kind === 'line') {
       const res = HW.lines.splitLine(snap);
       if (!res.ok) {
@@ -241,6 +257,7 @@
       });
       persist();
       scheduleRebuild();
+      if (wasNew) notePace('l');
       return 'saved';
     }
     snap.key = tok.key;
@@ -250,12 +267,18 @@
     else words.push(snap);
     persist();
     scheduleRebuild();
+    if (wasNew || (SIMPLE && tok.fix)) notePace('w');
     return 'saved';
   }
 
   function advance() {
     const toks = tokensOf(cur.r);
-    if (cur.i < toks.length - 1) goTo(cur.r, cur.i + 1);
+    if (SIMPLE && toks[cur.i].fix) {
+      fixTries[toks[cur.i].key] = (fixTries[toks[cur.i].key] || 0) + 1; // asked for, so not asked for again and again
+      store.set('hw.fixTries.v1', fixTries);
+    }
+    if (SIMPLE && cur.r === rounds().length - 1 && cur.i === toks.length - 1) finishSimple();
+    else if (cur.i < toks.length - 1) goTo(cur.r, cur.i + 1);
     else if (cur.r < rounds().length - 1) goTo(cur.r + 1, firstOpen(cur.r + 1));
     else goTo(cur.r, cur.i);
   }
@@ -458,6 +481,88 @@
     });
     $('#samplesNote').textContent = style.words.length ? ', ' + style.words.length + ' words' + (bad ? ', ' + bad + ' need a second look' : '') : '';
   }
+
+  // ---- the simple part: progress, time left, words to write again, sending it back --------------------
+  // After she lifts the pen, 3 seconds of nothing moves her on to the next word, as Next would (a whole sentence waits 8: she
+  // stops between words). It only starts from her own pen lifting, so going Back to look at a word, an empty pad and an undo
+  // never move her; touching anything else (a button, a key, the pad again) cancels it.
+  const IDLE_MS = 3000;
+  const IDLE_LINE_MS = 8000;
+  let idleTimer = null;
+  const disarmIdle = () => clearTimeout(idleTimer);
+  function armIdle() {
+    disarmIdle();
+    if (!pad.strokes.length || !$('#simpleDone').hidden) return;
+    const tok = tokensOf(cur.r)[cur.i];
+    idleTimer = setTimeout(() => {
+      if (pad.strokes.length && $('#simpleDone').hidden) $('#btnNext').click();
+    }, tok.kind === 'line' ? IDLE_LINE_MS : IDLE_MS);
+  }
+  if (SIMPLE) {
+    const c = $('#pad');
+    c.addEventListener('pointerdown', disarmIdle);
+    c.addEventListener('pointercancel', disarmIdle);
+    c.addEventListener('pointerup', armIdle);
+    document.addEventListener('pointerdown', (e) => e.target !== c && disarmIdle(), true);
+    document.addEventListener('keydown', disarmIdle, true);
+  }
+
+  function notePace(kind) {
+    const now = Date.now();
+    if (lastAt) paceLog = HW.simple.note(paceLog, kind, (now - lastAt) / 1000);
+    lastAt = now;
+    store.set('hw.pace.v1', paceLog);
+  }
+
+  function renderSimple() {
+    if (!$('#simpleDone').hidden) return; // finished: the card says so
+    const list = rounds();
+    const p = HW.simple.progress(list, HW.prompts.tokens, capturedKeys());
+    const pct = p.total ? Math.round((100 * p.done) / p.total) : 0;
+    $('#spFill').style.width = pct + '%';
+    $('#spTrack').setAttribute('aria-valuenow', String(pct));
+    $('#spCount').textContent = p.done + ' of ' + p.total + ' written (' + pct + '%)';
+    const round = list[cur.r];
+    $('#spStep').textContent = round ? (round.words ? 'Writing a few words again' : round.title) : '';
+    const measured = paceLog.filter((e) => e.k === 'w').length;
+    $('#spEta').textContent = p.left.w + p.left.l === 0 ? '' : measured >= 3 ? HW.simple.etaText(HW.simple.eta(p.left, paceLog)) : 'working out how long it will take...';
+  }
+
+  /** Everything is written once: check what came out unclearly and ask for those words again, or finish. */
+  function finishSimple() {
+    rebuild();
+    const trouble = HW.simple.troubleWords(style, words, fixTries);
+    if (trouble.length) {
+      fixWords = trouble;
+      goTo(HW.simple.baseRounds(HW.prompts.ROUNDS).length, 0);
+      return;
+    }
+    // the round of words to write again goes away: stand on the last thing of the last real round, so nothing points past the end
+    const last = HW.simple.baseRounds(HW.prompts.ROUNDS).length - 1;
+    cur = { r: last, i: tokensOf(last).length - 1 };
+    fixWords = [];
+    $('.prompt-card').hidden = true;
+    $('#simpleDone').hidden = false;
+    $('#spFill').style.width = '100%';
+    $('#spCount').textContent = words.length + ' words written';
+    $('#spEta').textContent = '';
+    $('#spStep').textContent = 'Finished';
+  }
+
+  $('#spSend').addEventListener('click', async () => {
+    const file = new File([HW.style.toJSON(words)], 'my-handwriting-friend.json', { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'My handwriting' });
+        $('#spSent').textContent = 'If the share sheet closed without sending it anywhere, tap the button again.';
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    download(file, 'my-handwriting-friend.json');
+    $('#spSent').textContent = 'Saved as my-handwriting-friend.json (look in Files or Downloads). Send that file to the person who gave you this link.';
+  });
 
   // backup
   function download(blob, name) {
@@ -846,12 +951,23 @@
   loadSettings();
   syncFixMode();
   syncOutputs();
-  goTo(0, firstOpen(0));
+  if (SIMPLE) {
+    document.body.classList.add('simple');
+    $('#simpleBar').hidden = false;
+  }
+  // the simple part starts at the first thing not written yet (everything written: straight to the check)
+  const open0 = SIMPLE ? rounds().findIndex((_, r) => tokensOf(r).some((t) => !capturedKeys().has(t.key))) : 0;
+  goTo(Math.max(0, open0), firstOpen(Math.max(0, open0)));
   const hash = (location.hash || '').replace('#', '');
-  showTab(TABS.includes(hash) ? hash : words.length >= 20 ? 'write' : 'teach');
+  showTab(SIMPLE ? 'teach' : TABS.includes(hash) ? hash : words.length >= 20 ? 'write' : 'teach');
   // The first build of a large saved set takes a few seconds. Let the page paint first so it never looks frozen.
   if (words.length) $('#status').textContent = 'Loading your handwriting';
-  requestAnimationFrame(() => setTimeout(rebuild, 30));
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      rebuild();
+      if (SIMPLE && open0 < 0 && words.length) finishSimple();
+    }, 30)
+  );
 
   window.HW_APP = {
     pad,
@@ -865,6 +981,10 @@
       return lastLayout;
     },
     rebuild,
+    finishSimple,
+    get fixWords() {
+      return fixWords;
+    },
     goTo,
     commit,
     advance,

@@ -216,6 +216,8 @@
 
   /** Flatten a round into the ordered list of things to write. */
   function tokens(round) {
+    // words to write again (the simple part of the site): each keeps the key of the word it replaces
+    if (round.words) return round.words.map((w, i) => ({ text: w.text, si: 0, wi: i, key: w.key, iso: !!w.iso, fix: true }));
     if (round.chars) return round.chars.map((c, i) => ({ text: c, si: 0, wi: i, key: round.id + '.0.' + i, iso: round.kind === 'letter' }));
     // a whole sentence is one thing to write; it is split into words afterwards
     if (round.kind === 'line') return round.sentences.map((s, si) => ({ text: s, si, wi: 0, key: round.id + '.' + si, kind: 'line' }));

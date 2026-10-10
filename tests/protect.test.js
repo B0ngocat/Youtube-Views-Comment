@@ -131,3 +131,21 @@ test('the pack for the Download button holds the project, the servers and the gu
   assert.ok(readZip); // the reader is exercised against the real zip in the browser test
 });
 
+
+test('the friend\'s part is the simple one: its own small copy, no libraries, no package, its own password', () => {
+  const FRIEND = 'friend-password-12345';
+  const page = buildProtected(PASSWORD, { extra: [{ password: FRIEND, profile: 'friend' }] });
+  const parts = partsOf(page);
+  assert.deepEqual(parts.slots.map((q) => [q.profile, q.kind]), [[null, 'full'], [partId('friend'), 'simple']]);
+  const html = decryptSlot(parts, parts.slots[1], FRIEND);
+  const main = decryptSlot(parts, parts.slots[0], PASSWORD);
+  assert.ok(html.includes('id="simpleBar"') && html.includes('HW_APP') && html.includes('HW.simple'), 'the app, with the simple screen');
+  assert.ok(html.includes('window.HW_LIBS = {}'), 'no PDF libraries: there is no Sheet tab');
+  assert.ok(!/HW_PACK\s*=/.test(html) && /HW_PACK\s*=/.test(main), 'no package to download (the full app has one)');
+  assert.ok(html.length < main.length / 2, 'much smaller than the full app');
+  assert.throws(() => decryptSlot(parts, parts.slots[1], PASSWORD));
+  assert.throws(() => decryptSlot(parts, parts.slots[0], FRIEND));
+  assert.ok(!page.includes(FRIEND));
+  const meta = page.replace(/"(data|wrapped|iv|wrapIv|salt)":"[^"]*"/g, '');
+  assert.ok(!meta.toLowerCase().includes('friend'), 'the page does not name the part');
+});
