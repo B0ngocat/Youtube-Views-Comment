@@ -182,6 +182,7 @@
   const LINE_HINT = 'Write the whole sentence on one line, at your normal size and speed, with normal gaps between words.';
   function setHint(text, problem) {
     const h = $('#padHint');
+    if (SIMPLE && !problem) text = 'Write it the same size as the grey band.';
     h.textContent = text;
     h.classList.toggle('problem', !!problem);
   }
@@ -486,8 +487,8 @@
   // After she lifts the pen, 3 seconds of nothing moves her on to the next word, as Next would (a whole sentence waits 8: she
   // stops between words). It only starts from her own pen lifting, so going Back to look at a word, an empty pad and an undo
   // never move her; touching anything else (a button, a key, the pad again) cancels it.
-  const IDLE_MS = 3000;
-  const IDLE_LINE_MS = 8000;
+  let speed = Math.min(6, Math.max(1, +store.get('hw.speed.v1', 3) || 3)); // seconds of stillness before moving on: the slider
+  const idleMs = (tok) => speed * 1000 * (tok.kind === 'line' ? 2 : 1); // a line is a few words with stops between them
   let idleTimer = null;
   const disarmIdle = () => clearTimeout(idleTimer);
   function armIdle() {
@@ -496,9 +497,19 @@
     const tok = tokensOf(cur.r)[cur.i];
     idleTimer = setTimeout(() => {
       if (pad.strokes.length && $('#simpleDone').hidden) $('#btnNext').click();
-    }, tok.kind === 'line' ? IDLE_LINE_MS : IDLE_MS);
+    }, idleMs(tok));
   }
   if (SIMPLE) {
+    const slider = $('#spSpeed');
+    const sayWait = () => ($('#spSpeedText').textContent = 'moves on after ' + speed + ' s');
+    slider.value = String(speed);
+    sayWait();
+    $('#spSpeedRow').hidden = false;
+    slider.addEventListener('input', () => {
+      speed = +slider.value;
+      store.set('hw.speed.v1', speed);
+      sayWait();
+    });
     const c = $('#pad');
     c.addEventListener('pointerdown', disarmIdle);
     c.addEventListener('pointercancel', disarmIdle);
@@ -514,6 +525,21 @@
     store.set('hw.pace.v1', paceLog);
   }
 
+  // the time left is eased: this is the number on screen, which glides towards the estimate instead of following every word
+  let etaShown = null;
+  let etaAt = 0;
+  let etaTarget = 0;
+  function showEta() {
+    $('#spEta').textContent = etaShown === null ? '' : HW.simple.etaText(etaShown);
+  }
+  window.setInterval(() => {
+    if (!SIMPLE || etaShown === null) return;
+    const now = Date.now();
+    etaShown = HW.simple.ease(etaShown, etaTarget, Math.min(5, (now - etaAt) / 1000));
+    etaAt = now;
+    showEta();
+  }, 500);
+
   function renderSimple() {
     if (!$('#simpleDone').hidden) return; // finished: the card says so
     const list = rounds();
@@ -521,11 +547,22 @@
     const pct = p.total ? Math.round((100 * p.done) / p.total) : 0;
     $('#spFill').style.width = pct + '%';
     $('#spTrack').setAttribute('aria-valuenow', String(pct));
-    $('#spCount').textContent = p.done + ' of ' + p.total + ' written (' + pct + '%)';
+    $('#spPct').textContent = pct + '%';
+    $('#spCount').textContent = p.done + ' of ' + p.total;
     const round = list[cur.r];
-    $('#spStep').textContent = round ? (round.words ? 'Writing a few words again' : round.title) : '';
+    $('#spStep').textContent = round ? (round.words ? 'writing a few words again' : round.title) : '';
     const measured = paceLog.filter((e) => e.k === 'w').length;
-    $('#spEta').textContent = p.left.w + p.left.l === 0 ? '' : measured >= 3 ? HW.simple.etaText(HW.simple.eta(p.left, paceLog)) : 'working out how long it will take...';
+    if (p.left.w + p.left.l === 0 || measured < 3) {
+      etaShown = null;
+      $('#spEta').textContent = p.left.w + p.left.l === 0 ? '' : 'working out the time';
+      return;
+    }
+    etaTarget = HW.simple.eta(p.left, paceLog);
+    if (etaShown === null) {
+      etaShown = etaTarget;
+      etaAt = Date.now();
+    }
+    showEta();
   }
 
   /** Everything is written once: check what came out unclearly and ask for those words again, or finish. */
@@ -544,9 +581,11 @@
     $('.prompt-card').hidden = true;
     $('#simpleDone').hidden = false;
     $('#spFill').style.width = '100%';
-    $('#spCount').textContent = words.length + ' words written';
+    $('#spCount').textContent = words.length + ' words';
+    $('#spPct').textContent = '100%';
     $('#spEta').textContent = '';
-    $('#spStep').textContent = 'Finished';
+    $('#spStep').textContent = 'finished';
+    etaShown = null;
   }
 
   $('#spSend').addEventListener('click', async () => {

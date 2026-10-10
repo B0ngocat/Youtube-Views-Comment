@@ -71,3 +71,26 @@ test('progress counts what is written and what is left, words apart from sentenc
   const p = Sm.progress(rounds, P.tokens, keys);
   assert.deepEqual(p, { total: 6, done: 3, left: { w: 2, l: 1 } }, 'r.0.2 and the second line are left, and the word to write again');
 });
+
+test('sentences are cut into pieces that fit the pad at the size of the band, between words', () => {
+  const t = 'The quick brown fox jumps over the lazy dog.';
+  const parts = Sm.chunkLine(t, 18);
+  assert.equal(parts.join(' '), t, 'nothing lost, nothing added');
+  assert.ok(parts.every((x) => x.length <= 24 && /\s/.test(x)), JSON.stringify(parts)); // at most 18, or 24 when a lone last word is joined on
+  assert.deepEqual(Sm.chunkLine('Hi there', 18), ['Hi there']);
+  assert.deepEqual(Sm.chunkLine('Extraordinarily long', 10), ['Extraordinarily', 'long'].length === 2 ? ['Extraordinarily', 'long'] : []);
+  const base = Sm.baseRounds(P.ROUNDS).find((r) => r.kind === 'line');
+  const orig = P.ROUNDS.find((r) => r.kind === 'line' && !r.optional);
+  assert.ok(base.sentences.length > orig.sentences.length && base.sentences.every((x) => x.length <= 24), 'her lines are short');
+  assert.ok(orig.sentences.some((x) => x.length > 26), 'the original sentences are not changed');
+});
+
+test('the time left on screen glides: no jump when the estimate does, and it still counts down', () => {
+  let shown = 1800;
+  for (let i = 0; i < 20; i++) shown = Sm.ease(shown, 1800 - 10 + 600, 0.5); // the estimate suddenly 10 minutes longer
+  assert.ok(shown > 1800 - 10 && shown < 1800 + 20 * 0.5 * 0.03 * 1800, 'moved by ' + (shown - 1790).toFixed(0) + ' s in 10 s');
+  let calm = 600;
+  for (let i = 0; i < 20; i++) calm = Sm.ease(calm, calm - 0.5, 0.5);
+  assert.ok(calm < 600 && calm > 585, 'counts down by itself');
+  assert.equal(Sm.ease(0.2, 0, 0.5), 0, 'never below zero');
+});

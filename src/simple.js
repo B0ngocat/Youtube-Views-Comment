@@ -5,9 +5,35 @@
 (function (root) {
   'use strict';
 
-  /** The rounds that matter, in order: no optional ones, and a division sign is written as the slash everyone uses (the same place in the list, so the keys do not move). */
+  /**
+   * A sentence in pieces of at most `max` characters, cut between words (a piece of one short word is joined to its neighbour).
+   * The pad holds about 26 characters at the size of the grey band, and the sentences of the Full lines round are 27 to 29, so
+   * someone who wrote the single words generously would have to shrink their writing for them. Short pieces fit as they are.
+   */
+  function chunkLine(sentence, max) {
+    const limit = max || 18;
+    const out = [];
+    let cur = '';
+    for (const w of sentence.split(/\s+/).filter(Boolean)) {
+      if (cur && (cur + ' ' + w).length > limit) {
+        out.push(cur);
+        cur = w;
+      } else cur = cur ? cur + ' ' + w : w;
+    }
+    if (cur) out.push(cur);
+    if (out.length > 1 && !/\s/.test(out[out.length - 1]) && (out[out.length - 2] + ' ' + out[out.length - 1]).length <= limit + 6) out.splice(-2, 2, out[out.length - 2] + ' ' + out[out.length - 1]);
+    return out;
+  }
+
+  /** The rounds that matter, in order: no optional ones, a division sign written as the slash everyone uses (the same place in the list, so the keys do not move), and sentences cut short enough to write at the size of the band. */
   function baseRounds(all) {
-    return all.filter((r) => !r.optional).map((r) => (r.chars ? Object.assign({}, r, { chars: r.chars.map((c) => (c === '÷' ? '/' : c)) }) : r));
+    return all
+      .filter((r) => !r.optional)
+      .map((r) => {
+        if (r.chars) return Object.assign({}, r, { chars: r.chars.map((c) => (c === '\u00f7' ? '/' : c)) });
+        if (r.kind === 'line') return Object.assign({}, r, { sentences: r.sentences.flatMap((t) => chunkLine(t)) });
+        return r;
+      });
   }
 
   /** The base rounds, then one more round of words to write again when there are any. */
@@ -39,7 +65,7 @@
   }
 
   // seconds to write one thing, before there is anything to measure: a word or a letter, and a whole sentence
-  const DEFAULT = { w: 9, l: 45 };
+  const DEFAULT = { w: 9, l: 20 };
   const BREAK = 120; // a longer wait than this was a break, not writing
   const median = (a) => {
     const b = a.slice().sort((x, y) => x - y);
@@ -67,6 +93,17 @@
     return remaining.w * pace(log, 'w') + remaining.l * pace(log, 'l');
   }
 
+  /**
+   * The time left as it is shown: one step of `dt` seconds towards `target`. It counts down by itself, drifts to a new estimate
+   * (a fast or slow word moves the target, not the number) and never changes by more than 3% a second beyond the countdown.
+   */
+  function ease(shown, target, dt) {
+    const counted = shown - dt;
+    const pull = (target - counted) * Math.min(1, dt * 0.15);
+    const cap = Math.max(1, 0.03 * shown) * dt;
+    return Math.max(0, counted + Math.max(-cap, Math.min(cap, pull)));
+  }
+
   function etaText(seconds) {
     if (seconds < 45) return 'less than a minute left';
     const min = Math.round(seconds / 60);
@@ -90,7 +127,7 @@
     return { total, done, left };
   }
 
-  const api = { baseRounds, rounds, troubleWords, note, pace, eta, etaText, progress, DEFAULT };
+  const api = { chunkLine, baseRounds, rounds, ease, troubleWords, note, pace, eta, etaText, progress, DEFAULT };
   root.HW = root.HW || {};
   root.HW.simple = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

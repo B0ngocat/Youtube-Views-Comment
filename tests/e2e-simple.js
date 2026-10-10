@@ -63,7 +63,7 @@ async function drawOnPad(page, raw) {
   });
   check('only the important rounds, and a slash where the division sign was', shape.optional === 0 && !shape.division && shape.slash, JSON.stringify(shape));
   const count0 = await page.textContent('#spCount');
-  check('progress starts at zero', count0.startsWith('0 of ' + shape.total) && count0.includes('(0%)'), count0);
+  check('progress starts at zero', count0 === '0 of ' + shape.total && (await page.textContent('#spPct')) === '0%', count0);
   check('no time is promised before a pace is known', /working out/.test(await page.textContent('#spEta')), await page.textContent('#spEta'));
 
   console.log('Writing: progress and the time left follow her pace');
@@ -75,7 +75,7 @@ async function drawOnPad(page, raw) {
     await page.click('#btnNext');
   }
   const count1 = await page.textContent('#spCount');
-  check('the count moves with each word', count1.startsWith('4 of ' + shape.total), count1);
+  check('the count moves with each word', count1 === '4 of ' + shape.total, count1);
   const pct = await page.evaluate(() => document.querySelector('#spFill').style.width);
   check('and so does the bar', /^\d+%$/.test(pct) && parseInt(pct, 10) <= 2, pct);
   const eta = await page.textContent('#spEta');
@@ -83,8 +83,8 @@ async function drawOnPad(page, raw) {
   const minutes = m ? (+m[1] || 0) * 60 + (+m[2] || 0) : -1;
   const lines = await page.evaluate(() => window.HW_APP.rounds().reduce((n, r, i) => n + window.HW_APP.tokensOf(i).filter((t) => t.kind === 'line').length, 0));
   const pace = 0.6 * PACE + 0.4 * 9; // three measurements are trusted 3/5, the rest is the usual 9 s
-  const expected = ((shape.total - 4 - lines) * pace + lines * 45) / 60;
-  check('the time left comes from her pace (3 s a word, and the usual for a sentence)', minutes > 0.8 * expected && minutes < 1.2 * expected, eta + ' (expected about ' + Math.round(expected) + ' min)');
+  const expected = ((shape.total - 4 - lines) * pace + lines * 20) / 60;
+  check('the time left comes from her pace (3 s a word, and the usual for a short line)', minutes > 0.8 * expected && minutes < 1.2 * expected, eta + ' (expected about ' + Math.round(expected) + ' min)');
   const wordCount = await page.textContent('#wordCount');
   check('the word counter still works', /Word 5 of/.test(wordCount), wordCount);
 
@@ -109,16 +109,27 @@ async function drawOnPad(page, raw) {
   check('touching a button cancels the wait', (await at()) === i0);
   await page.click('#btnNext');
 
+  console.log('The speed slider');
+  await page.evaluate(() => { const r = document.querySelector('#spSpeed'); r.value = '1'; r.dispatchEvent(new Event('input')); });
+  check('the slider says what it does', /after 1 s/.test(await page.textContent('#spSpeedText')));
+  const j0 = await at();
+  await drawOnPad(page, writeWord('over', { style: 'print', seed: 8, xh: g.xh, baseline: g.baseline, x0: 24 }));
+  await page.waitForTimeout(1900);
+  check('at 1 s it moves on after about a second', (await at()) === j0 + 1);
+  await page.evaluate(() => { const r = document.querySelector('#spSpeed'); r.value = '3'; r.dispatchEvent(new Event('input')); });
+  check('and the choice is remembered', (await page.evaluate(() => localStorage.getItem((window.HW_PROFILE ? window.HW_PROFILE + ':' : '') + 'hw.speed.v1'))) === '3');
+  await page.click('#btnPrev');
+
   console.log('Words that came out unclearly are asked for again, with no scrolling');
   await page.evaluate(() => {
     // a scribble that cannot be read as "jumps", saved under the key of the word it stands for
-    const t = window.HW_APP.tokensOf(0)[5];
+    const t = window.HW_APP.tokensOf(0)[8];
     const scribble = [[[10, 10, 0, 0.5], [60, 30, 20, 0.5], [20, 40, 40, 0.5], [70, 10, 60, 0.5], [30, 50, 80, 0.5]]];
     window.HW_APP.words.push({ text: t.text, key: t.key, xh: 52, baseline: 189, strokes: scribble, pen: 'pen' });
     window.HW_APP.finishSimple();
   });
   const fix = await page.evaluate(() => ({ fixWords: window.HW_APP.fixWords.map((w) => w.text), round: window.HW_APP.rounds().slice(-1)[0].title, prompt: document.querySelector('#prompt').textContent, ink: window.HW_APP.pad.strokes.length }));
-  check('the word is put in front of her as the next thing to write', fix.fixWords.includes(toks[5].text) && fix.round === 'Again' && fix.prompt.includes(fix.fixWords[0]), JSON.stringify(fix));
+  check('the word is put in front of her as the next thing to write', fix.fixWords.includes(toks[8].text) && fix.round === 'Again' && fix.prompt.includes(fix.fixWords[0]), JSON.stringify(fix));
   check('on a clean pad', fix.ink === 0);
   check('the screen says what she is doing', /again/i.test(await page.textContent('#spStep')), await page.textContent('#spStep'));
   // write each asked-for word again (the fake writer's first word may be flagged too: any word is fair)
