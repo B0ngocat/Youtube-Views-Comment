@@ -112,3 +112,106 @@ test('a decimal point keeps a gap from the digit next to it, even one that overh
     assert.ok(sp[1][0] - sp[0][1] >= 0.1 * 34, 'seed ' + seed + ': gap ' + (sp[1][0] - sp[0][1]).toFixed(1) + ' px');
   }
 });
+
+// ---- spacing between digits ------------------------------------------------------------------------------
+
+// stems with room beside them: neighbouring digits are 0.9 x-heights apart in the writer's numbers, letters about 0.2
+const stem = (adv) => [adv, [[0.3, 0.02], [0.3, 1.7]], null, true];
+const gapOf = (l) => {
+  const sp = l.words[0].spans;
+  return sp[1][0] - sp[0][1];
+};
+
+test('digits keep the distance the writer leaves between digits in their numbers, not the closer one between letters', () => {
+  for (const d of '123') GLYPHS[d] = stem(0.9);
+  const numbers = ['12', '23', '31', '21', '32', '12', '23', '31', '21', '32']; // 1 next to 3 is never recorded, so the engine has to place it
+  const words = 'the quick brown fox jumps over lazy dog pack my box'.split(' ').concat(numbers);
+  const style = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  assert.ok(style.digitClearance, 'learned from the writer\'s numbers');
+  assert.ok(style.digitClearance.median > style.clearance.median + 0.5, 'digits ' + style.digitClearance.median.toFixed(2) + ' against letters ' + style.clearance.median.toFixed(2));
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const l = Y.layout(style, '13', { xh: 34, width: 900, seed, messiness: 0, variation: 0, wordReuse: 0 });
+    assert.ok(gapOf(l) >= 0.7 * 34, 'seed ' + seed + ': gap ' + (gapOf(l) / 34).toFixed(2) + ' x-heights');
+  }
+});
+
+test('with too few numbers to learn from, digits still never touch', () => {
+  for (const d of '123') GLYPHS[d] = stem(0.35);
+  const words = 'the quick brown fox jumps over lazy dog pack my box'.split(' ').concat(['1', '2', '3', '12']);
+  const style = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  assert.equal(style.digitClearance, null, 'one number is not enough to know their spacing');
+  style.clearance = { median: 0.02, sd: 0 }; // a writer who packs their letters: nearest-ink spacing alone would put digits 0.02 apart
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const l = Y.layout(style, '13', { xh: 34, width: 900, seed, messiness: 0, variation: 0, wordReuse: 0 });
+    assert.ok(gapOf(l) >= 0.14 * 34, 'seed ' + seed + ': gap ' + (gapOf(l) / 34).toFixed(2) + ' x-heights');
+  }
+});
+
+// ---- a multiplication sign written as a speck ------------------------------------------------------------
+
+test('a \u00d7 the writer made a fraction of the size of their + is left out, so a clean one is drawn instead of a second decimal point', () => {
+  GLYPHS['+'] = [1.0, [[0.05, 0.85], [0.95, 0.85]], [[[0.5, 0.4], [0.5, 1.3]]], true];
+  GLYPHS['\u00d7'] = [0.1, [[0.02, 0.45], [0.06, 0.49]], [[[0.02, 0.49], [0.06, 0.45]]], true]; // 0.04 across (the aligner scales it up to about 0.16): a dot to the eye
+  const words = 'the quick brown fox jumps over lazy dog pack my box'.split(' ').concat(['+', '+', '\u00d7', '\u00d7', '2', '3']);
+  const style = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  assert.deepEqual(style.specks, ['\u00d7'], 'the app says which');
+  assert.equal(style.byChar.has('\u00d7'), false, 'not in the pools');
+  assert.ok(style.allByChar.get('\u00d7').every((u) => u.speck), 'still listed, marked');
+  assert.ok(S.missingChars(style, '2 \u00d7 3').includes('\u00d7'), 'counted as not written yet');
+  const chk = Y.checkText(style, '2 \u00d7 3', { fallback: false });
+  assert.deepEqual(chk.missing.map((m) => [m.ch, m.speck, m.standIn]), [['\u00d7', true, true]], 'the check says it was written too small, and that a clean one can be drawn');
+  const lay = M.layout(style, String.raw`2 \times 3`, { xh: 34, width: 900, seed: 2, messiness: 0, variation: 0, margin: 0 });
+  assert.deepEqual(lay.standIns, ['\u00d7']);
+  assert.deepEqual(lay.missing, []);
+});
+
+test('a \u00d7 of a proper size is the writer\'s own', () => {
+  GLYPHS['\u00d7'] = [1.0, [[0.1, 0.3], [0.9, 1.1]], [[[0.1, 1.1], [0.9, 0.3]]], true];
+  const words = 'the quick brown fox jumps over lazy dog pack my box'.split(' ').concat(['+', '+', '\u00d7', '\u00d7', '2', '3']);
+  const style = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  assert.deepEqual(style.specks, []);
+  assert.equal(style.byChar.get('\u00d7').length, 2);
+  const lay = M.layout(style, String.raw`2 \times 3`, { xh: 34, width: 900, seed: 2, messiness: 0, variation: 0, margin: 0 });
+  assert.deepEqual(lay.standIns, []);
+});
+
+// ---- room round operators in math ------------------------------------------------------------------------
+
+test('math leaves room round + and =, so "4+2" and "5=5" do not run together', () => {
+  for (const d of '12') GLYPHS[d] = stem(0.5);
+  GLYPHS['+'] = [1.0, [[0.05, 0.85], [0.95, 0.85]], [[[0.5, 0.4], [0.5, 1.3]]], true];
+  GLYPHS['='] = [1.0, [[0.05, 0.6], [0.95, 0.6]], [[[0.05, 1.1], [0.95, 1.1]]], true];
+  const words = 'the quick brown fox jumps over lazy dog pack my box'.split(' ').concat(['1', '2', '+', '+', '=', '=']);
+  const style = S.buildStyle(words.map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  style.slant = 0; // so the ink of a stem is where its box is
+  for (const [tex, kind, want] of [['1+2', 'plus', 0.44], ['1=2', 'equals', 0.69]]) {
+    const lay = M.layout(style, tex, { xh: 34, width: 900, seed: 2, messiness: 0, variation: 0, margin: 0 });
+    const ext = lay.strokes.map((s) => [Math.min(...s.pts.map((p) => p.x)), Math.max(...s.pts.map((p) => p.x))]).sort((a, b) => a[0] - b[0]);
+    const left = ext[0]; // the 1
+    const right = ext[ext.length - 1]; // the 2
+    const mid = ext.slice(1, -1); // the operator's strokes
+    const gapL = Math.min(...mid.map((e) => e[0])) - left[1];
+    const gapR = right[0] - Math.max(...mid.map((e) => e[1]));
+    assert.ok(gapL >= want * 34 && gapR >= want * 34, kind + ': ' + (gapL / 34).toFixed(2) + ' and ' + (gapR / 34).toFixed(2) + ' x-heights, wanted ' + want);
+  }
+});
+
+// ---- an apostrophe written on its own ---------------------------------------------------------------------
+
+test('an apostrophe written far above the letters is brought down to the tops of the ascenders, and the original is left alone', () => {
+  const high = unit("'", 3.2, 3.7, 0, 0.12); // 3.2 to 3.7 x-heights up: a line and a half above the letters
+  const fine = unit('"', 1.2, 1.7, 0, 0.5);
+  const list = [high];
+  const quotes = [fine];
+  const byChar = new Map([["'", list.slice()], ['"', quotes.slice()]]);
+  const allByChar = new Map([["'", list], ['"', quotes]]);
+  const before = JSON.stringify(high);
+  S.lowerHighMarks(byChar, allByChar, { asc: 1.75 });
+  const mark = byChar.get("'")[0];
+  assert.ok(Math.abs(mark.box.maxY - 1.75) < 1e-9, 'top at ' + mark.box.maxY.toFixed(2));
+  assert.ok(Math.abs(mark.box.maxY - mark.box.minY - 0.5) < 1e-9, 'its length is kept');
+  assert.ok(mark.strokes[0].pts.every((p) => p.y <= 1.75 + 1e-9 && p.y >= 1.25 - 1e-9), 'the ink moved with the box');
+  assert.equal(allByChar.get("'")[0], mark, 'the list of every example holds the copy too');
+  assert.equal(JSON.stringify(high), before, 'the original is untouched');
+  assert.equal(byChar.get('"')[0], fine, 'a mark that is already at a sensible height is not touched');
+});

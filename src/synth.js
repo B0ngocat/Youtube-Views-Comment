@@ -338,7 +338,7 @@
     return t;
   }
 
-  function assemble(choices, liftGap, clearance, rng) {
+  function assemble(choices, liftGap, clearance, rng, gaps) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
     const marks = [];
@@ -362,14 +362,19 @@
         if (!conn) {
           const base = prev.sc === 1 && sc === 1 ? A.inkBase(prev.unit, u) : null;
           const byBox = prev.tx + prev.unit.box.maxX * prev.sc + liftGap - u.box.minX * sc;
-          if (clearance && base !== null) {
+          const dotPair = (prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch));
+          const digitPair = /[0-9]/.test(prev.unit.ch) && /[0-9]/.test(u.ch);
+          // digits and decimal points keep the distance the writer leaves in their numbers, when they have written enough of them
+          const clear = (digitPair && gaps && gaps.digit) || (dotPair && gaps && gaps.dot) || clearance;
+          if (clear && base !== null) {
             // nearest ink of the two letters ends up `want` apart, which varies a little like the writer's does
-            let want = Math.max(0.02, clearance.median + clearance.sd * 0.5 * G.gaussian(rng));
-            // a decimal point squeezed against its digits turns 71.45 into 7145
-            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) want = Math.max(want, 0.2);
+            let want = Math.max(0.02, clear.median + clear.sd * 0.5 * G.gaussian(rng));
+            // a decimal point squeezed against its digits turns 71.45 into 7145, and digits that touch read as one
+            if (dotPair) want = Math.max(want, 0.2);
+            if (digitPair) want = Math.max(want, 0.15);
             tx = prev.tx + want - base;
             // a decimal point is tiny: whatever the nearest ink says, its digit neighbours keep a small gap from its own box
-            if ((prev.unit.ch === '.' && /[0-9]/.test(u.ch)) || (u.ch === '.' && /[0-9]/.test(prev.unit.ch))) {
+            if (dotPair) {
               const gap = tx + u.box.minX * sc - (prev.tx + prev.unit.box.maxX * prev.sc);
               if (gap < 0.12) tx += 0.12 - gap;
             }
@@ -510,8 +515,9 @@
 
   /**
    * Before writing anything: which characters of `text` can the writer's handwriting not produce? Returns
-   *   missing:     [{ch, code, words, standIn}]  nothing can draw these (or, without opts.fallback, only a drawing could:
-   *                                              standIn is true then, so the caller can offer it)
+   *   missing:     [{ch, code, words, standIn, speck}]  nothing can draw these (or, without opts.fallback, only a drawing could:
+   *                                              standIn is true then, so the caller can offer it; speck: the writer did write
+   *                                              one, too small to read, and it was left out)
    *   substituted: [{ch, code, words}]           drawn from glyphs.js because opts.fallback is on
    *   composed:    [ch]                          drawn from the writer's own letter and a mark (an accent, or a turned ? or !)
    * words are the words of the text each character is in, as typed (up to 6).
@@ -522,7 +528,7 @@
     const substituted = new Map();
     const composed = new Set();
     const note = (map, ch, word, standIn) => {
-      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn });
+      if (!map.has(ch)) map.set(ch, { ch, code: codeOf(ch), words: [], standIn, speck: !!(style.specks && style.specks.includes(ch)) });
       const e = map.get(ch);
       if (!e.words.includes(word) && e.words.length < 6) e.words.push(word);
     };
@@ -581,7 +587,7 @@
     const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
-    const strokes = assemble(choices, style.liftGap, style.clearance, arng);
+    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance });
     const spans = strokes.spans;
     deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);

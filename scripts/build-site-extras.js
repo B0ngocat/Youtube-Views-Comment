@@ -103,7 +103,8 @@ over it. Do not remove the accents. Check each accent is over the right letter.
 
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},
 \\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
-check numbers by looking at the picture. Write only what the owner asked for.
+check numbers by looking at the picture. A multiplication sign the person wrote too small to read is left out (handwriting_status says so) and
+a clean one is drawn with on_missing "fallback". Write only what the owner asked for.
 
 The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
 folder (next to the samples file, or in the current folder when it came from the site), so later starts take under

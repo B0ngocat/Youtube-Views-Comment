@@ -451,9 +451,9 @@
     if (!a) return 0;
     const unary = b.c === '-' && (atStart || a.kind === 'open' || a.kind === 'rel' || a.kind === 'bin');
     if (a.kind === 'gap' || b.kind === 'gap') return 0; // a space that was asked for is the whole gap
-    if (a.kind === 'rel' || b.kind === 'rel') return 0.55;
-    if (a.kind === 'bin' && !(a.unary)) return 0.35;
-    if (b.kind === 'bin' && !unary) return 0.35;
+    if (a.kind === 'rel' || b.kind === 'rel') return 0.7;
+    if (a.kind === 'bin' && !(a.unary)) return 0.45;
+    if (b.kind === 'bin' && !unary) return 0.45;
     if (a.kind === 'open' || b.kind === 'close') return 0.05;
     if (a.kind === 'punct') return 0.3;
     if (b.kind === 'punct') return 0.04;

@@ -157,7 +157,7 @@ function createTools(config) {
       for (const m of p.missing) {
         (m.standIn ? drawable : hopeless).add(m.ch);
         const w = m.words.map((x) => `"${x}"`).join(', ');
-        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}`);
+        lines.push(`  ${p.where ? p.where + ': ' : ''}${shown(m.ch) || '(unprintable)'} (${m.code}) is in ${w || 'the text'}${m.standIn ? '  [a clean drawn stand-in exists]' : ''}${m.speck ? '  [they wrote one, but too small to read, so it was left out]' : ''}`);
       }
     }
     const dl = [...drawable].filter((c) => !hopeless.has(c));
@@ -320,7 +320,7 @@ function createTools(config) {
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
         const lines = [`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters).`];
         if (chk.missing.length) {
-          lines.push('No sample for: ' + chk.missing.map((m) => m.ch).join(' '));
+          lines.push('No sample for: ' + chk.missing.map((m) => m.ch + (m.speck ? ' (written too small to read)' : '')).join(' '));
           const drawable = chk.missing.filter((m) => m.standIn);
           if (drawable.length) lines.push(`Of those, ${drawable.map((m) => m.ch).join(' ')} can be drawn as a clean stand-in (not the person's own handwriting) with on_missing: "fallback". The rest must be taught in the Teach tab.`);
         } else lines.push('Every character checked has a sample.');

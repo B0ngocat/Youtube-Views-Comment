@@ -327,7 +327,8 @@
       host.appendChild(grid);
     });
     const lower = 'abcdefghijklmnopqrstuvwxyz'.split('').filter((c) => !cov[c]);
-    $('#missing').textContent = lower.length ? 'Still missing lowercase: ' + lower.join(' ') : 'All lowercase letters covered.';
+    const specks = style && style.specks && style.specks.length ? ' Too small to read, so a clean one is drawn instead: ' + style.specks.join(' ') + ' (write it about as big as your +).' : '';
+    $('#missing').textContent = (lower.length ? 'Still missing lowercase: ' + lower.join(' ') : 'All lowercase letters covered.') + specks;
   }
 
   function thumbSVG(w, index) {

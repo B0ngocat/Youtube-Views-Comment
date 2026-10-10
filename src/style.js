@@ -236,6 +236,23 @@
    * u.odd gets large and the synthesizer avoids it. Needs a few examples of the letter. Groups
    * that haven't changed since the last build are skipped.
    */
+  /**
+   * A × written as a speck (a fraction of the size of the writer's own +) is a dot to the reader, and in "9.81 × 4.5" a
+   * second decimal point. Left out of the pools it counts as not written yet, so plain text and math draw a clean one and
+   * the writer is told it is missing. The examples stay in allByChar, marked `speck`.
+   */
+  function dropSpecks(byChar) {
+    const list = byChar.get('×');
+    if (!list || !list.length) return [];
+    const size = (u) => Math.max(u.box.maxX - u.box.minX, u.box.maxY - u.box.minY);
+    const plus = byChar.get('+');
+    const ref = plus && plus.length ? A.median(plus.map(size)) : 1;
+    if (A.median(list.map(size)) >= 0.4 * ref) return [];
+    for (const u of list) u.speck = true;
+    byChar.delete('×');
+    return ['×'];
+  }
+
   function markOddOnes(byChar) {
     for (const [ch, list] of byChar) {
       const prev = oddCache.get(ch);
@@ -518,6 +535,27 @@
         const h = u.box.maxY - Math.min(0, u.box.minY);
         if (h <= top) return;
         const c = scaleUnit(u, { fx: top / h, fy: top / h });
+        list[i] = c;
+        if (pool) pool.forEach((p, k) => p === u && (pool[k] = c));
+      });
+    }
+  }
+
+  /**
+   * An apostrophe or a quote written on its own has nothing on the pad to size it against, so it lands wherever the writer
+   * put it: 3.3 x-heights above the baseline in one writer's data, a line and a half over the tops of their letters, so
+   * "Withey's" came out with the mark floating above the line above. Marks like these hang from the tops of the ascenders.
+   * A mark that is too high is replaced by a copy moved down; the originals are left alone, so this can run on every rebuild.
+   */
+  function lowerHighMarks(byChar, allByChar, profile) {
+    const top = profile && profile.asc ? profile.asc : 1.85;
+    for (const ch of ["'", '"', '`']) {
+      const list = allByChar.get(ch);
+      if (!list) continue;
+      const pool = byChar.get(ch);
+      list.forEach((u, i) => {
+        if (u.box.maxY <= top + 0.25) return;
+        const c = scaleUnit(u, { fx: 1, fy: 1, dy: top - u.box.maxY });
         list[i] = c;
         if (pool) pool.forEach((p, k) => p === u && (pool[k] = c));
       });
@@ -810,6 +848,7 @@
       }
     });
 
+    const specks = dropSpecks(byChar);
     markOddOnes(byChar);
     markWrongOnes(byChar);
     markFarOnes(byChar);
@@ -817,6 +856,7 @@
     markStrayOnes(byChar);
     shrinkSingleLetters(byChar, allByChar);
     tidyTallSymbols(byChar, allByChar, profile);
+    lowerHighMarks(byChar, allByChar, profile);
 
     // how close this writer lets neighbouring (unjoined) letters get, by nearest ink
     const clears = [];
@@ -831,6 +871,27 @@
       }
     }
     const clearance = clears.length >= 20 ? { median: A.median(clears), sd: robustSd(clears) } : null;
+
+    // Digits and decimal points keep their own distances. Numbers are written airier than words (0.53 against 0.30
+    // x-heights between neighbours in one writer's data), and spacing digits like letters made them touch.
+    const isDigit = (c) => /[0-9]/.test(c);
+    const pairClearance = (test, cap) => {
+      const c = [];
+      for (const w of aligned) {
+        if (!w.ok) continue;
+        for (let i = 1; i < w.units.length; i++) {
+          const p = w.units[i - 1];
+          const u = w.units[i];
+          if (p.exit.mid || u.entry.mid || !test(p.ch, u.ch)) continue;
+          const b = A.inkBase(p, u);
+          if (b !== null) c.push(b);
+        }
+      }
+      return c.length >= 8 ? { median: Math.min(cap, A.median(c)), sd: Math.min(0.25, robustSd(c)) } : null;
+    };
+    const digitClearance = pairClearance((a, b) => isDigit(a) && isDigit(b), 1);
+    // never past 0.6: a point further from its digits than that reads as two numbers
+    const dotClearance = pairClearance((a, b) => (a === '.' && isDigit(b)) || (b === '.' && isDigit(a)), 0.6);
 
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     const unitById = new Map();
@@ -854,6 +915,9 @@
       wholeWords,
       profile,
       clearance,
+      digitClearance,
+      dotClearance,
+      specks, // characters the writer wrote too small to read (left out of the pools)
       rhythm: computeRhythm(words, aligned),
       slant: slants.length ? A.median(slants) : 0,
       liftGap,
@@ -925,7 +989,7 @@
     return o.words;
   }
 
-  const api = { ACCENTS, sizeNormalize, digitNormalize, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
+  const api = { ACCENTS, sizeNormalize, digitNormalize, lowerHighMarks, buildStyle, computeRhythm, missingChars, coverage, normalizeChar, fallbackFor, toJSON, fromJSON, computeStats, lookDistance, hasBowl, trimRunIn };
   root.HW = root.HW || {};
   root.HW.style = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
