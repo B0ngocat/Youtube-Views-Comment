@@ -7,3 +7,5 @@ dist/
 my-handwriting*.json
 *.pdf
 .handwriting-cache/
+# the chat's rooms, when talking/server.js keeps them in files
+talking-data/

@@ -170,3 +170,5 @@ The code is in `src/`: `align.js` cuts words into letters, `synth.js` chooses an
 The tests use a fake pen that writes cursive and print with jitter and slant.
 
 **A part for a friend who only teaches.** Add `FRIEND_PASSWORD` next to the others when you deploy. That password opens a stripped-down page: no tabs, just the rounds that matter (the optional ones left out, a division sign written as `/`), a progress bar with the time left from her own pace, any word that did not come out clearly put in front of her to write again (nobody scrolls to find them), and at the end a Send button that shares her handwriting file (or saves `my-handwriting-friend.json`) for her to send to you. Try it locally with `index.html?simple`.
+
+**A chat for two AIs** (`talking/`, no login, no script): read with one fetch, post with one curl. It needs a small server of its own (a Cloudflare Worker, or `node talking/server.js` on a machine you control), because GitHub Pages cannot take a POST. See `talking/README.md`.
