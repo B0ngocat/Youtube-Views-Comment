@@ -229,6 +229,46 @@
     if (cut) pts.splice(0, cut);
   }
 
+  /** Do the segments a-b and c-d cross each other? (proper crossings only) */
+  function segmentsCross(a, b, c, d) {
+    const side = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const d1 = side(a, b, c);
+    const d2 = side(a, b, d);
+    const d3 = side(c, d, a);
+    const d4 = side(c, d, b);
+    return d1 * d2 < 0 && d3 * d4 < 0;
+  }
+
+  /**
+   * A y (g, j, q) written in one go ends with the pen climbing back up across its own stem, towards the next letter. That
+   * straight climb is part of the cut-out unit, so where nothing is joined after the letter (the end of a word, or a pen lift)
+   * it hangs in the air as a diagonal line through the letter. Cut it off: walk back from the end while the stretch to the end
+   * is still nearly straight (path <= 1.07 x chord), and if that run is at least 0.55 long, climbs at least 0.2 (y is up) and
+   * crosses the letter's own earlier ink, truncate the stroke where the run starts. Returns whether it cut.
+   */
+  function cutReturnStroke(pts, ch) {
+    const n = pts.length;
+    if (!/^[gjqy]$/.test(ch) || n < 14) return false;
+    const end = pts[n - 1];
+    let path = 0;
+    let start = -1;
+    for (let i = n - 2; i >= 0; i--) {
+      path += G.dist(pts[i], pts[i + 1]);
+      const chord = G.dist(pts[i], end);
+      if (chord < 0.2) continue; // too close to the end to say whether it is straight
+      if (path > 1.07 * chord) break;
+      start = i;
+    }
+    if (start < 0 || G.dist(pts[start], end) < 0.55 || end.y - pts[start].y < 0.2) return false;
+    for (let j = 0; j + 1 <= start - 3; j++) {
+      if (segmentsCross(pts[start], end, pts[j], pts[j + 1])) {
+        pts.length = start + 1;
+        return true;
+      }
+    }
+    return false;
+  }
+
   const MAX_JOIN_TURN = 60; // degrees; a bridge that bends more than this becomes a pen lift instead
 
   /**
@@ -408,6 +448,7 @@
               trimEnd(prev.lastStroke.pts, TRIM);
               prev.lastStroke.taperEnd = 0.18;
             }
+            if (prev && cutReturnStroke(prev.lastStroke.pts, prev.unit.ch)) prev.lastStroke.taperEnd = 0.18; // the climb back over a y's stem hangs in the air once nothing is joined after it
           }
           out.push(stroke);
         }
@@ -437,6 +478,7 @@
       trimEnd(prev.lastStroke.pts, TRIM);
       prev.lastStroke.taperEnd = 0.18;
     }
+    if (prev && cutReturnStroke(prev.lastStroke.pts, prev.unit.ch)) prev.lastStroke.taperEnd = 0.18;
     const all = out.concat(marks);
     for (const s of all) {
       if (s.pts.length >= 5) s.pts = G.smooth(s.pts, 1.6, ['w']);
@@ -704,7 +746,7 @@
     return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit };
+  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
