@@ -149,3 +149,15 @@ test('the friend\'s part is the simple one: its own small copy, no libraries, no
   const meta = page.replace(/"(data|wrapped|iv|wrapIv|salt)":"[^"]*"/g, '');
   assert.ok(!meta.toLowerCase().includes('friend'), 'the page does not name the part');
 });
+
+test('another regular part shares the full app and has its own password and its own saved data', () => {
+  const GUEST = 'guest-password-12345';
+  const page = buildProtected(PASSWORD, { extra: [{ password: GUEST, profile: 'guest' }] });
+  const parts = partsOf(page);
+  assert.deepEqual(parts.slots.map((q) => [q.profile, q.kind, q.blob]), [[null, 'full', 0], [partId('guest'), 'full', 0]]);
+  assert.equal(parts.blobs.length, 1, 'no second copy of the app');
+  assert.equal(decryptSlot(parts, parts.slots[1], GUEST), decrypt(page, PASSWORD));
+  assert.throws(() => decryptSlot(parts, parts.slots[1], PASSWORD));
+  assert.ok(!page.includes(GUEST));
+  assert.ok(partId('guest') !== partId('niko') && partId('guest') !== partId('friend'), 'its own namespace in the browser');
+});
