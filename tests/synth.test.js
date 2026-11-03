@@ -325,6 +325,10 @@ test('bounce adds a small up and down, is the same every time for a seed, and 0 
     return Math.sqrt(ys.reduce((m, y) => m + (y - ys.reduce((a, b) => a + b, 0) / ys.length) ** 2, 0) / ys.length);
   };
   assert.ok(wobble(run(2.4)) > 0, 'moves');
+  // the letters are the same at every amount: only up and down moves, never left and right by more than the tilt does
+  const xs = (strokes) => strokes.map((st) => Math.round(st[0][0]));
+  const same = xs(run(0)).filter((x, i) => Math.abs(x - xs(run(2.4))[i]) <= 3).length / xs(run(0)).length;
+  assert.ok(same > 0.9, 'letters and spacing are the same: ' + same.toFixed(2));
   const lines = (strokes) => strokes.length;
   assert.equal(lines(run(1)), lines(run(0)), 'no stroke is added or lost');
 });
