@@ -194,7 +194,7 @@ const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => __req("vendor/pdf-lib.min.js");
 const inspectPdf = (bytes, o) => __req("mcp/pdfinfo.js").inspect(bytes, o);
 
-const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, slantDelta: 0, wordSpacing: 1 }; // the Write tab's defaults
+const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, bounce: 1.5, slantDelta: 0, wordSpacing: 1 }; // the Write tab's defaults
 const DEFAULT_INK = '#1749b3';
 
 function createTools(config) {
@@ -294,10 +294,31 @@ function createTools(config) {
     messiness: clampNum(a.messiness, 0, 1, LOOK.messiness),
     variation: clampNum(a.variation, 0, 1, LOOK.variation),
     neatness: clampNum(a.neatness, 0, 1, LOOK.neatness),
+    bounce: clampNum(a.bounce, 0, 3, LOOK.bounce),
     wordReuse: clampNum(a.word_reuse, 0, 1, LOOK.wordReuse),
     slantDelta: LOOK.slantDelta,
     wordSpacing: LOOK.wordSpacing,
   });
+  // An em dash in a piece of writing is refused: it is the first thing that makes a fill read as machine text, and some assignments ban it outright.
+  const EM_DASH = /\u2014/;
+  function banEmDash(txt, where) {
+    if (EM_DASH.test(txt)) throw new Error(`${where ? where + ': ' : ''}the text has an em dash (\u2014). Em dashes are not written: use a comma, a full stop or a new sentence instead.`);
+  }
+  /** A number from where an answer sits and what it says: the seed it gets when none was given, so no two answers open alike. */
+  function placeSeed(page, x, y, txt) {
+    let h = 2166136261;
+    for (const c of `${page}:${Math.round(x)}:${Math.round(y)}:${String(txt).slice(0, 24)}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+    return h % 2147483647;
+  }
+  /** What to tell about digits whose examples are few: another seed may give the same one back. */
+  function digitNotes(style, txt) {
+    const out = [];
+    for (const d of new Set(String(txt).match(/[0-9]/g) || [])) {
+      const clean = (style.byChar.get(d) || []).filter((u) => u.iso).length;
+      if (clean <= 2) out.push(`digit ${d}: only ${clean} clean example${clean === 1 ? '' : 's'} of it, so another seed can give the same one again; the person can write more in the Teach tab`);
+    }
+    return out;
+  }
   const inkOf = (a) => (/^#[0-9a-f]{6}$/i.test(a.ink || '') ? a.ink : DEFAULT_INK);
   const text = (t) => ({ type: 'text', text: t });
   const safeName = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) || 'out';
@@ -374,6 +395,7 @@ function createTools(config) {
   /** Check and lay out one piece of writing. Writes nothing. Returns what renderOne needs, and the characters that block it. */
   async function prepare(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
+    banEmDash(a.text, '');
     const { style } = await load();
     const format = formatOf(a);
     const kind = a.kind === 'math' ? 'math' : 'text';
@@ -415,9 +437,11 @@ function createTools(config) {
       pngPath = outPath(base + '.png');
       fs.writeFileSync(pngPath, png);
     }
-    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
+    const drawn = /width="([\d.]+)pt" height="([\d.]+)pt"/.exec(svg); // the size stated is the size of the SVG that is saved
+    const notes = [`Written at letter height ${placed.xhPt} pt, ${drawn ? Math.round(drawn[1]) : Math.round(placed.layout.width * placed.K)} x ${drawn ? Math.round(drawn[2]) : Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
     if (seedOf(a.seed).given) notes[0] += `  Seed ${seedOf(a.seed).seed}.`;
     notes.push(...drawnNotes(chk, placed));
+    notes.push(...digitNotes((await load()).style, a.text));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
 
@@ -466,7 +490,7 @@ function createTools(config) {
   /** One line per answer: how it was fitted (as is, wrapped, box grown, letters shrunk) and anything drawn rather than written. */
   function fitReport(label, box, placed, extra, seed) {
     const r1 = (v) => (Math.round(v * 10) / 10).toString();
-    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt${seed === null || seed === undefined ? '' : ' (seed ' + seed + ')'}`];
+    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt${seed === null || seed === undefined ? '' : typeof seed === 'string' ? ' (' + seed + ')' : ' (seed ' + seed + ')'}`];
     if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
     const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
     if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
@@ -512,6 +536,7 @@ function createTools(config) {
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3 (blue).' },
           seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number gives another take of the same text: other examples of each letter and digit are chosen, so use it to re-roll a digit that came out badly. The same number always gives the same writing.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
+          bounce: { type: 'number', description: 'Up and down: 0 to 3, default 1.5. A slight slide of each letter and word above or below the line, and a slow wave along it, so the line does not sit on a perfectly straight baseline. 0 is straight across.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; top is measured down from the top of the page). The SVG file is saved either way.' },
           pen_width: { type: 'number', description: 'format note only: the pen width in note units. Default 1.05 (about a Notability pen at thickness 3).' },
@@ -537,6 +562,7 @@ function createTools(config) {
           letter_height_pt: { type: 'number' },
           ink: { type: 'string' },
           neatness: { type: 'number' },
+          bounce: { type: 'number' },
           messiness: { type: 'number' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'As in write_text. Default png.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'As in write_text. With the default (error), if ANY character of ANY item has no sample the whole call stops before writing anything and lists them item by item.' },
@@ -603,6 +629,7 @@ function createTools(config) {
           out: { type: 'string', description: 'Where to save. Default: <name>-filled.pdf in the output folder.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3.' },
           neatness: { type: 'number' },
+          bounce: { type: 'number' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           preview: { type: 'string', enum: ['none', 'all', 'digits'], description: 'Return a small picture of each answer\'s ink (cropped to the ink, on white, about 3 pixels per point, at most 640 px wide) with the report, so you can check digits without rendering and cropping whole pages. all: every answer. digits: only the answers that contain a digit. none (default). They show the writing only, not the page behind it, and at most 20 are returned.' },
@@ -622,7 +649,8 @@ function createTools(config) {
                 text: { type: 'string' },
                 kind: { type: 'string', enum: ['text', 'math'] },
                 letter_height_pt: { type: 'number' },
-                seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. The report says (seed N) when you gave one.' },
+                seed: { type: 'integer', description: 'A whole number from 0 up. Without one, each answer gets its own seed from where it sits on the page, so no two answers open alike (the report says which). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. If a digit has only one or two clean examples the report says so: another seed can give the same one again.' },
+                stagger: { type: 'boolean', description: 'true: start this answer a little in from the left (differently on every answer, the right edge stays), so answers do not all start on one vertical line.' },
                 shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
                 min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
                 grow: { type: 'boolean', description: 'May the box grow downward when the text wraps onto more lines than fit? Default true. Set false when something is printed right under the box.' },
@@ -662,12 +690,19 @@ function createTools(config) {
           const page = Math.round(Number(ans.page)) - 1;
           if (!(page >= 0 && page < sizes.length)) throw new Error(`${where}: page ${ans.page} does not exist (the PDF has ${sizes.length}).`);
           if (typeof ans.text !== 'string' || !ans.text.trim()) throw new Error(`${where}: text is empty.`);
+          banEmDash(ans.text, where);
           for (const k of ['x', 'width']) if (!Number.isFinite(Number(ans[k]))) throw new Error(`${where}: ${k} must be a number.`);
           if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
           const kind = ans.kind === 'math' ? 'math' : 'text';
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, ans.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          if (ans.stagger === true || a.stagger === true) {
+            // start a little in from the left, differently on every answer, and keep the right edge where it was
+            const sh = Math.min(box.w * 0.25, (((Math.imul(box.seed + 1, 2654435761) >>> 8) % 1000) / 1000) * 1.4 * (box.xhPt || Sheet.DEFAULT_XH_PT) * 2);
+            box.x += sh;
+            box.w -= sh;
+          }
           if (box.x < 0 || box.y < -1 || box.x + box.w > sizes[page].w + 1 || box.y + box.h > sizes[page].h + 1) throw new Error(`${where}: the box (x ${box.x}, y ${box.y}, ${box.w} x ${box.h}) is outside page ${page + 1}, which is ${sizes[page].w} x ${sizes[page].h} pt.`);
           // how far down the box may grow: as far as asked, or down to the bottom margin of the page
           let room = sizes[page].h - 36 - box.y;
@@ -697,7 +732,7 @@ function createTools(config) {
             return;
           }
           items.push({ box, placed });
-          report.push(fitReport(label, box, placed, drawnNotes(chk, placed), seedOf(ans.seed).given ? seedOf(ans.seed).seed : null));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed).concat(digitNotes(style, ans.text)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
           const wantPreview = a.preview === true || a.preview === 'all' || (a.preview === 'digits' && /[0-9]/.test(ans.text));
           if (wantPreview) previewJobs.push({ label, placed });
         });
@@ -3546,7 +3581,7 @@ module.exports = { createTools };
     acute: [[[-0.09, 0], [0.02, 0.13], [0.13, 0.3]]],
     grave: [[[0.09, 0], [-0.02, 0.13], [-0.13, 0.3]]],
     circ: [[[-0.14, 0], [0, 0.26], [0.14, 0]]],
-    tilde: [Array.from({ length: 12 }, (_, i) => [-0.27 + (0.54 * i) / 11, 0.15 + 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+    tilde: [], // drawn by tildePoly: never the same twice
     diaer: [[[-0.14, 0.2], [-0.125, 0.1]], [[0.12, 0.2], [0.135, 0.1]]],
   };
 
@@ -3554,13 +3589,34 @@ module.exports = { createTools };
    * The strokes of an accent drawn over a letter: kind, where its middle is (cx), where it sits (y0), how big (k) and the
    * pen width of the letter under it. A little different every time, like a hand's.
    */
+  /** One smooth wave, a single stroke: its length, height, where the wave starts and which hump is bigger are all different every time. */
+  function tildePoly(rng) {
+    const len = 0.42 + rng() * 0.22;
+    const amp = 0.065 + rng() * 0.065;
+    const phase = (rng() - 0.5) * 0.9;
+    const skew = (rng() - 0.5) * 0.7;
+    const n = 16;
+    return Array.from({ length: n }, (_, i) => {
+      const t = i / (n - 1);
+      return [(t - 0.5) * len, 0.15 + amp * (1 + skew * (t - 0.5) * 2) * Math.sin(2 * Math.PI * t + phase)];
+    });
+  }
+
   function accentStrokes(kind, cx, y0, k, w, rng) {
     const dx = (rng() - 0.5) * 0.06;
     const dy = (rng() - 0.5) * 0.05;
     const tilt = (rng() - 0.5) * 0.25;
-    return (ACCENT_SHAPES[kind] || []).map((poly) => {
+    const rot = (rng() - 0.5) * 0.4; // turned a little, either way
+    const len = 1 + (rng() - 0.5) * 0.3; // and longer or shorter
+    const cr = Math.cos(rot);
+    const sr = Math.sin(rot);
+    return (kind === 'tilde' ? [tildePoly(rng)] : ACCENT_SHAPES[kind] || []).map((poly) => {
       const pts = [];
-      const at = (p) => ({ x: cx + dx + (p[0] + tilt * p[1]) * k, y: y0 + dy + p[1] * k, w });
+      const at = (p) => {
+        const px = p[0] * cr - (p[1] - 0.15) * sr;
+        const py = (p[1] - 0.15) * cr + p[0] * sr + 0.15;
+        return { x: cx + dx + (px * len + tilt * py) * k, y: y0 + dy + py * len * k, w };
+      };
       for (let i = 0; i < poly.length - 1; i++) {
         const a = poly[i];
         const b = poly[i + 1];
@@ -3612,6 +3668,47 @@ module.exports = { createTools };
     return t;
   }
 
+  /**
+   * A letter the writer has only a few examples of (a capital X, the E and L that open a line) comes out the same every time, whatever the
+   * seed. A copy a little turned, stretched and sheared makes each use its own. Never the original (units are cached).
+   */
+  function jitterUnit(u, rng) {
+    const rot = (rng() - 0.5) * 0.22;
+    const sx = 1 + (rng() - 0.5) * 0.12;
+    const sy = 1 + (rng() - 0.5) * 0.1;
+    const sh = (rng() - 0.5) * 0.12;
+    const cx = (u.box.minX + u.box.maxX) / 2;
+    const cy = (u.box.minY + u.box.maxY) / 2;
+    const c = Math.cos(rot);
+    const sn = Math.sin(rot);
+    const map = (p) => {
+      const x = (p.x - cx) * sx;
+      const y = (p.y - cy) * sy;
+      return { ...p, x: cx + x * c - y * sn + sh * y, y: cy + y * c + x * sn };
+    };
+    const dir = (e) => {
+      const m = map({ x: e.x, y: e.y });
+      const dx = e.dx * c - e.dy * sn;
+      const dy = e.dy * c + e.dx * sn;
+      return { ...e, x: m.x, y: m.y, dx, dy };
+    };
+    const strokes = u.strokes.map((st) => ({ ...st, pts: st.pts.map(map) }));
+    const marks = u.marks.map((m) => ({ ...m, pts: m.pts.map(map) }));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const piece of strokes.concat(marks)) {
+      for (const p of piece.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    return { ...u, _prof: undefined, strokes, marks, entry: dir(u.entry), exit: dir(u.exit), box: { minX, maxX, minY, maxY }, jittered: true };
+  }
+
   function assemble(choices, liftGap, clearance, rng, gaps) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
@@ -3619,10 +3716,12 @@ module.exports = { createTools };
     let prev = null;
     const spans = []; // where each letter's ink starts and ends, along the word
     for (const ch of choices) {
-      const u = ch.flip ? turnedUnit(ch.unit) : ch.unit;
+      const u = ch.thin && !ch.flip && !ch.accent ? jitterUnit(ch.unit, rng) : ch.flip ? turnedUnit(ch.unit) : ch.unit;
       const sc = ch.scale;
       let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
-      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
+      // a little up and down from letter to letter (opts.bounce); a letter that carries on a recorded one keeps its lift
+      const ly = !gaps || !gaps.bounce ? 0 : prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && !u.jittered && !prev.unit.jittered && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1 ? prev.ly : (gaps.brng() * 2 - 1) * 0.03 * gaps.bounce;
+      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && !u.jittered && !prev.unit.jittered && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
       let bridged = null;
       if (!prev) tx = -u.box.minX * sc;
@@ -3630,7 +3729,7 @@ module.exports = { createTools };
       else {
         if (conn) {
           tx = prev.tx + prev.unit.exit.x - u.entry.x;
-          bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w })));
+          bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc + ly, w: p.w })));
           if (!bridged) conn = false; // no clean join between these two: lift the pen
         }
         if (!conn) {
@@ -3656,7 +3755,7 @@ module.exports = { createTools };
         }
       }
 
-      const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w });
+      const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc + ly, w: p.w });
       let lastStroke = null;
       for (let pi = 0; pi < u.strokes.length; pi++) {
         const piece = u.strokes[pi];
@@ -3705,7 +3804,7 @@ module.exports = { createTools };
         }
       }
       spans.push([lo, hi]);
-      prev = { unit: u, sc, tx, lastStroke };
+      prev = { unit: u, sc, tx, lastStroke, ly };
     }
     // a dangling connected tail at the very end of the word
     if (prev && prev.unit.exit.mid) {
@@ -3862,8 +3961,10 @@ module.exports = { createTools };
     const use = pins || wholeWordPins(style, chars, crng, ctx);
     const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
+    // a letter with only a few examples gets a little turn and stretch each time it is used
+    for (const c of choices) if (!c.flip && !c.accent && (style.byChar.get(c.unit.ch) || []).length <= 4 && /[A-Za-z]/.test(c.unit.ch)) c.thin = true;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
-    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance });
+    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance, bounce: ctx.bounce, brng: ctx.bounce > 0 ? G.mulberry32((seed ^ 0x5bd1e995) >>> 0) : null });
     const spans = strokes.spans;
     deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
@@ -3881,16 +3982,17 @@ module.exports = { createTools };
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5, bounce: 1.5 },
       opts || {}
     );
+    if (o.bounce === undefined) o.bounce = 1.5; // a caller that passes the key with nothing in it gets the default
     const rng = G.mulberry32(o.seed);
     // The writer's own line rhythm (word gaps, baseline / size / slant drift), when they have
     // written full lines. The Natural variation slider scales it: 30% (the default) is exactly as
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness, bounce: o.bounce };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;
@@ -3906,6 +4008,10 @@ module.exports = { createTools };
     const pickSlope = () => (R ? Math.tan(R.slopeSd * k * G.gaussian(rng)) : (rng() * 2 - 1) * 0.006 * o.messiness);
     let slope = pickSlope();
     let wordOff = 0;
+    let liftState = 0; // opts.bounce: how far this word sits above or below the line, in x-heights
+    // its own random stream: how much bounce there is never changes which letters are chosen or how they are spaced
+    const brng = o.bounce > 0 ? G.mulberry32((o.seed * 2654435761 + 12345) >>> 0) : null;
+    const wavePhase = brng ? brng() * 6.283 : 0;
     let sizeState = 0; // log scale of the current word, drifts like the writer's does
     baselines.push(firstBase);
     // AR(1): next = rho * previous + noise, so drift is smooth along the line instead of jumping
@@ -3916,6 +4022,7 @@ module.exports = { createTools };
       x = margin;
       slope = pickSlope();
       wordOff = 0;
+      liftState = 0;
       sizeState = 0;
       baselines.push(firstBase + line * lineH);
     };
@@ -3951,12 +4058,21 @@ module.exports = { createTools };
         if (x > margin && x + wpx > o.width - margin) newLine();
         if (R) wordOff = ar(wordOff / xh, R.baseRho, R.baseSd * k) * xh;
         else wordOff = wordOff * 0.7 + (rng() * 2 - 1) * 0.035 * xh * o.messiness;
-        const base = baselines[line] + slope * (x - margin) + wordOff;
+        // opts.bounce: a small up and down, on top of the writer's own drift: a slow wave along the line, each word a little above or
+        // below its neighbours, and a slight tilt of each word (nothing is drawn from the random stream when it is 0)
+        let lift = 0;
+        let tilt = 0;
+        if (o.bounce > 0) {
+          liftState = 0.4 * liftState + Math.sqrt(1 - 0.16) * 0.06 * o.bounce * G.gaussian(brng);
+          lift = (liftState + 0.05 * o.bounce * Math.sin(wavePhase + (6.283 * (x - margin)) / (14 * xh))) * xh;
+          tilt = G.gaussian(brng) * 0.018 * o.bounce;
+        }
+        const base = baselines[line] + slope * (x - margin) + wordOff + lift;
         const dx = x - b.minX;
         for (const s of pxStrokes) {
           for (const p of s.pts) {
+            p.y += base + (p.x - b.minX) * tilt;
             p.x += dx;
-            p.y += base;
           }
           strokesOut.push(s);
         }
@@ -3980,7 +4096,7 @@ module.exports = { createTools };
     return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke };
+  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

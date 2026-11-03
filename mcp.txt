@@ -8,15 +8,15 @@ It is read into memory and never sent anywhere.
 Everything, for someone starting from scratch (no password): the whole project, both servers and a setup guide.
 Give this to an AI assistant and tell it to read START-HERE.txt inside:
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-engine.zip
-  sha256sum handwriting-engine.zip     # should be 6dd751ff2b7650b8f14dbb62631bf87f95ed43f7fbdeffcd342685c4a171f2ae
+  sha256sum handwriting-engine.zip     # should be 6209ed76908a379db3fb3b368601ab1da9690b68360351b627901ae39d761ab4
   unzip handwriting-engine.zip
 
 Just the server
   curl -fsSLO https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp.js
-  sha256sum handwriting-mcp.js     # should be f9d982fea7dc1a860832fd7c5750be33a0813d52a7395f8f67165d62d2f7b97c
+  sha256sum handwriting-mcp.js     # should be 597e6f9df364f75af2c9d427af8229a4ac63795a0fa24fab050a95222bff8788
 
 A version that can also read and fill PDFs (2 MB) is https://b0ngocat.github.io/Youtube-Views-Comment/handwriting-mcp-pdf.js
-  sha256 3fa7e67f4626df18ae3804c5b614fd4c0d44bbbce0f0ec1cf338a0ff7473c902
+  sha256 c8dc08a7e10101f4c7f878aae1bd7504d4a76f2a8f4d0b93bf117ab9805adb95
 
 Run it (speaks MCP over stdin/stdout). The owner's handwriting is published on the site, locked with a password, and this copy
 already knows where it is, so all it needs is the password, which the owner gives you:
@@ -50,7 +50,7 @@ they are in; nothing is skipped or guessed. Fix the text or have the person teac
 a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
 Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
 
-seed (write_text, write_batch, each fill_pdf answer): a whole number from 0, default 1; the same seed is the same writing, another is
+seed (write_text, write_batch, each fill_pdf answer): a whole number from 0 (a fill_pdf answer with none gets its own from where it sits, the report says so; write_text defaults to 1); the same seed is the same writing, another is
 another take. For digits it picks another of the person's clean examples: re-roll one bad digit by changing that answer's seed.
 fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 10 KB) to check digits without rendering pages.
 Math TeX: only commands listed by handwriting_status {math_help: true} work (\Rightarrow \implies \iff \in \cup \bar{x} \vec{v} y' ...);
@@ -68,7 +68,7 @@ over it. Do not remove the accents. Check each accent is over the right letter.
 Math input: x^2, \frac{a}{b}, \sqrt{x} or sqrt(x), \sqrt[3]{x} or cubert(x), \int_0^1, \sum_{i=1}^{n},
 \text{ words }, and "\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
 check numbers by looking at the picture. A multiplication sign the person wrote too small to read is left out (handwriting_status says so) and
-a clean one is drawn with on_missing "fallback". Write only what the owner asked for.
+a clean one is drawn with on_missing "fallback". Every line slides slightly up and down (bounce, 0 to 3, default 1.5; 0 is straight): keep it. Em dashes are refused: use commas. Write only what the owner asked for.
 
 The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
 folder (next to the samples file, or in the current folder when it came from the site), so later starts take under
