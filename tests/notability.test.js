@@ -309,7 +309,7 @@ test('handwriting in a box lands inside that box, on that page, as whole Bezier 
       const px = (x + 12.8) * bands[0].scale - bands[0].xoff - N.PDF_SHIFT_X;
       const py = y * bands[0].scale;
       assert.ok(px > box.x - 4 && px < box.x + box.w + 4, 'inside the box across: ' + px);
-      assert.ok(py > box.y - 4 && py < box.y + box.h + 4, 'inside the box down: ' + py);
+      assert.ok(py > box.y - 5 && py < box.y + box.h + 6, 'inside the box down: ' + py); // descenders cross the printed line a little, and the up and down moves ink by up to a point
     }
   }
 });

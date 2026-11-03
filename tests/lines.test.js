@@ -150,7 +150,7 @@ test('the variation slider scales the learned drift: 0 is perfectly regular', ()
   // where the letters sit can only come from the drift model
   const text = 'o o o o o o o o o o o o o o o o';
   const spread = (messiness) => {
-    const lay = Y.layout(st, text, { xh: 34, width: 4000, seed: 5, messiness, variation: 0 });
+    const lay = Y.layout(st, text, { xh: 34, width: 4000, seed: 5, messiness, variation: 0, bounce: 0 }); // bounce is its own control, tested in synth.test.js
     const bottoms = lay.strokes.map((s) => Math.max(...s.pts.map((p) => p.y)));
     const m = bottoms.reduce((a, b) => a + b, 0) / bottoms.length;
     return Math.sqrt(bottoms.reduce((a, b) => a + (b - m) * (b - m), 0) / bottoms.length);

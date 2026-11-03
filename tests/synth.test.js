@@ -311,13 +311,14 @@ test('explicit pins win over word reuse', () => {
   assert.deepEqual(b.words.map((w) => w.ids), pins);
 });
 
-test('bounce adds a small up and down, is the same every time for a seed, and 0 leaves the writing exactly as it was', () => {
+test('bounce adds a small up and down (1.5 unless asked otherwise), is the same every time for a seed, and leaves the letters alone', () => {
   const { writeWord } = require('./synth-writer');
   const style = S.buildStyle('the quick brown fox jumps over lazy dog pack my box with five dozen jugs'.split(' ').map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
   const text = 'the quick brown fox jumps over the lazy dog pack my box with five dozen jugs';
   const run = (bounce) => Y.layout(style, text, { xh: 34, width: 500, seed: 3, wordReuse: 0, bounce }).strokes.map((s) => s.pts.map((p) => [p.x, p.y]));
   const plain = JSON.stringify(run(undefined));
-  assert.equal(JSON.stringify(run(0)), plain, '0 is the same as not asking');
+  assert.equal(plain, JSON.stringify(run(1.5)), 'not asking is the default amount, 1.5');
+  assert.notEqual(JSON.stringify(run(0)), plain, '0 is straight across');
   assert.equal(JSON.stringify(run(1)), JSON.stringify(run(1)), 'the same seed, the same writing');
   assert.notEqual(JSON.stringify(run(1)), plain, 'and 1 is different');
   const wobble = (strokes) => {

@@ -86,7 +86,7 @@ they are in; nothing is skipped or guessed. Fix the text or have the person teac
 a clean stand-in for symbols and punctuation that have one (listed in the reply: not the person's handwriting, say so).
 Letters and digits can never be faked. handwriting_status {check: "<text>"} checks in advance.
 
-seed (write_text, write_batch, each fill_pdf answer): a whole number from 0, default 1; the same seed is the same writing, another is
+seed (write_text, write_batch, each fill_pdf answer): a whole number from 0 (a fill_pdf answer with none gets its own from where it sits, the report says so; write_text defaults to 1); the same seed is the same writing, another is
 another take. For digits it picks another of the person's clean examples: re-roll one bad digit by changing that answer's seed.
 fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 10 KB) to check digits without rendering pages.
 Math TeX: only commands listed by handwriting_status {math_help: true} work (\\Rightarrow \\implies \\iff \\in \\cup \\bar{x} \\vec{v} y' ...);
@@ -104,7 +104,7 @@ over it. Do not remove the accents. Check each accent is over the right letter.
 Math input: x^2, \\frac{a}{b}, \\sqrt{x} or sqrt(x), \\sqrt[3]{x} or cubert(x), \\int_0^1, \\sum_{i=1}^{n},
 \\text{ words }, and "\\ " for a space that stays (plain spaces are ignored, as in TeX). Digits are the weakest part:
 check numbers by looking at the picture. A multiplication sign the person wrote too small to read is left out (handwriting_status says so) and
-a clean one is drawn with on_missing "fallback". Write only what the owner asked for.
+a clean one is drawn with on_missing "fallback". Every line slides slightly up and down (bounce, 0 to 3, default 1.5; 0 is straight): keep it. Em dashes are refused: use commas. Write only what the owner asked for.
 
 The first call after a fresh start builds the handwriting (about 7 seconds) and caches it in a .handwriting-cache
 folder (next to the samples file, or in the current folder when it came from the site), so later starts take under

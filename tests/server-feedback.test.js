@@ -78,17 +78,20 @@ async function ink(extra) {
   return r.result.content.find((c) => c.type === 'image').data;
 }
 
-test('fill_pdf honours the seed of each answer, the default is seed 1, and 0 is a seed too', async () => {
+test('fill_pdf honours the seed of each answer; without one each answer has its own, from where it sits; and 0 is a seed too', async () => {
   const none = await ink({});
-  assert.equal(await ink({ seed: 1 }), none, 'seed 1 is the default, so it is the same as none');
+  assert.equal(await ink({}), none, 'no seed is still the same writing every time for the same place');
+  assert.notEqual(await ink({ seed: 1 }), none, 'a seed of 1 is a seed like any other, not the own seed');
   const seven = await ink({ seed: 7 });
   assert.notEqual(seven, none, 'seed 7 is another take');
-  assert.notEqual(await ink({ seed: 0 }), none, 'seed 0 is a seed of its own, not a 1');
+  assert.notEqual(await ink({ seed: 0 }), await ink({ seed: 1 }), 'seed 0 is a seed of its own, not a 1');
   assert.equal(await ink({ seed: 7 }), seven, 'the same seed is the same writing');
   const r = await fill([{ page: 1, x: 72, y: 100, width: 400, height: 40, text: 'the quick brown fox', seed: 7 }]);
   assert.match(textOf(r.r), /written at 9\.5 pt \(seed 7\)/, 'the report says the seed was used');
   const plain = await fill([{ page: 1, x: 72, y: 100, width: 400, height: 40, text: 'the quick brown fox' }]);
-  assert.doesNotMatch(textOf(plain.r), /seed/, 'and says nothing when none was given');
+  assert.match(textOf(plain.r), /\(own seed \d+\)/, 'and says it chose one when none was given');
+  const a = await fill([{ page: 1, x: 72, y: 100, width: 400, height: 40, text: 'El libro' }, { page: 1, x: 72, y: 200, width: 400, height: 40, text: 'El libro' }]);
+  assert.match(textOf(a.r), /answer 1[^\n]*seed (\d+)\)[^\n]*\n[^]*answer 2[^\n]*seed (?!\1\))\d+/, 'two answers with the same words get different seeds, so they do not open alike');
 });
 
 test('a seed that is not a whole number is refused, not quietly turned into another', async () => {
@@ -239,4 +242,64 @@ test('asking for previews changes nothing in the PDF', async () => {
   const a = await fill(answers);
   const b = await fill(answers, { preview: 'all' });
   assert.equal(strip(a.bytes), strip(b.bytes));
+});
+
+// ---- what the person asked for: nothing stamped, no em dashes ----------------------------------------------
+
+test('a tilde is one smooth stroke, never dots, and never the same twice: its length, height and angle change', () => {
+  const marks = [];
+  for (let seed = 1; seed <= 24; seed++) marks.push(Y.accentStrokes('tilde', 0, 1, 1, 1, G.mulberry32(seed)));
+  for (const m of marks) {
+    assert.equal(m.length, 1, 'one stroke');
+    const p = m[0].pts;
+    assert.ok(p.length >= 14, 'drawn with plenty of points');
+    for (let i = 1; i < p.length; i++) assert.ok(Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y) < 0.07, 'continuous, with no gaps or dots');
+  }
+  const width = marks.map((m) => Math.max(...m[0].pts.map((p) => p.x)) - Math.min(...m[0].pts.map((p) => p.x)));
+  const height = marks.map((m) => Math.max(...m[0].pts.map((p) => p.y)) - Math.min(...m[0].pts.map((p) => p.y)));
+  assert.ok(Math.max(...width) - Math.min(...width) > 0.1, 'lengths vary');
+  assert.ok(Math.max(...height) - Math.min(...height) > 0.04, 'heights and angles vary');
+  assert.equal(new Set(marks.map((m) => JSON.stringify(m[0].pts.map((p) => [Math.round(p.x * 100), Math.round(p.y * 100)])))).size, 24, 'no two alike');
+  for (const kind of ['acute', 'grave', 'circ']) {
+    const a = Y.accentStrokes(kind, 0, 1, 1, 1, G.mulberry32(1));
+    const b = Y.accentStrokes(kind, 0, 1, 1, 1, G.mulberry32(2));
+    assert.notEqual(JSON.stringify(a), JSON.stringify(b), kind + ' is not stamped either');
+  }
+});
+
+test('a letter the writer has only a few examples of (a capital X, the E that opens a line) comes out a little different each time, and the original is untouched', () => {
+  const few = S.buildStyle(WORDS.concat(['X', 'Eo']).map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })).concat([writeWord('Xx', { style: 'print', seed: 99 })]));
+  const pool = few.byChar.get('X');
+  assert.ok(pool.length <= 4, 'a thin pool');
+  const before = JSON.stringify(pool.map((u) => u.strokes));
+  const seen = new Set();
+  for (let seed = 1; seed <= 8; seed++) seen.add(JSON.stringify(Y.layout(few, 'X', { xh: 34, width: 300, seed, messiness: 0, bounce: 0 }).strokes.map((s) => s.pts.map((p) => [Math.round(p.x * 10), Math.round(p.y * 10)]))));
+  assert.ok(seen.size >= 6, 'eight seeds, ' + seen.size + ' different X');
+  assert.equal(JSON.stringify(pool.map((u) => u.strokes)), before, 'the cached examples are not changed');
+  const many = Y.layout(style, 'o', { xh: 34, width: 300, seed: 1, messiness: 0, bounce: 0 });
+  assert.ok(many.strokes.length > 0, 'letters with plenty of examples are as before');
+});
+
+test('an em dash is refused in write_text and in a fill, with the answer named', async () => {
+  const w = await call('write_text', { text: 'the fox — the dog' });
+  assert.ok(w.result.isError);
+  assert.match(textOf(w), /em dash/);
+  const { r } = await fill([{ page: 1, x: 72, y: 100, width: 300, text: 'one' }, { page: 1, x: 72, y: 200, width: 300, text: 'the fox — the dog' }]);
+  assert.ok(r.result.isError);
+  assert.match(textOf(r), /answer 2: the text has an em dash/);
+  assert.ok(!(await call('write_text', { text: 'the fox and the dog' })).result.isError, 'without the dash it is fine');
+});
+
+test('stagger starts an answer a little in from the left, and the right edge stays', async () => {
+  const plain = (b) => b.toString('latin1').replace(/\/(ModDate|CreationDate)\s*\([^)]*\)/g, '').replace(/\/ID\s*\[[^\]]*\]/g, '');
+  const one = async (n, extra) => {
+    const dest = path.join(tmp, 'stagger-' + n + '.pdf');
+    const r = await call('fill_pdf', { pdf: await sheet(), out: dest, answers: [Object.assign({ page: 1, x: 72, y: 100, width: 300, height: 30, text: 'the quick fox', seed: 3 }, extra)] });
+    assert.ok(!r.result.isError, textOf(r));
+    return plain(fs.readFileSync(dest));
+  };
+  const a = await one(1, {});
+  assert.equal(await one(2, {}), a, 'the same call is the same PDF');
+  assert.notEqual(await one(3, { stagger: true }), a, 'the staggered answer is placed differently');
+  assert.equal(await one(4, { stagger: true }), await one(3, { stagger: true }), 'and the same way every time');
 });

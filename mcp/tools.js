@@ -24,7 +24,7 @@ const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => require('../vendor/pdf-lib.min.js');
 const inspectPdf = (bytes, o) => require('./pdfinfo').inspect(bytes, o);
 
-const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, slantDelta: 0, wordSpacing: 1 }; // the Write tab's defaults
+const LOOK = { messiness: 0.3, variation: 0.4, neatness: 0.5, wordReuse: 0.25, bounce: 1.5, slantDelta: 0, wordSpacing: 1 }; // the Write tab's defaults
 const DEFAULT_INK = '#1749b3';
 
 function createTools(config) {
@@ -124,10 +124,31 @@ function createTools(config) {
     messiness: clampNum(a.messiness, 0, 1, LOOK.messiness),
     variation: clampNum(a.variation, 0, 1, LOOK.variation),
     neatness: clampNum(a.neatness, 0, 1, LOOK.neatness),
+    bounce: clampNum(a.bounce, 0, 3, LOOK.bounce),
     wordReuse: clampNum(a.word_reuse, 0, 1, LOOK.wordReuse),
     slantDelta: LOOK.slantDelta,
     wordSpacing: LOOK.wordSpacing,
   });
+  // An em dash in a piece of writing is refused: it is the first thing that makes a fill read as machine text, and some assignments ban it outright.
+  const EM_DASH = /\u2014/;
+  function banEmDash(txt, where) {
+    if (EM_DASH.test(txt)) throw new Error(`${where ? where + ': ' : ''}the text has an em dash (\u2014). Em dashes are not written: use a comma, a full stop or a new sentence instead.`);
+  }
+  /** A number from where an answer sits and what it says: the seed it gets when none was given, so no two answers open alike. */
+  function placeSeed(page, x, y, txt) {
+    let h = 2166136261;
+    for (const c of `${page}:${Math.round(x)}:${Math.round(y)}:${String(txt).slice(0, 24)}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+    return h % 2147483647;
+  }
+  /** What to tell about digits whose examples are few: another seed may give the same one back. */
+  function digitNotes(style, txt) {
+    const out = [];
+    for (const d of new Set(String(txt).match(/[0-9]/g) || [])) {
+      const clean = (style.byChar.get(d) || []).filter((u) => u.iso).length;
+      if (clean <= 2) out.push(`digit ${d}: only ${clean} clean example${clean === 1 ? '' : 's'} of it, so another seed can give the same one again; the person can write more in the Teach tab`);
+    }
+    return out;
+  }
   const inkOf = (a) => (/^#[0-9a-f]{6}$/i.test(a.ink || '') ? a.ink : DEFAULT_INK);
   const text = (t) => ({ type: 'text', text: t });
   const safeName = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) || 'out';
@@ -204,6 +225,7 @@ function createTools(config) {
   /** Check and lay out one piece of writing. Writes nothing. Returns what renderOne needs, and the characters that block it. */
   async function prepare(a) {
     if (typeof a.text !== 'string' || !a.text.trim()) throw new Error('text is required.');
+    banEmDash(a.text, '');
     const { style } = await load();
     const format = formatOf(a);
     const kind = a.kind === 'math' ? 'math' : 'text';
@@ -245,9 +267,11 @@ function createTools(config) {
       pngPath = outPath(base + '.png');
       fs.writeFileSync(pngPath, png);
     }
-    const notes = [`Written at letter height ${placed.xhPt} pt, ${Math.round(placed.layout.width * placed.K)} x ${Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
+    const drawn = /width="([\d.]+)pt" height="([\d.]+)pt"/.exec(svg); // the size stated is the size of the SVG that is saved
+    const notes = [`Written at letter height ${placed.xhPt} pt, ${drawn ? Math.round(drawn[1]) : Math.round(placed.layout.width * placed.K)} x ${drawn ? Math.round(drawn[2]) : Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
     if (seedOf(a.seed).given) notes[0] += `  Seed ${seedOf(a.seed).seed}.`;
     notes.push(...drawnNotes(chk, placed));
+    notes.push(...digitNotes((await load()).style, a.text));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
 
@@ -296,7 +320,7 @@ function createTools(config) {
   /** One line per answer: how it was fitted (as is, wrapped, box grown, letters shrunk) and anything drawn rather than written. */
   function fitReport(label, box, placed, extra, seed) {
     const r1 = (v) => (Math.round(v * 10) / 10).toString();
-    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt${seed === null || seed === undefined ? '' : ' (seed ' + seed + ')'}`];
+    const bits = [`${label}: written at ${placed.xhPt.toFixed(1)} pt${seed === null || seed === undefined ? '' : typeof seed === 'string' ? ' (' + seed + ')' : ' (seed ' + seed + ')'}`];
     if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
     const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
     if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
@@ -342,6 +366,7 @@ function createTools(config) {
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3 (blue).' },
           seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number gives another take of the same text: other examples of each letter and digit are chosen, so use it to re-roll a digit that came out badly. The same number always gives the same writing.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
+          bounce: { type: 'number', description: 'Up and down: 0 to 3, default 1.5. A slight slide of each letter and word above or below the line, and a slow wave along it, so the line does not sit on a perfectly straight baseline. 0 is straight across.' },
           messiness: { type: 'number', description: '0 to 1. Default 0.3.' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'png (default) comes back as an image. svg comes back as text: the SVG markup itself, transparent, sized in points, ready to save as a .svg file or place on a page. both gives both. note makes a Notability note (.note) whose writing is real pen strokes that can be edited in Notability: it is saved to a file and also returned as an embedded file. width_pt then defaults to 520. Optional for note: pen_width, left, top (in note units; top is measured down from the top of the page). The SVG file is saved either way.' },
           pen_width: { type: 'number', description: 'format note only: the pen width in note units. Default 1.05 (about a Notability pen at thickness 3).' },
@@ -367,6 +392,7 @@ function createTools(config) {
           letter_height_pt: { type: 'number' },
           ink: { type: 'string' },
           neatness: { type: 'number' },
+          bounce: { type: 'number' },
           messiness: { type: 'number' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'As in write_text. Default png.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'As in write_text. With the default (error), if ANY character of ANY item has no sample the whole call stops before writing anything and lists them item by item.' },
@@ -433,6 +459,7 @@ function createTools(config) {
           out: { type: 'string', description: 'Where to save. Default: <name>-filled.pdf in the output folder.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3.' },
           neatness: { type: 'number' },
+          bounce: { type: 'number' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           preview: { type: 'string', enum: ['none', 'all', 'digits'], description: 'Return a small picture of each answer\'s ink (cropped to the ink, on white, about 3 pixels per point, at most 640 px wide) with the report, so you can check digits without rendering and cropping whole pages. all: every answer. digits: only the answers that contain a digit. none (default). They show the writing only, not the page behind it, and at most 20 are returned.' },
@@ -452,7 +479,8 @@ function createTools(config) {
                 text: { type: 'string' },
                 kind: { type: 'string', enum: ['text', 'math'] },
                 letter_height_pt: { type: 'number' },
-                seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. The report says (seed N) when you gave one.' },
+                seed: { type: 'integer', description: 'A whole number from 0 up. Without one, each answer gets its own seed from where it sits on the page, so no two answers open alike (the report says which). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. If a digit has only one or two clean examples the report says so: another seed can give the same one again.' },
+                stagger: { type: 'boolean', description: 'true: start this answer a little in from the left (differently on every answer, the right edge stays), so answers do not all start on one vertical line.' },
                 shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
                 min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
                 grow: { type: 'boolean', description: 'May the box grow downward when the text wraps onto more lines than fit? Default true. Set false when something is printed right under the box.' },
@@ -492,12 +520,19 @@ function createTools(config) {
           const page = Math.round(Number(ans.page)) - 1;
           if (!(page >= 0 && page < sizes.length)) throw new Error(`${where}: page ${ans.page} does not exist (the PDF has ${sizes.length}).`);
           if (typeof ans.text !== 'string' || !ans.text.trim()) throw new Error(`${where}: text is empty.`);
+          banEmDash(ans.text, where);
           for (const k of ['x', 'width']) if (!Number.isFinite(Number(ans[k]))) throw new Error(`${where}: ${k} must be a number.`);
           if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
           const kind = ans.kind === 'math' ? 'math' : 'text';
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, ans.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          if (ans.stagger === true || a.stagger === true) {
+            // start a little in from the left, differently on every answer, and keep the right edge where it was
+            const sh = Math.min(box.w * 0.25, (((Math.imul(box.seed + 1, 2654435761) >>> 8) % 1000) / 1000) * 1.4 * (box.xhPt || Sheet.DEFAULT_XH_PT) * 2);
+            box.x += sh;
+            box.w -= sh;
+          }
           if (box.x < 0 || box.y < -1 || box.x + box.w > sizes[page].w + 1 || box.y + box.h > sizes[page].h + 1) throw new Error(`${where}: the box (x ${box.x}, y ${box.y}, ${box.w} x ${box.h}) is outside page ${page + 1}, which is ${sizes[page].w} x ${sizes[page].h} pt.`);
           // how far down the box may grow: as far as asked, or down to the bottom margin of the page
           let room = sizes[page].h - 36 - box.y;
@@ -527,7 +562,7 @@ function createTools(config) {
             return;
           }
           items.push({ box, placed });
-          report.push(fitReport(label, box, placed, drawnNotes(chk, placed), seedOf(ans.seed).given ? seedOf(ans.seed).seed : null));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed).concat(digitNotes(style, ans.text)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
           const wantPreview = a.preview === true || a.preview === 'all' || (a.preview === 'digits' && /[0-9]/.test(ans.text));
           if (wantPreview) previewJobs.push({ label, placed });
         });

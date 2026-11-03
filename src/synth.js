@@ -312,7 +312,7 @@
     acute: [[[-0.09, 0], [0.02, 0.13], [0.13, 0.3]]],
     grave: [[[0.09, 0], [-0.02, 0.13], [-0.13, 0.3]]],
     circ: [[[-0.14, 0], [0, 0.26], [0.14, 0]]],
-    tilde: [Array.from({ length: 12 }, (_, i) => [-0.27 + (0.54 * i) / 11, 0.15 + 0.1 * Math.sin((2 * Math.PI * i) / 11)])],
+    tilde: [], // drawn by tildePoly: never the same twice
     diaer: [[[-0.14, 0.2], [-0.125, 0.1]], [[0.12, 0.2], [0.135, 0.1]]],
   };
 
@@ -320,13 +320,34 @@
    * The strokes of an accent drawn over a letter: kind, where its middle is (cx), where it sits (y0), how big (k) and the
    * pen width of the letter under it. A little different every time, like a hand's.
    */
+  /** One smooth wave, a single stroke: its length, height, where the wave starts and which hump is bigger are all different every time. */
+  function tildePoly(rng) {
+    const len = 0.42 + rng() * 0.22;
+    const amp = 0.065 + rng() * 0.065;
+    const phase = (rng() - 0.5) * 0.9;
+    const skew = (rng() - 0.5) * 0.7;
+    const n = 16;
+    return Array.from({ length: n }, (_, i) => {
+      const t = i / (n - 1);
+      return [(t - 0.5) * len, 0.15 + amp * (1 + skew * (t - 0.5) * 2) * Math.sin(2 * Math.PI * t + phase)];
+    });
+  }
+
   function accentStrokes(kind, cx, y0, k, w, rng) {
     const dx = (rng() - 0.5) * 0.06;
     const dy = (rng() - 0.5) * 0.05;
     const tilt = (rng() - 0.5) * 0.25;
-    return (ACCENT_SHAPES[kind] || []).map((poly) => {
+    const rot = (rng() - 0.5) * 0.4; // turned a little, either way
+    const len = 1 + (rng() - 0.5) * 0.3; // and longer or shorter
+    const cr = Math.cos(rot);
+    const sr = Math.sin(rot);
+    return (kind === 'tilde' ? [tildePoly(rng)] : ACCENT_SHAPES[kind] || []).map((poly) => {
       const pts = [];
-      const at = (p) => ({ x: cx + dx + (p[0] + tilt * p[1]) * k, y: y0 + dy + p[1] * k, w });
+      const at = (p) => {
+        const px = p[0] * cr - (p[1] - 0.15) * sr;
+        const py = (p[1] - 0.15) * cr + p[0] * sr + 0.15;
+        return { x: cx + dx + (px * len + tilt * py) * k, y: y0 + dy + py * len * k, w };
+      };
       for (let i = 0; i < poly.length - 1; i++) {
         const a = poly[i];
         const b = poly[i + 1];
@@ -378,6 +399,47 @@
     return t;
   }
 
+  /**
+   * A letter the writer has only a few examples of (a capital X, the E and L that open a line) comes out the same every time, whatever the
+   * seed. A copy a little turned, stretched and sheared makes each use its own. Never the original (units are cached).
+   */
+  function jitterUnit(u, rng) {
+    const rot = (rng() - 0.5) * 0.22;
+    const sx = 1 + (rng() - 0.5) * 0.12;
+    const sy = 1 + (rng() - 0.5) * 0.1;
+    const sh = (rng() - 0.5) * 0.12;
+    const cx = (u.box.minX + u.box.maxX) / 2;
+    const cy = (u.box.minY + u.box.maxY) / 2;
+    const c = Math.cos(rot);
+    const sn = Math.sin(rot);
+    const map = (p) => {
+      const x = (p.x - cx) * sx;
+      const y = (p.y - cy) * sy;
+      return { ...p, x: cx + x * c - y * sn + sh * y, y: cy + y * c + x * sn };
+    };
+    const dir = (e) => {
+      const m = map({ x: e.x, y: e.y });
+      const dx = e.dx * c - e.dy * sn;
+      const dy = e.dy * c + e.dx * sn;
+      return { ...e, x: m.x, y: m.y, dx, dy };
+    };
+    const strokes = u.strokes.map((st) => ({ ...st, pts: st.pts.map(map) }));
+    const marks = u.marks.map((m) => ({ ...m, pts: m.pts.map(map) }));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const piece of strokes.concat(marks)) {
+      for (const p of piece.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    return { ...u, _prof: undefined, strokes, marks, entry: dir(u.entry), exit: dir(u.exit), box: { minX, maxX, minY, maxY }, jittered: true };
+  }
+
   function assemble(choices, liftGap, clearance, rng, gaps) {
     const out = [];
     const joins = []; // where letters were bridged (kept so tests can check the joins are smooth)
@@ -385,12 +447,12 @@
     let prev = null;
     const spans = []; // where each letter's ink starts and ends, along the word
     for (const ch of choices) {
-      const u = ch.flip ? turnedUnit(ch.unit) : ch.unit;
+      const u = ch.thin && !ch.flip && !ch.accent ? jitterUnit(ch.unit, rng) : ch.flip ? turnedUnit(ch.unit) : ch.unit;
       const sc = ch.scale;
       let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
       // a little up and down from letter to letter (opts.bounce); a letter that carries on a recorded one keeps its lift
-      const ly = !gaps || !gaps.bounce ? 0 : prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1 ? prev.ly : (gaps.brng() * 2 - 1) * 0.03 * gaps.bounce;
-      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
+      const ly = !gaps || !gaps.bounce ? 0 : prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && !u.jittered && !prev.unit.jittered && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1 ? prev.ly : (gaps.brng() * 2 - 1) * 0.03 * gaps.bounce;
+      const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && !u.jittered && !prev.unit.jittered && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
       let bridged = null;
       if (!prev) tx = -u.box.minX * sc;
@@ -630,6 +692,8 @@
     const use = pins || wholeWordPins(style, chars, crng, ctx);
     const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
+    // a letter with only a few examples gets a little turn and stretch each time it is used
+    for (const c of choices) if (!c.flip && !c.accent && (style.byChar.get(c.unit.ch) || []).length <= 4 && /[A-Za-z]/.test(c.unit.ch)) c.thin = true;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
     const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance, bounce: ctx.bounce, brng: ctx.bounce > 0 ? G.mulberry32((seed ^ 0x5bd1e995) >>> 0) : null });
     const spans = strokes.spans;
@@ -649,9 +713,10 @@
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5, bounce: 0 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5, bounce: 1.5 },
       opts || {}
     );
+    if (o.bounce === undefined) o.bounce = 1.5; // a caller that passes the key with nothing in it gets the default
     const rng = G.mulberry32(o.seed);
     // The writer's own line rhythm (word gaps, baseline / size / slant drift), when they have
     // written full lines. The Natural variation slider scales it: 30% (the default) is exactly as
@@ -762,7 +827,7 @@
     return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke };
+  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

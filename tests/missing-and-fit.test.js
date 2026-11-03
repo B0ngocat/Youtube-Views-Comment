@@ -227,8 +227,8 @@ test('fill_pdf reports whether each answer was fitted as it is, wrapped, grown o
   });
   assert.ok(!r.result.isError, textOf(r));
   const t = textOf(r).split('\n').filter((l) => /^answer/.test(l));
-  assert.match(t[0], /^answer 1 \(page 1\): written at 9\.5 pt; fits as it is$/);
-  assert.match(t[1], /^answer 2 \(page 1\): written at 9\.5 pt; WRAPPED onto \d+ lines; box GROWN downward from 20 to \d+(\.\d)? pt \(it now ends at y = \d+/);
+  assert.match(t[0], /^answer 1 \(page 1\): written at 9\.5 pt(?: \((?:own )?seed [^)]*\))?; fits as it is$/);
+  assert.match(t[1], /^answer 2 \(page 1\): written at 9\.5 pt(?: \((?:own )?seed [^)]*\))?; WRAPPED onto \d+ lines; box GROWN downward from 20 to \d+(\.\d)? pt \(it now ends at y = \d+/);
   assert.doesNotMatch(t[1], /SHRUNK|DOES NOT FIT/);
   assert.match(t[2], /WRAPPED onto \d+ lines/);
   assert.match(t[2], /SHRUNK from 9\.5 to [\d.]+ pt \((8\d|9\d)% of the size asked for\) because wrapping and growing was not enough/);

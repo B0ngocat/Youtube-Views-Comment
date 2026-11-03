@@ -150,8 +150,8 @@ test('fill_pdf writes the answers in, reports each one and leaves the original a
   const saved = t.match(/Saved (\S+)/)[1];
   assert.ok(fs.existsSync(saved));
   assert.deepEqual(fs.readFileSync(pdf), before, 'original untouched');
-  assert.match(t, /answer 3 \(page 1\): written at 9\.5 pt; WRAPPED onto \d+ lines; box GROWN downward from 20 to \d+/, 'a long answer wraps and the box grows, at the size asked for');
-  assert.match(t, /answer 1 \(page 1\): written at 9\.5 pt; fits as it is/);
+  assert.match(t, /answer 3 \(page 1\): written at 9\.5 pt(?: \((?:own )?seed [^)]*\))?; WRAPPED onto \d+ lines; box GROWN downward from 20 to \d+/, 'a long answer wraps and the box grows, at the size asked for');
+  assert.match(t, /answer 1 \(page 1\): written at 9\.5 pt(?: \((?:own )?seed [^)]*\))?; fits as it is/);
   const doc = await PDFLib.PDFDocument.load(fs.readFileSync(saved));
   assert.equal(doc.getPageCount(), 2);
   for (const i of [0, 1]) assert.ok(doc.getPage(i).node.normalizedEntries().Contents.size() > 1, 'page ' + (i + 1) + ' has ink');
