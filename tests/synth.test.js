@@ -310,3 +310,21 @@ test('explicit pins win over word reuse', () => {
   const b = Y.layout(style, 'the quick fox', { seed: 8, width: 4000, wordReuse: 1, pins });
   assert.deepEqual(b.words.map((w) => w.ids), pins);
 });
+
+test('bounce adds a small up and down, is the same every time for a seed, and 0 leaves the writing exactly as it was', () => {
+  const { writeWord } = require('./synth-writer');
+  const style = S.buildStyle('the quick brown fox jumps over lazy dog pack my box with five dozen jugs'.split(' ').map((w, i) => writeWord(w, { style: 'print', seed: i + 1 })));
+  const text = 'the quick brown fox jumps over the lazy dog pack my box with five dozen jugs';
+  const run = (bounce) => Y.layout(style, text, { xh: 34, width: 500, seed: 3, wordReuse: 0, bounce }).strokes.map((s) => s.pts.map((p) => [p.x, p.y]));
+  const plain = JSON.stringify(run(undefined));
+  assert.equal(JSON.stringify(run(0)), plain, '0 is the same as not asking');
+  assert.equal(JSON.stringify(run(1)), JSON.stringify(run(1)), 'the same seed, the same writing');
+  assert.notEqual(JSON.stringify(run(1)), plain, 'and 1 is different');
+  const wobble = (strokes) => {
+    const ys = strokes.map((s) => s.reduce((m, p) => m + p[1], 0) / s.length);
+    return Math.sqrt(ys.reduce((m, y) => m + (y - ys.reduce((a, b) => a + b, 0) / ys.length) ** 2, 0) / ys.length);
+  };
+  assert.ok(wobble(run(2.4)) > 0, 'moves');
+  const lines = (strokes) => strokes.length;
+  assert.equal(lines(run(1)), lines(run(0)), 'no stroke is added or lost');
+});

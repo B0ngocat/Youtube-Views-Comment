@@ -388,6 +388,8 @@
       const u = ch.flip ? turnedUnit(ch.unit) : ch.unit;
       const sc = ch.scale;
       let conn = !!prev && prev.unit.exit.mid && u.entry.mid && prev.sc === 1 && sc === 1;
+      // a little up and down from letter to letter (opts.bounce); a letter that carries on a recorded one keeps its lift
+      const ly = !gaps || !gaps.bounce ? 0 : prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1 ? prev.ly : (rng() * 2 - 1) * 0.03 * gaps.bounce;
       const natural = !!prev && prev.sc === 1 && sc === 1 && !u.turned && !prev.unit.turned && prev.unit.wid === u.wid && u.idx === prev.unit.idx + 1;
       let tx;
       let bridged = null;
@@ -396,7 +398,7 @@
       else {
         if (conn) {
           tx = prev.tx + prev.unit.exit.x - u.entry.x;
-          bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w })));
+          bridged = bridgeJoin(prev.lastStroke.pts, u.strokes[0].pts.map((p) => ({ x: tx + p.x * sc, y: p.y * sc + ly, w: p.w })));
           if (!bridged) conn = false; // no clean join between these two: lift the pen
         }
         if (!conn) {
@@ -422,7 +424,7 @@
         }
       }
 
-      const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc, w: p.w });
+      const T = (p) => ({ x: tx + p.x * sc, y: p.y * sc + ly, w: p.w });
       let lastStroke = null;
       for (let pi = 0; pi < u.strokes.length; pi++) {
         const piece = u.strokes[pi];
@@ -471,7 +473,7 @@
         }
       }
       spans.push([lo, hi]);
-      prev = { unit: u, sc, tx, lastStroke };
+      prev = { unit: u, sc, tx, lastStroke, ly };
     }
     // a dangling connected tail at the very end of the word
     if (prev && prev.unit.exit.mid) {
@@ -629,7 +631,7 @@
     const choices = chooseUnits(style, chars, crng, ctx, use);
     if (!choices.length) return null;
     const arng = G.mulberry32((seed ^ 0x9e3779b9) >>> 0);
-    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance });
+    const strokes = assemble(choices, style.liftGap, style.clearance, arng, { digit: style.digitClearance, dot: style.dotClearance, bounce: ctx.bounce });
     const spans = strokes.spans;
     deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
@@ -647,7 +649,7 @@
    */
   function layout(style, text, opts) {
     const o = Object.assign(
-      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5 },
+      { xh: 34, width: 900, lineHeight: 3.1, wordSpacing: 1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1, wordReuse: 0.25, neatness: 0.5, bounce: 0 },
       opts || {}
     );
     const rng = G.mulberry32(o.seed);
@@ -656,7 +658,7 @@
     // measured, 0 is none, above 30% exaggerates.
     const R = style.rhythm && style.rhythm.learned ? style.rhythm : null;
     const k = R ? Math.min(3.5, Math.max(0, o.messiness / 0.3)) : 0;
-    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness };
+    const ctx = { variation: o.variation, messiness: o.messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: !!o.fallbackGlyphs, rhythm: !!R, wordReuse: o.wordReuse, wordUse: new Map(), neat: 4 * o.neatness, bounce: o.bounce };
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const lineH = o.lineHeight * xh;
@@ -672,6 +674,8 @@
     const pickSlope = () => (R ? Math.tan(R.slopeSd * k * G.gaussian(rng)) : (rng() * 2 - 1) * 0.006 * o.messiness);
     let slope = pickSlope();
     let wordOff = 0;
+    let liftState = 0; // opts.bounce: how far this word sits above or below the line, in x-heights
+    const wavePhase = o.bounce > 0 ? rng() * 6.283 : 0;
     let sizeState = 0; // log scale of the current word, drifts like the writer's does
     baselines.push(firstBase);
     // AR(1): next = rho * previous + noise, so drift is smooth along the line instead of jumping
@@ -682,6 +686,7 @@
       x = margin;
       slope = pickSlope();
       wordOff = 0;
+      liftState = 0;
       sizeState = 0;
       baselines.push(firstBase + line * lineH);
     };
@@ -717,12 +722,21 @@
         if (x > margin && x + wpx > o.width - margin) newLine();
         if (R) wordOff = ar(wordOff / xh, R.baseRho, R.baseSd * k) * xh;
         else wordOff = wordOff * 0.7 + (rng() * 2 - 1) * 0.035 * xh * o.messiness;
-        const base = baselines[line] + slope * (x - margin) + wordOff;
+        // opts.bounce: a small up and down, on top of the writer's own drift: a slow wave along the line, each word a little above or
+        // below its neighbours, and a slight tilt of each word (nothing is drawn from the random stream when it is 0)
+        let lift = 0;
+        let tilt = 0;
+        if (o.bounce > 0) {
+          liftState = ar(liftState, 0.4, 0.06 * o.bounce);
+          lift = (liftState + 0.05 * o.bounce * Math.sin(wavePhase + (6.283 * (x - margin)) / (14 * xh))) * xh;
+          tilt = G.gaussian(rng) * 0.018 * o.bounce;
+        }
+        const base = baselines[line] + slope * (x - margin) + wordOff + lift;
         const dx = x - b.minX;
         for (const s of pxStrokes) {
           for (const p of s.pts) {
+            p.y += base + (p.x - b.minX) * tilt;
             p.x += dx;
-            p.y += base;
           }
           strokesOut.push(s);
         }
