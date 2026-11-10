@@ -1051,10 +1051,15 @@
       for (let i = 0; i < baselines.length; i++) {
         const tallUp = (reachUp[i] || 0) > NORMAL_UP;
         const tallDownAbove = i > 0 && (reachDown[i - 1] || 0) > NORMAL_DOWN;
-        if (i === 0) total += tallUp ? Math.max(0, reachUp[0] - 1.7) * xh : 0;
+        // opts.snapLines (the caller writes on ruled lines): the room is a whole number of line heights, so every line stays on a
+        // rule. A tall piece that pokes into the next line's band by no more than about 0.45 x-heights beyond the usual gap
+        // gets no room (it just pokes over, as in handwriting); more than that skips whole lines. The first line moves nothing.
+        if (i === 0) total += tallUp && !o.snapLines ? Math.max(0, reachUp[0] - 1.7) * xh : 0;
         else if (tallUp || tallDownAbove) {
           const need = Math.max(reachDown[i - 1] || 0, NORMAL_DOWN) + Math.max(reachUp[i] || 0, NORMAL_UP) + GAP;
-          total += Math.max(0, need * xh - lineH);
+          let add = Math.max(0, need * xh - lineH);
+          if (o.snapLines) add = add <= (GAP + 0.45) * xh ? 0 : Math.ceil(add / lineH - 1e-6) * lineH;
+          total += add;
         }
         shift.push(total);
       }

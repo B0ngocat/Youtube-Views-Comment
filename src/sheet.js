@@ -49,7 +49,8 @@
    * the first baseline sits 0.45 x-heights above the box's bottom edge (the first rule), every later line 0.45 above the next rule,
    * and the box grows one rule at a time (as far as box.growTo). Letters taller than the rules allow (more than lineStep / 1.9)
    * are made smaller, within minRatio (unless auto === false); the result says so in `pitch`. `ruled` in the result holds
-   * {step, off: lines after the first whose spacing came out other than the step (a line with tall math gets extra room), tall}.
+   * {step, off: lines whose spacing is not a whole number of steps, skips: [{line, rules}] lines that skip rules to make room for tall math, rules: rules used, tall}.
+   * (synth.layout's snapLines makes tall math's extra room whole line steps, so lines stay on rules.)
    * K is points per layout pixel, and the layout belongs at (box.x - dx * K, box.y - dy * K) in points.
    */
   function layoutBox(style, box, look) {
@@ -74,6 +75,7 @@
           xh: ENGINE_XH,
           width: Math.max(60, Math.round(box.w / K)),
           lineHeight: step ? step / xhPt : box.kind === 'math' ? 3 : 2.5,
+          snapLines: step ? true : undefined,
           seed: box.seed === undefined ? 1 : box.seed, // 0 is a seed too
           margin: 8,
         }, redoOpt)
@@ -88,13 +90,22 @@
         // every line sits on its rule: the first rule is the box's bottom edge, the others are `step` apart below it
         dy = lay.baselines[0] - (box.h / K - 0.45 * ENGINE_XH);
         const n = lay.baselines.length;
+        // count RULES: a line may skip whole rules (room for tall math) and still be on its rule
         const gaps = [];
-        for (let i = 1; i < n; i++) if (Math.abs((lay.baselines[i] - lay.baselines[i - 1]) * K - step) > 1) gaps.push(i + 1);
-        const tooTallRules = n > allowed;
+        const skips = [];
+        let rules = 1;
+        for (let i = 1; i < n; i++) {
+          const d = (lay.baselines[i] - lay.baselines[i - 1]) * K;
+          const k = Math.max(1, Math.round(d / step));
+          if (Math.abs(d - k * step) > 1) gaps.push(i + 1);
+          else if (k > 1) skips.push({ line: i + 1, rules: k - 1 });
+          rules += k;
+        }
+        const tooTallRules = rules > allowed;
         const right2 = (b.maxX - moved.dx) * K;
         const wide = right2 > box.w + 1;
-        const ruled = { step, off: gaps, tall: (lay.lineInk || []).some((l) => l.tall) };
-        return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: wide || tooTallRules, tooWide: wide, tooTall: tooTallRules, bottom: box.h + (n - 1) * step, h: box.h + (Math.min(n, allowed) - 1) * step, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [], unknown: lay.unknown || [], ruled };
+        const ruled = { step, off: gaps, skips, rules, tall: (lay.lineInk || []).some((l) => l.tall) };
+        return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: wide || tooTallRules, tooWide: wide, tooTall: tooTallRules, bottom: box.h + (rules - 1) * step, h: box.h + (Math.min(rules, allowed) - 1) * step, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [], unknown: lay.unknown || [], ruled };
       }
       if (oneLine) {
         const top = b.minY - dy; // ink top, below the box top, in layout px

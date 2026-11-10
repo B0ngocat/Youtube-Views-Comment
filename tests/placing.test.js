@@ -279,9 +279,7 @@ test('mixed and math answers follow the rules, and tall math that breaks the spa
   assert.ok(!/NOT on the ruled lines/.test(textOf(ok)), textOf(ok));
   const lines = linesOf(await inkPoints(textOf(ok).match(/Saved (\S+)/)[1], 2), 4);
   assert.ok(Math.abs(lines[1].bottom - (82 - 0.45 * 9.5)) < 2, 'a mixed answer without tall math is on the second rule: ' + JSON.stringify(lines));
-  const tall = await fill({ pdf, on_missing: 'fallback', answers: [ans({ page: 2, after_text: '7.', kind: 'mixed', text: 'oxen\noven $\\frac{a}{b}$ cure\nmoon sew' })] });
-  assert.ok(!tall.result.isError, textOf(tall));
-  assert.match(textOf(tall), /lines? [\d, ]+ (is|are) NOT on the ruled lines: a line holding tall math/);
+  // tall math no longer drifts: see the tall math tests at the end
 });
 
 test('layoutBox: lineStep puts every baseline on its rule (no tool needed)', () => {
@@ -393,4 +391,73 @@ test('a wrapped answer on a lone rule found by after_text starts on it and goes 
   assert.equal(lines.length, 2, JSON.stringify(lines));
   assert.ok(Math.abs(lines[0].bottom - (205 - 0.45 * 9.5)) < 1.6, 'the first line rests on the rule: ' + lines[0].bottom);
   assert.ok(lines[1].top > 205 - 2, 'the second line is under the rule');
+});
+
+// ---- tall math on ruled lines: every line stays on a rule ------------------------------------------------
+
+/** A page with `n` rules `pitch` apart under "7. Answer", and the mixed answer filled on it; returns the report and the lines of ink. */
+async function tallCase(pitch, text, n) {
+  const doc = await PDFLib.PDFDocument.create();
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const pg = doc.addPage([400, H]);
+  pg.drawText('7. Answer', { x: 50, y: H - 60, size: 12, font });
+  for (let k = 0; k < n; k++) pg.drawLine({ start: { x: 130, y: H - (62 + k * pitch) }, end: { x: 380, y: H - (62 + k * pitch) }, thickness: 0.8, color: PDFLib.rgb(0, 0, 0) });
+  const pdf = path.join(tmp, 'tall-' + pitch + '-' + n + '.pdf');
+  fs.writeFileSync(pdf, await doc.save());
+  const r = await fill({ pdf, on_missing: 'fallback', answers: [ans({ after_text: '7.', kind: 'mixed', text })] });
+  assert.ok(!r.result.isError, textOf(r));
+  // only the first word of each line (left of the fraction), so the fraction's hanging denominator does not blur line 1
+  const lines = linesOf((await inkPoints(textOf(r).match(/Saved (\S+)/)[1], 1)).filter((p) => p.x < 150), 2.5);
+  return { t: textOf(r), lines };
+}
+const onRule = (line, ruleY) => Math.abs(line.bottom - (ruleY - 0.45 * 9.5)) < 1.6;
+const FRAC = 'oxen $\\frac{a}{b}$ sun\noven cure\nmoon sew';
+
+test('a fraction on line 1 of a mixed answer: every line ends on a rule, in order', async () => {
+  const { t, lines } = await tallCase(24, FRAC, 8);
+  assert.ok(!/NOT on the ruled lines/.test(t), t);
+  assert.equal(lines.length, 3, JSON.stringify(lines));
+  const rules = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => 62 + 24 * k);
+  let from = 0;
+  for (const l of lines) {
+    const k = rules.findIndex((y, i) => i >= from && onRule(l, y));
+    assert.ok(k >= from, `a line ends on a rule: ${JSON.stringify(l)} in ${t}`);
+    from = k + 1;
+  }
+});
+
+test('a tighter pitch skips a rule for the fraction, and the report says so; a roomy one skips none', async () => {
+  const tight = await tallCase(18, FRAC, 8);
+  assert.match(tight.t, /line 2 skips a ruled line: the tall math/);
+  assert.ok(!/NOT on the ruled lines/.test(tight.t), tight.t);
+  assert.equal(tight.lines.length, 3);
+  const rules = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => 62 + 18 * k);
+  assert.ok(onRule(tight.lines[0], 62));
+  const k2 = rules.findIndex((y) => onRule(tight.lines[1], y));
+  const k3 = rules.findIndex((y) => onRule(tight.lines[2], y));
+  assert.ok(k2 >= 2, 'line 2 is at least one rule further down: rule ' + k2);
+  assert.equal(k3, k2 + 1, 'and line 3 is on the next rule');
+  const roomy = await tallCase(40, FRAC, 4);
+  assert.ok(!/skips|NOT on/.test(roomy.t), roomy.t);
+  assert.ok(onRule(roomy.lines[1], 102) && onRule(roomy.lines[2], 142), JSON.stringify(roomy.lines));
+});
+
+test('a rule skipped for tall math counts as a rule: it does not fit when the rules run out', async () => {
+  const { t } = await tallCase(18, FRAC, 3);
+  assert.match(t, /DOES NOT FIT/);
+});
+
+test('layoutBox lineStep and synth snapLines: whole steps for tall math; without the option nothing changes', () => {
+  const { style } = corpus('print', 2);
+  const X = require('../src/mixed');
+  const box = { page: 0, x: 10, y: 100, w: 300, h: 28, text: FRAC, kind: 'mixed', xhPt: 9.5, seed: 3, lineStep: 18, growTo: 28 + 7 * 18 };
+  const placed = Sheet.layoutBox(style, box, { bounce: 0, fallbackGlyphs: true });
+  assert.deepEqual(placed.ruled.off, []);
+  assert.ok(placed.ruled.skips.length >= 1 && placed.ruled.rules > placed.lines);
+  const o = { xh: 34, width: 600, seed: 3, fallbackGlyphs: true };
+  const a = JSON.stringify(X.layout(style, FRAC, o).baselines);
+  assert.equal(JSON.stringify(X.layout(style, FRAC, { ...o, snapLines: false }).baselines), a, 'no option, no change');
+  const lh = 2.5 * 34;
+  const snapped = X.layout(style, FRAC, { ...o, lineHeight: 2.5, snapLines: true }).baselines;
+  snapped.slice(1).forEach((v, i) => assert.ok(Math.abs((v - snapped[i]) / lh - Math.round((v - snapped[i]) / lh)) < 1e-6, 'whole line heights'));
 });

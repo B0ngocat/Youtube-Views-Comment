@@ -81,8 +81,10 @@ Placing answers (fill_pdf, inspect_pdf): you do not have to work out x, y and wi
   10 to 60 pt apart), a wrapped answer is written on each rule in turn ("follows 3 printed lines, 18.0 pt apart"), and the box grows
   only to the last rule. Letters too tall for the spacing are made smaller within min_size_ratio, and the report says so. For lined
   paper the PDF does not draw as lines give "line_spacing_pt": 24 (line 1 on line_y, the next one 24 pt lower, and so on).
-  "follow_lines": false turns the automatic behaviour off. A mixed line holding tall math (a fraction) gets extra room and then the
-  lines after it are OFF the rules: the report says which, so split such an answer into one answer per rule.
+  "follow_lines": false turns the automatic behaviour off. A mixed line holding tall math (a fraction) keeps every line on a rule:
+  if the fraction only pokes a little into the next line's band the next line stays on the next rule, otherwise the lines after it
+  skip whole rules (the report says "line 2 skips a ruled line"), so count the rules the answer needs: a skipped rule counts, and
+  "DOES NOT FIT" means the rules ran out.
   WARNING lines in the report say when the writing covers printed text, covers another answer, or leaves the page, with how many
   points. The file is still saved: look at the page and move the answer. No warning means none was found.
   inspect_pdf adds to each "line" the printed text it follows (after "Name:") and, for evenly spaced rules, line 2 of 4, 18 pt apart.

@@ -539,7 +539,8 @@ function createTools(config) {
     const notes = [];
     const loud = !pl.natural && (pl.anchored || pl.explicitStep || placed.lines > 1);
     if (loud) notes.push(pl.explicitStep ? `follows ruled lines ${r1m(pl.step)} pt apart (line_spacing_pt)` : `follows ${pl.count} printed lines, ${r1m(pl.step)} pt apart`);
-    if (placed.ruled.off.length) notes.push(`line${placed.ruled.off.length > 1 ? 's' : ''} ${placed.ruled.off.join(', ')} ${placed.ruled.off.length > 1 ? 'are' : 'is'} NOT on the ruled lines${placed.ruled.tall ? ': a line holding tall math (a fraction, an integral with limits) was given extra room, so the lines after it drift off the rules' : ''}; split the answer into one answer per ruled line to keep each on its line`);
+    for (const k of placed.ruled.skips || []) notes.push(`line ${k.line} skips ${k.rules === 1 ? 'a ruled line' : k.rules + ' ruled lines'}: the tall math on the line above (or on this one) needs the room`);
+    if (placed.ruled.off.length) notes.push(`line${placed.ruled.off.length > 1 ? 's' : ''} ${placed.ruled.off.join(', ')} ${placed.ruled.off.length > 1 ? 'are' : 'is'} NOT on the ruled lines; split the answer into one answer per ruled line to keep each on its line`);
     if (placed.pitch && placed.pitch.tight) notes.push(`the letters are taller than lines ${r1m(pl.step)} pt apart allow and min_size_ratio stops them shrinking: lines may touch`);
     return notes;
   }
