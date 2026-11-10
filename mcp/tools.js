@@ -20,6 +20,8 @@ const Math2 = require('../src/math');
 const { renderPng } = require('./raster');
 const { isSealed, unseal } = require('./sealed');
 const Notability = require('../src/notability');
+const Marks = require('../src/marks');
+const Anchors = require('./anchors');
 const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => require('../vendor/pdf-lib.min.js');
 const inspectPdf = (bytes, o) => require('./pdfinfo').inspect(bytes, o);
@@ -332,6 +334,84 @@ function createTools(config) {
     return [bits.join('; '), ...extra.map((x) => '    ' + x)].join('\n');
   }
 
+  // ---- pen marks (fill_pdf `marks`) ---------------------------------------------------------------
+  const MARK_WORD = { circle: 'round', box: 'round', underline: 'under', strike: 'through', tick: 'on', cross: 'on' };
+  const r1m = (v) => (Math.round(v * 10) / 10).toFixed(1);
+
+  /** Checks each mark, finds its target, draws it, pushes {box, placed} onto items and returns one report line per mark. Throws before anything is drawn if one is wrong. */
+  async function marksFor(a, bytes, sizes, items) {
+    const list = Array.isArray(a.marks) ? a.marks : [];
+    if (!list.length) return [];
+    let inspected = null;
+    const made = [];
+    for (let i = 0; i < list.length; i++) {
+      const mk = list[i] || {};
+      const where = `mark ${i + 1}`;
+      if (!Marks.TYPES.includes(mk.type)) throw new Error(`${where}: type ${JSON.stringify(mk.type)} is not one of ${Marks.TYPES.join(', ')}.`);
+      const page = Math.round(Number(mk.page)) - 1;
+      if (!(page >= 0 && page < sizes.length)) throw new Error(`${where}: page ${mk.page} does not exist (the PDF has ${sizes.length}).`);
+      const sz = sizes[page];
+      const num = (k) => Number.isFinite(Number(mk[k])) && mk[k] !== null && mk[k] !== undefined && mk[k] !== '';
+      const xh = mk.letter_height_pt ? clampNum(mk.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : Sheet.DEFAULT_XH_PT;
+      const inPage = (x, y, w, h) => x >= -1 && y >= -1 && x + w <= sz.w + 1 && y + h <= sz.h + 1;
+      let geo;
+      let target;
+      let seedAt;
+      if (mk.type === 'arrow' || mk.type === 'line') {
+        for (const k of ['x1', 'y1', 'x2', 'y2']) if (!num(k)) throw new Error(`${where}: the ${mk.type} needs x1, y1, x2 and y2 (points from the top-left of the page); ${k} is missing.`);
+        const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map((k) => Number(mk[k]));
+        if (!inPage(x1, y1, 0, 0) || !inPage(x2, y2, 0, 0)) throw new Error(`${where}: the ${mk.type} from (${x1}, ${y1}) to (${x2}, ${y2}) is outside page ${page + 1}, which is ${sz.w} x ${sz.h} pt.`);
+        if (Math.hypot(x2 - x1, y2 - y1) < 1) throw new Error(`${where}: the ${mk.type} starts and ends at the same point.`);
+        geo = { type: mk.type, x1, y1, x2, y2 };
+        target = `${mk.type} from (${r1m(x1)}, ${r1m(y1)}) to (${r1m(x2)}, ${r1m(y2)})`;
+        seedAt = [x1 + x2, y1 + y2];
+      } else {
+        let rect;
+        let how = '';
+        let mid;
+        if (typeof mk.text === 'string' && mk.text.trim()) {
+          if (!inspected) {
+            try {
+              inspected = await inspectPdf(bytes, { minRule: 36 });
+            } catch {
+              throw new Error(`${where}: cannot read the printed text of this PDF to find ${JSON.stringify(mk.text)}; aim the mark with x, y, width and height instead.`);
+            }
+          }
+          const hit = Anchors.findText(inspected, { page: page + 1, text: mk.text, nth: mk.nth });
+          if (!hit) {
+            const near = Anchors.closestLines(inspected, page + 1, mk.text, 5);
+            throw new Error(`${where}: the text ${JSON.stringify(mk.text)} is not printed on page ${page + 1}. ${near.length ? 'The closest printed lines on that page are:\n' + near.map((l) => `  "${l.slice(0, 90)}"`).join('\n') : 'There is no printed text on that page.'}\nCheck the spelling against inspect_pdf, or aim the mark with x, y, width and height.`);
+          }
+          if (!hit.rect) throw new Error(`${where}: nth is ${hit.nth} but ${JSON.stringify(mk.text)} is printed only ${hit.matches} time${hit.matches === 1 ? '' : 's'} on page ${page + 1}.`);
+          rect = Object.assign({}, hit.rect);
+          if (mk.type === 'strike') mid = 0.64; // printed text sits on its baseline: the middle of its letters is lower than the middle of the font's box
+          if (hit.matches > 1) how = mk.nth === undefined || mk.nth === null ? ` (first of ${hit.matches} matches)` : ` (match ${hit.nth} of ${hit.matches})`;
+          target = `${mk.type} ${MARK_WORD[mk.type]} ${JSON.stringify(mk.text)}`;
+        } else {
+          for (const k of ['x', 'y']) if (!num(k)) throw new Error(`${where}: aim a ${mk.type} with text (printed text on the page) or with a rectangle: x, y, width, height. ${k} is missing.`);
+          const small = mk.type === 'tick' || mk.type === 'cross';
+          if (!(num('width') && num('height')) && !small) throw new Error(`${where}: the ${mk.type} needs width and height (the rectangle it goes ${MARK_WORD[mk.type]}), or text to find on the page.`);
+          const side = Marks.defaultSquare(xh);
+          rect = { page: page + 1, x: Number(mk.x), y: Number(mk.y), w: num('width') ? Number(mk.width) : side, h: num('height') ? Number(mk.height) : side };
+          if (!(rect.w > 0 && rect.h > 0)) throw new Error(`${where}: width and height must be above 0.`);
+          target = `${mk.type} ${MARK_WORD[mk.type]} the rectangle`;
+        }
+        if (!inPage(rect.x, rect.y, rect.w, rect.h)) throw new Error(`${where}: the rectangle (x ${r1m(rect.x)}, y ${r1m(rect.y)}, ${r1m(rect.w)} x ${r1m(rect.h)}) is outside page ${page + 1}, which is ${sz.w} x ${sz.h} pt.`);
+        geo = { type: mk.type, x: rect.x, y: rect.y, w: rect.w, h: rect.h, mid };
+        seedAt = [rect.x + rect.w / 2, rect.y + rect.h / 2];
+        target += ` at x ${r1m(rect.x)}, y ${r1m(rect.y)}, ${r1m(rect.w)} x ${r1m(rect.h)} pt${how}`;
+      }
+      const given = mk.seed !== undefined && mk.seed !== null && mk.seed !== '';
+      const seed = given ? seedOf(mk.seed, where).seed : placeSeed(page, seedAt[0], seedAt[1], 'mark ' + mk.type);
+      made.push({ page, xh, geo, seed, line: `${where} (page ${page + 1}): ${target}${given ? ` (seed ${seed})` : ''}` });
+    }
+    // every mark is valid: now draw them
+    return made.map((m) => {
+      items.push(Marks.toPlaced(Marks.draw(m.geo, { xh: m.xh, seed: m.seed }), { xh: m.xh, page: m.page }));
+      return m.line;
+    });
+  }
+
   const defs = [
     {
       name: 'handwriting_status',
@@ -434,7 +514,7 @@ function createTools(config) {
     },
     {
       name: 'inspect_pdf',
-      description: 'Reads a PDF and tells you where things are, so you can choose where answers go. For each page: its size in points, the printed text as lines with their position, and the ruled lines (answer lines and box edges). All positions are in points from the top-left corner of the page, the same as fill_pdf. Look at the PDF itself too if you can, since this lists only text and lines, not pictures.',
+      description: 'Reads a PDF and tells you where things are, so you can choose where answers go. For each page: its size in points, the printed text as lines with their position, and the ruled lines (answer lines and box edges), and small squares that look like checkboxes (`box`, both sides 6 to 30 pt; aim a tick or cross at one with fill_pdf marks). All positions are in points from the top-left corner of the page, the same as fill_pdf. Look at the PDF itself too if you can, since this lists only text and lines, not pictures.',
       inputSchema: { type: 'object', required: ['pdf'], properties: { pdf: { type: 'string', description: 'Path to the PDF.' }, min_rule_pt: { type: 'number', description: 'Shortest line to report, in points. Default 36.' } } },
       async run(a) {
         const bytes = readPdf(a.pdf);
@@ -444,16 +524,17 @@ function createTools(config) {
           lines.push(`Page ${p.page}: ${p.width} x ${p.height} pt${p.rotated ? ' (rotated: fill_pdf cannot write on it)' : ''}`);
           for (const t of p.text) lines.push(`  text  x=${t.x} y=${t.y} w=${t.w} h=${t.h}  "${t.text}"`);
           for (const r of p.rules) lines.push(`  line  x=${r.x} y=${r.y} w=${r.w}`);
+          for (const b of p.boxes || []) lines.push(`  box  x=${b.x} y=${b.y} w=${b.w} h=${b.h}`);
         }
         return [text(lines.join('\n'))];
       },
     },
     {
       name: 'fill_pdf',
-      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write.",
+      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write. It can also draw pen marks with `marks`: circle (round an option), tick or cross (in a checkbox), underline, strike (cross out), box (round a final answer), arrow and line, aimed at a rectangle or at printed text (`text`), in the same pen as the writing; answers may be left out when there are marks.",
       inputSchema: {
         type: 'object',
-        required: ['pdf', 'answers'],
+        required: ['pdf'],
         properties: {
           pdf: { type: 'string', description: 'Path to the PDF.' },
           out: { type: 'string', description: 'Where to save. Default: <name>-filled.pdf in the output folder.' },
@@ -464,6 +545,30 @@ function createTools(config) {
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           preview: { type: 'string', enum: ['none', 'all', 'digits'], description: 'Return a small picture of each answer\'s ink (cropped to the ink, on white, about 3 pixels per point, at most 640 px wide) with the report, so you can check digits without rendering and cropping whole pages. all: every answer. digits: only the answers that contain a digit. none (default). They show the writing only, not the page behind it, and at most 20 are returned.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of. error (default): write nothing, and list the characters and the words (and answers) they are in. fallback: draw a clean vector stand-in for symbols and punctuation that have one (a degree sign, a macron, brackets, ...) and list them in the report; letters and digits can never be faked, so one of those missing still stops the call.' },
+          marks: {
+            type: 'array',
+            description: 'Pen marks drawn like a hand does: wobbly, in the same pen and ink as the writing, the same every time for the same seed. Aim each at a rectangle (x, y, width, height in points from the top-left of the page) or at printed text (text, optional nth). arrow and line use x1, y1, x2, y2 instead (the arrow head is at x2, y2). tick and cross with only x, y get a square of about 1.4 x the letter height whose top-left corner is x, y. If the text is not printed on that page the call stops before anything is drawn and lists the closest printed lines.',
+            items: {
+              type: 'object',
+              required: ['page', 'type'],
+              properties: {
+                page: { type: 'integer', description: 'From 1.' },
+                type: { type: 'string', enum: Marks.TYPES, description: 'circle: a loop round the target. tick: a check mark inside it. cross: an X inside it. underline: a line under it. strike: a line through it. box: a rectangle round it. arrow, line: from x1,y1 to x2,y2.' },
+                text: { type: 'string', description: 'Aim at this printed text (found on that page; exact first, then ignoring case and extra spaces), instead of a rectangle. For example "B)".' },
+                nth: { type: 'integer', description: 'With text: which match on the page, from 1 (reading order). Default 1; the report says when there were more matches.' },
+                x: { type: 'number' },
+                y: { type: 'number' },
+                width: { type: 'number' },
+                height: { type: 'number' },
+                x1: { type: 'number' },
+                y1: { type: 'number' },
+                x2: { type: 'number' },
+                y2: { type: 'number' },
+                letter_height_pt: { type: 'number', description: 'The pen is the one answers use at this letter height (default 9.5), and the loop padding, arrow head and default tick size follow it. Give the same value as the writing on the page.' },
+                seed: { type: 'integer', description: 'A whole number from 0 up. Without one, the mark gets its own seed from where it sits, so two circles are never identical.' },
+              },
+            },
+          },
           answers: {
             type: 'array',
             items: {
@@ -493,7 +598,10 @@ function createTools(config) {
       async run(a) {
         const { style } = await load();
         const bytes = readPdf(a.pdf);
-        if (!Array.isArray(a.answers) || !a.answers.length) throw new Error('answers must be a list with at least one answer.');
+        if (a.answers === undefined || a.answers === null) a.answers = [];
+        if (!Array.isArray(a.answers)) throw new Error('answers must be a list of answers.');
+        if (a.marks !== undefined && a.marks !== null && !Array.isArray(a.marks)) throw new Error('marks must be a list of marks.');
+        if (!a.answers.length && !(a.marks && a.marks.length)) throw new Error('Give at least one answer (answers) or one mark (marks).');
         const PDFLib = pdfLib();
         const probe = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
         const sizes = probe.getPages().map((p) => {
@@ -567,6 +675,8 @@ function createTools(config) {
           if (wantPreview) previewJobs.push({ label, placed });
         });
         if (problems.length || texProblems.length) throw new Error([texProblems.length ? texMessage(texProblems) : '', problems.length ? missingMessage(problems) : ''].filter(Boolean).join('\n\n')); // before a single stroke is drawn
+        // pen marks: every one is checked (page, rectangle, text found) before anything is drawn
+        report.push(...(await marksFor(a, bytes, sizes, items)));
         const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');

@@ -37,8 +37,20 @@ function textLines(items, pageH) {
     .map((r) => ({ text: r.text.trim(), x: round(r.x), y: round(r.base - r.h), w: round(r.right - r.x), h: round(r.h), baseline: round(r.base) }));
 }
 
+/** The individual text items with their own box (top-left origin, baseline kept), for mcp/anchors.js to find a piece of text in. */
+function textItems(items, pageH) {
+  const out = [];
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const h = it.height || Math.abs(it.transform[3]) || 10;
+    const base = pageH - it.transform[5];
+    out.push({ str: it.str, x: round(it.transform[4]), y: round(base - h), w: round(it.width), h: round(h), baseline: round(base) });
+  }
+  return out;
+}
+
 /** Horizontal rules and thin or flat rectangles that are at least minLen long. */
-async function rules(page, pageH, minLen) {
+async function rules(page, pageH, minLen, boxes) {
   const { OPS } = lib();
   const ops = await page.getOperatorList();
   const found = [];
@@ -56,15 +68,27 @@ async function rules(page, pageH, minLen) {
       const [sub, c] = args;
       let k = 0;
       let cur = null;
+      let poly = []; // the corners of the current subpath, to recognise a square drawn as four lines
       for (const op of sub) {
         if (op === OPS.moveTo) {
           cur = at(c[k], c[k + 1]);
+          poly = [cur];
           k += 2;
         } else if (op === OPS.lineTo) {
           const p = at(c[k], c[k + 1]);
           k += 2;
           if (cur && Math.abs(p[1] - cur[1]) < 0.6 && Math.abs(p[0] - cur[0]) >= minLen) found.push({ x: Math.min(p[0], cur[0]), x2: Math.max(p[0], cur[0]), y: (p[1] + cur[1]) / 2 });
           cur = p;
+          poly.push(p);
+        } else if (op === OPS.closePath) {
+          if (boxes && poly.length >= 4 && poly.length <= 5) {
+            const xs = poly.map((q) => q[0]);
+            const ys = poly.map((q) => q[1]);
+            const w = Math.max(...xs) - Math.min(...xs);
+            const h = Math.max(...ys) - Math.min(...ys);
+            const axis = poly.every((q, i) => i === 0 || Math.abs(q[0] - poly[i - 1][0]) < 0.3 || Math.abs(q[1] - poly[i - 1][1]) < 0.3);
+            if (axis && w >= 6 && w <= 30 && h >= 6 && h <= 30) boxes.push({ x: round(Math.min(...xs)), y: round(Math.min(...ys)), w: round(w), h: round(h) });
+          }
         } else if (op === OPS.rectangle) {
           const a = at(c[k], c[k + 1]);
           const b = at(c[k] + c[k + 2], c[k + 1] + c[k + 3]);
@@ -72,6 +96,7 @@ async function rules(page, pageH, minLen) {
           const w = Math.abs(b[0] - a[0]);
           const h = Math.abs(b[1] - a[1]);
           if (w >= minLen && h <= 2.5) found.push({ x: Math.min(a[0], b[0]), x2: Math.min(a[0], b[0]) + w, y: (a[1] + b[1]) / 2 });
+          else if (boxes && w >= 6 && w <= 30 && h >= 6 && h <= 30) boxes.push({ x: round(Math.min(a[0], b[0])), y: round(Math.min(a[1], b[1])), w: round(w), h: round(h) });
         } else if (op === OPS.curveTo) k += 6;
         else if (op === OPS.curveTo2 || op === OPS.curveTo3) k += 4;
       }
@@ -87,6 +112,17 @@ async function rules(page, pageH, minLen) {
     .sort((a, b) => a.y - b.y || a.x - b.x);
 }
 
+/** Small rectangles (both sides 6 to 30 pt): what a checkbox looks like. Each once, top to bottom. */
+function dedupe(boxes) {
+  const seen = new Set();
+  return boxes
+    .filter((b) => {
+      const key = [b.x, b.y, b.w, b.h].join();
+      return seen.has(key) ? false : seen.add(key);
+    })
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
 async function inspect(bytes, opts) {
   const o = Object.assign({ minRule: 36 }, opts);
   const doc = await lib().getDocument({ data: new Uint8Array(bytes), verbosity: 0, useSystemFonts: false, disableFontFace: true }).promise;
@@ -95,13 +131,16 @@ async function inspect(bytes, opts) {
     const page = await doc.getPage(n);
     const view = page.getViewport({ scale: 1 });
     const text = await page.getTextContent();
+    const boxes = [];
     pages.push({
       page: n,
       width: round(view.width),
       height: round(view.height),
       rotated: page.rotate % 360 !== 0,
       text: textLines(text.items, view.height),
-      rules: await rules(page, view.height, o.minRule),
+      items: textItems(text.items, view.height),
+      rules: await rules(page, view.height, o.minRule, boxes),
+      boxes: dedupe(boxes),
     });
   }
   await doc.destroy();

@@ -78,6 +78,10 @@ Tools
                        fill_pdf also takes notability: true (and pen_width): it then saves a Notability note
                        (<name>-filled.note) whose pages are the worksheet and whose answers are editable pen
                        strokes. Tell the person to open it from Files with Share, then Notability.
+                       fill_pdf also takes marks: [{page, type: circle|tick|cross|underline|strike|box|arrow|line, text: "B)" (printed text,
+                       optional nth) or x, y, width, height (points from the top-left) or x1, y1, x2, y2 (arrow, line), seed,
+                       letter_height_pt}]: hand-drawn pen marks in the same pen; answers may then be left out. inspect_pdf lists
+                       checkbox-like squares as "box x= y= w= h=".
   write_text with format "note" makes a one page Notability note of text (editable pen strokes).
 
 Characters with no sample: write_text, write_batch and fill_pdf check every character before drawing. One the person never

@@ -104,6 +104,28 @@ Fills that read as handwriting, not as typed text turned into handwriting: write
   place and, if wanted, "stagger": true (starts it a little in from the left, differently each time); no dashes or hyphens as separators in
   prose, use commas; EM DASHES ARE REFUSED by the tools (use a comma, a full stop or a new sentence).
 
+Marks (fill_pdf "marks"): what a person does with a pen besides writing words. Drawn wobbly, in the same pen and ink as the writing,
+  the same for the same seed, and each mark that has no "seed" gets its own from where it sits, so two circles are never alike.
+  answers may be left out when there are marks. All marks are checked before anything is drawn.
+    circle     a loop round the target (a little bigger, a little tilted, not quite closed)    tick   a check mark in the target
+    cross      an X in the target       underline  a line under it      strike  a line through it (crossing out)
+    box        a rectangle round it     arrow, line  from x1,y1 to x2,y2 (the arrow head is at x2,y2)
+  Aim a mark at printed text:  {"page": 1, "type": "circle", "text": "B)"}  (exact text first, then ignoring case and extra spaces;
+  "nth": 2 for the second match on the page; with several matches and no nth the first is used and the report says "first of N
+  matches"; if it is not printed on that page the call stops and lists the closest printed lines), or at a rectangle in points from
+  the page's top-left: {"page": 1, "type": "tick", "x": 72, "y": 410, "width": 12, "height": 12}. A tick or cross with only x and y
+  gets a square of about 1.4 x the letter height whose top-left corner is x,y. inspect_pdf lists checkbox-like squares as
+  "box  x= y= w= h=": aim a tick at one of those. Give "letter_height_pt" when the writing on the page is not the default 9.5.
+  Circle an option:
+    fill_pdf {"pdf": "/path/quiz.pdf", "marks": [{"page": 1, "type": "circle", "text": "B)"}]}
+  Tick a box and write an answer on the same page:
+    fill_pdf {"pdf": "/path/form.pdf", "marks": [{"page": 1, "type": "tick", "x": 72, "y": 410, "width": 12, "height": 12}],
+              "answers": [{"page": 1, "x": 72, "line_y": 192, "width": 468, "text": "Because it is heavier"}]}
+  The report has one line per mark, for example: mark 1 (page 1): circle round "B)" at x 212.4, y 318.0, 14.2 x 11.0 pt. The text's
+  rectangle is found from the PDF's own text items; inside one item the position of a short piece is an estimate, so look at the page
+  (a circle that cuts through a letter or sits half a letter off: aim it with a rectangle instead). With notability: true the marks
+  are pen strokes in the note too.
+
 Rules
   - Look at every result before you hand it over. Digits are the weakest part: check numbers carefully.
   - If a character has no sample, the tool says so. Do not guess; tell the person.
