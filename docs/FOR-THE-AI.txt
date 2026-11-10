@@ -87,6 +87,19 @@ Digits: they are the weakest part, and now less wobbly in dense math (digits are
 Seeds: write_text, write_batch and fill_pdf take "seed" (a whole number from 0; in fill_pdf an answer with none gets its own seed from where it sits on the page, so answers with the same words do not open alike and the report says "own seed N"; write_text and write_batch default to 1). The same
   seed is the same writing; another seed is another take. For digits another seed picks another of the person's clean examples, so
   to re-roll one bad digit, change the seed of that answer. fill_pdf says (seed N) in the report when you gave one.
+Redo one word: when ONE word or number came out badly, do not change the seed (that redraws the whole answer and can spoil a word that was
+  fine). Give "redo" on write_text, on a write_batch item or on a fill_pdf answer and only that word is drawn again; every other word keeps
+  exactly the same example of every letter (positions may shift a little, because the redone word has another width):
+      {"text": "g = 9.81 m/s and t = 4.5 s", "seed": 3, "redo": [{"word": "9.81", "take": 2}]}
+  word is a word of the text as typed (split on spaces). The whole token is matched first, then ignoring punctuation round it, so "9.81"
+  finds "9.81," and "(9.81)". nth (from 1, reading order) picks one of several; without it the first is used and the report says "first of
+  N". take (from 1, default 1): take 1 is another drawing than the plain one, take 2 yet another, and the same call always gives the same
+  picture, so ask for take 2 if take 1 was no better. Several words: list several entries. Each gives one report line, for example
+  redo "9.81" (take 2): 3 of 4 characters changed. If the writer has no other example that fits (a digit with one clean example) the word
+  is drawn as it was and the report says so ("could not change ..."): then the person has to write more of it in the Teach tab. A word that
+  is not in the text stops that answer before anything is drawn, and the message lists the words. In kind "mixed" a piece of math is one
+  word: give its TeX ({"word": "x + y"}) or {"math": 2} for the second piece. kind "math" does not take redo yet (put the number in a
+  mixed answer, as a plain word outside the dollar signs, or use another seed). Use redo for one bad word; use seed to see a whole new take.
 Previews: fill_pdf with "preview": "digits" (or "all") returns a small picture of each answer's ink (5 to 10 KB each) so you can check
   digits without rendering and cropping whole pages. It shows the writing only, not the page behind it.
 Math TeX: only the commands in handwriting_status {"math_help": true} work (arrows \Rightarrow \implies \iff, sets \in \cup, \bar \vec \hat,

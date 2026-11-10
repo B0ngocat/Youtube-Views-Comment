@@ -92,6 +92,7 @@ Letters and digits can never be faked. handwriting_status {check: "<text>"} chec
 
 seed (write_text, write_batch, each fill_pdf answer): a whole number from 0 (a fill_pdf answer with none gets its own from where it sits, the report says so; write_text defaults to 1); the same seed is the same writing, another is
 another take. For digits it picks another of the person's clean examples: re-roll one bad digit by changing that answer's seed.
+redo (write_text, each write_batch item, each fill_pdf answer): [{word: "9.81", nth, take}] draws only that word again (another example of its letters; take 1 is another drawing, take 2 yet another) and keeps every other word's letters as they were. In kind mixed a piece of math is one word (its TeX, or math: 2); not for kind math yet.
 fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 10 KB) to check digits without rendering pages.
 Math TeX: only commands listed by handwriting_status {math_help: true} work (\\Rightarrow \\implies \\iff \\in \\cup \\bar{x} \\vec{v} y' ...);
 others are refused with suggestions, never written out as words.

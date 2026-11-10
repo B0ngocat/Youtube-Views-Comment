@@ -54,6 +54,8 @@
     const pad = 0.1 * ENGINE_XH;
     const floor = box.minRatio ? Math.max(MIN_XH_PT, wantXh * box.minRatio) : MIN_XH_PT;
     const explicitLines = text.split('\n').length;
+    // box.redo (words to draw again, see synth.redoLayout) goes into every pass of the fitting below, so a redone word stays the same word
+    const redoOpt = box.redo && box.redo.length && box.kind !== 'math' ? { redo: box.redo } : {};
 
     // the writing at one size, in a box h points tall
     function fitAt(xhPt, h) {
@@ -67,7 +69,7 @@
           lineHeight: box.kind === 'math' ? 3 : 2.5,
           seed: box.seed === undefined ? 1 : box.seed, // 0 is a seed too
           margin: 8,
-        })
+        }, redoOpt)
       );
       const moved = R.fitLayout(lay, pad);
       const b = inkBounds(lay.strokes);
@@ -106,6 +108,7 @@
     out.lines = lines;
     out.wrapped = box.kind !== 'math' && lines > explicitLines;
     out.grown = out.h > box.h + 0.01 ? { from: box.h, to: out.h } : null;
+    out.redo = out.layout.redo || null; // what was done for each box.redo entry (see synth.redoLayout)
     out.shrunk = out.xhPt < wantXh - 0.05 ? { from: wantXh, to: out.xhPt } : null;
     return out;
   }

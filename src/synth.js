@@ -164,7 +164,7 @@
           if (nat && nat.ch === fb.ch && !nat.skipped && !list.includes(nat)) list = list.concat([nat]); // never one the writer crossed out
         }
         for (const unit of list) {
-          const cand = { unit, scale: fb.scale, accent: fb.accent, flip: fb.flip };
+          const cand = { unit, scale: fb.scale, accent: fb.accent, flip: fb.flip, j };
           let c = h.cost + transCost(prev, cand);
           if (!prev && unit.entry.mid) c += 2;
           if (j === n - 1 && unit.exit.mid) c += 0.6;
@@ -682,10 +682,14 @@
    * A word takes one number from `rng` and makes its own streams from it, one for picking letters and
    * one for everything after (spacing, wobble), so what happens to one word cannot change another.
    * pins: see chooseUnits.
+   * take (redo): 0 is the plain word. Another number mixes itself into this word's seed, so it gets streams of its own (other
+   * examples, other spacing) and nothing else on the page notices: the number taken from `rng` is the same either way.
+   * The result's `pins` are the examples it used, one id (or null) per character, ready to be given back as pins.
    */
-  function synthWord(style, word, rng, ctx, pins) {
+  function synthWord(style, word, rng, ctx, pins, take) {
     const chars = expandChars(word).filter((c) => !/\s/.test(c));
-    const seed = Math.floor(rng() * 4294967296) >>> 0;
+    let seed = Math.floor(rng() * 4294967296) >>> 0;
+    if (take) seed = takeSeed(seed, take);
     if (!chars.length) return null;
     const crng = G.mulberry32(seed);
     // a word the writer wrote is written back as they wrote it, unless the page has asked for specific letters
@@ -700,8 +704,13 @@
     deform(strokes, arng, ctx.messiness, !ctx.rhythm);
     const b = bounds(strokes);
     for (const s of strokes) for (const p of s.pts) p.x -= b.minX;
-    return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices, spans: spans.map(([lo, hi]) => [lo - b.minX, hi - b.minX]) };
+    const used = chars.map(() => null);
+    for (const c of choices) if (c.j !== undefined) used[c.j] = c.unit.id;
+    return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices, spans: spans.map(([lo, hi]) => [lo - b.minX, hi - b.minX]), pins: used };
   }
+
+  /** A word's seed for take number `take` (1, 2, ...): a different seed for each, the same every time. */
+  const takeSeed = (seed, take) => (Math.imul(seed ^ Math.imul(take, 0x27d4eb2f), 0x85ebca6b) + Math.imul(take, 0x9e3779b1)) >>> 0;
 
   // ---- inline boxes (mixed.js) -----------------------------------------------------------
 
@@ -719,7 +728,7 @@
    * and gives each text part a stream of its own, so editing a box never changes the letters of any other word.
    * The boxes are never changed (they are copied). Returns what synthWord returns plus up and down (x-heights of the boxes).
    */
-  function synthCompound(style, word, rng, ctx, boxes) {
+  function synthCompound(style, word, rng, ctx, boxes, pinsParts) {
     const seed = Math.floor(rng() * 4294967296) >>> 0;
     const parts = word.split(/(\uE000\d+\uE001)/).filter(Boolean);
     const strokes = [];
@@ -729,6 +738,7 @@
     let up = 0;
     let down = 0;
     let prev = null;
+    const partPins = []; // per part: the examples a text part used (null for a box), to give back as pins
     parts.forEach((part, j) => {
       const m = MARK_RE.exec(part);
       let piece = null;
@@ -742,8 +752,9 @@
         up = Math.max(up, box.up);
         down = Math.max(down, box.down);
       } else {
-        t = synthWord(style, part, G.mulberry32((seed + 7919 * (j + 1)) >>> 0), ctx, null);
+        t = synthWord(style, part, G.mulberry32((seed + 7919 * (j + 1)) >>> 0), ctx, pinsParts ? pinsParts[j] : null);
         if (!t) return;
+        partPins[j] = t.pins;
         piece = t.strokes;
         w = t.width;
       }
@@ -761,7 +772,131 @@
       prev = { math: !!m };
     });
     if (!strokes.length) return null;
-    return { strokes, width: x, joins: [], choices, spans, up, down };
+    return { strokes, width: x, joins: [], choices, spans, up, down, pins: partPins };
+  }
+
+  // ---- redo one word ----------------------------------------------------------------------
+
+  const stripPunct = (w) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  const sameIds = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const REDO_TRIES = 12; // other streams tried for each take that is asked for
+
+  function redoError(msg) {
+    const e = new Error(msg);
+    e.redo = true;
+    return e;
+  }
+
+  /**
+   * Which word (or piece of math) does a redo request mean? `entries` are what the layout holds: {type: 'word', n, text} (n is the
+   * layout's own word number) and {type: 'math', k, text} (k counts the pieces of math). The whole token is matched first, then the
+   * TeX of a piece of math, then tokens with leading and trailing punctuation taken off ("9.81" finds "9.81," and "(9.81)").
+   */
+  function redoMatches(entries, req) {
+    const words = entries.filter((e) => e.type === 'word');
+    const maths = entries.filter((e) => e.type === 'math');
+    if (req.math !== undefined && req.math !== null) return { list: maths.slice(req.math - 1, req.math) };
+    const w = String(req.word);
+    const squash = (t) => t.replace(/\s+/g, ' ').trim();
+    const exact = words.filter((e) => e.text === w);
+    if (exact.length) return { list: exact };
+    const tex = maths.filter((e) => squash(e.text) === squash(w) || '$' + squash(e.text) + '$' === squash(w));
+    if (tex.length) return { list: tex };
+    const core = stripPunct(w);
+    return { list: core ? words.filter((e) => stripPunct(e.text) === core) : [] };
+  }
+
+  /** The distinct characters of a word the writer has at most one usable example of, for the report. */
+  function fewExamples(style, text) {
+    const few = [];
+    for (const ch of new Set(expandChars(text))) {
+      if (/\s/.test(ch)) continue;
+      const fb = S.fallbackFor(style, ch);
+      if (fb && (style.byChar.get(fb.ch) || []).length <= 1 && !few.includes(ch)) few.push(ch);
+    }
+    return few;
+  }
+
+  /**
+   * Redraws chosen words of a layout and keeps every other word as it was. `run(patch)` lays the text out once with `patch` merged into
+   * the options. The page picks each word's letters from state it shares with the words before it (which examples were used, which
+   * recorded words were pasted), so simply drawing one word again would change all the words after it. Instead: lay the text out as it
+   * is (that tells every word's examples), then lay it out again with every other word pinned to those examples (`pins`) and the chosen
+   * word on a stream of its own (`retake`: the take number is mixed into that word's seed). Every other word keeps its examples;
+   * positions may shift a little because the redone word has another width.
+   *
+   * requests: [{word, nth, take, math}]. Take 1 is a different drawing than the plain one, take 2 another, and so on: each take is the
+   * next stream (at most REDO_TRIES of them for each) whose examples differ from the plain drawing and from the earlier takes. If there
+   * is none (a digit with one clean example) the word stays as it was and the report says so. Throws (error.redo) when a word is not in
+   * the text. Returns the layout, with `redo`: one report per request {word, math, text, nth, take, usedTake, matches, ok, changed, total, reason}.
+   */
+  function redoLayout(style, requests, run) {
+    const first = run({});
+    const entries = [];
+    first.words.forEach((w, n) => {
+      if (w && !w.compound) entries.push({ type: 'word', n, text: w.text });
+    });
+    (first.mathTex || []).forEach((tex, k) => entries.push({ type: 'math', k, text: tex }));
+    const nameOf = (req) => (req.math !== undefined && req.math !== null ? 'math piece ' + req.math : '"' + req.word + '"');
+    const slots = requests.map((req, i) => {
+      const m = redoMatches(entries, req);
+      if (!m.list.length || (req.nth && req.nth > m.list.length)) {
+        const have = entries.filter((e) => e.type === 'word').map((e) => '"' + e.text + '"');
+        const why = m.list.length ? `has ${m.list.length} match${m.list.length === 1 ? '' : 'es'}, so nth ${req.nth} does not exist` : 'is not in the text';
+        const maths = (first.mathTex || []).map((t, k) => `${k + 1}: ${t}`);
+        throw redoError(`redo ${i + 1}: ${nameOf(req)} ${why}. The words are: ${have.join(', ') || '(none)'}.${maths.length ? ' The pieces of math are: ' + maths.join(' | ') + '.' : ''}`);
+      }
+      return { req, entry: m.list[req.nth ? req.nth - 1 : 0], matches: m.list.length, nth: req.nth || null };
+    });
+    const seen = new Set();
+    for (const sl of slots) {
+      const key = sl.entry.type + (sl.entry.type === 'word' ? sl.entry.n : sl.entry.k);
+      if (seen.has(key)) throw redoError(`redo: ${nameOf(sl.req)} is listed twice (it is the same place in the text). List each word once.`);
+      seen.add(key);
+    }
+    const state = { pins: first.words.map((w) => (w ? w.pins : null)), retake: {}, retakeMath: {} };
+    const idsOf = (lay, e) => (e.type === 'word' ? (lay.words[e.n] ? lay.words[e.n].ids : []) : (lay.mathIds || [])[e.k] || []);
+    let cur = first;
+    const reports = [];
+    for (const sl of slots) {
+      const e = sl.entry;
+      const take = sl.req.take || 1;
+      const base = idsOf(first, e);
+      const seenIds = [base];
+      let accepted = null; // {s, lay, ids}
+      const patchFor = (s) => {
+        if (e.type === 'word') {
+          const pins = state.pins.slice();
+          pins[e.n] = null; // this word is drawn afresh, on its own stream
+          return { pins, retake: Object.assign({}, state.retake, { [e.n]: s }), retakeMath: state.retakeMath };
+        }
+        return { pins: state.pins, retake: state.retake, retakeMath: Object.assign({}, state.retakeMath, { [e.k]: s }) };
+      };
+      let got = 0;
+      for (let s = 1; s <= REDO_TRIES * take && got < take; s++) {
+        const lay = run(patchFor(s));
+        const ids = idsOf(lay, e);
+        if (seenIds.some((q) => sameIds(q, ids))) continue;
+        seenIds.push(ids);
+        got++;
+        accepted = { s, lay, ids };
+      }
+      const report = { type: e.type, word: sl.req.word !== undefined ? sl.req.word : null, math: sl.req.math || null, text: e.type === 'math' ? '$' + e.text + '$' : e.text, nth: sl.nth, take, usedTake: got, matches: sl.matches, ok: got > 0, changed: 0, total: base.length, reason: '' };
+      if (accepted) {
+        report.changed = accepted.ids.reduce((n, id, i) => n + (id === base[i] ? 0 : 1), 0);
+        if (e.type === 'word') {
+          state.pins[e.n] = accepted.lay.words[e.n].pins;
+          state.retake[e.n] = accepted.s;
+        } else state.retakeMath[e.k] = accepted.s;
+        cur = accepted.lay;
+      } else {
+        const few = e.type === 'word' ? fewExamples(style, e.text) : [];
+        report.reason = few.length ? `only one usable example of ${few.join(' and ')}` : `no other example fits (${REDO_TRIES} streams were tried and all gave the same examples)`;
+      }
+      reports.push(report);
+    }
+    cur.redo = reports;
+    return cur;
   }
 
   // ---- page layout ----------------------------------------------------------------------
@@ -778,6 +913,7 @@
       opts || {}
     );
     if (o.bounce === undefined) o.bounce = 1.5; // a caller that passes the key with nothing in it gets the default
+    if (o.redo && o.redo.length) return redoLayout(style, o.redo, (patch) => layout(style, text, Object.assign({}, o, patch, { redo: null })));
     const rng = G.mulberry32(o.seed);
     // The writer's own line rhythm (word gaps, baseline / size / slant drift), when they have
     // written full lines. The Natural variation slider scales it: 30% (the default) is exactly as
@@ -833,8 +969,10 @@
       const words = para.split(/[ \t]+/).filter(Boolean);
       for (const word of words) {
         const pinsForWord = o.pins ? o.pins[wordNo] : null;
+        const takeForWord = o.retake ? o.retake[wordNo] : 0; // redo: this word's take (see redoLayout)
         wordNo++;
-        const w = boxes && word.includes(MARK_OPEN) ? synthCompound(style, word, rng, ctx, boxes) : synthWord(style, word, rng, ctx, pinsForWord);
+        const compound = !!boxes && word.includes(MARK_OPEN);
+        const w = compound ? synthCompound(style, word, rng, ctx, boxes, pinsForWord) : synthWord(style, word, rng, ctx, pinsForWord, takeForWord);
         if (!w) {
           wordsOut.push(null); // keeps the numbering of words, so pins stay lined up
           wordLine.push(line);
@@ -887,6 +1025,8 @@
           text: boxes ? word.replace(/\uE000(\d+)\uE001/g, (_, n) => '$' + (boxes[Number(n)] ? boxes[Number(n)].tex : '') + '$') : word,
           choices: w.choices.map((c) => c.unit),
           ids: w.choices.map((c) => c.unit.id),
+          pins: w.pins, // the same examples as ids, but one per character (a plain word) or per part (a word with math): what `pins` takes
+          compound,
           spans: w.spans.map(([lo, hi]) => [(lo + 0.5 * tanW) * xh * sc + dx, (hi + 0.5 * tanW) * xh * sc + dx]),
           top: base - 2.7 * xh * sc,
           bottom: base + 1.3 * xh * sc,
@@ -947,7 +1087,7 @@
     return result;
   }
 
-  const api = { layout, MARK_OPEN, MARK_CLOSE, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
+  const api = { layout, redoLayout, MARK_OPEN, MARK_CLOSE, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

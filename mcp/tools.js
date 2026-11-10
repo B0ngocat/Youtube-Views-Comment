@@ -123,6 +123,61 @@ function createTools(config) {
     if (!Number.isInteger(n) || n < 0 || n > 2147483647) throw new Error(`${where ? where + ': ' : ''}seed must be a whole number from 0 to 2147483647, not ${JSON.stringify(v)}.`);
     return { seed: n, given: true };
   }
+  // ---- redo: draw one word again (write_text, write_batch items, fill_pdf answers) -----------------------------------
+  const REDO_SCHEMA = {
+    type: 'array',
+    maxItems: 20,
+    description: 'Draw one word again and keep every other word exactly as it was (same examples of every letter; positions may shift a little because the redone word has another width). For when ONE word or number came out badly and a new seed would redraw, and perhaps spoil, the rest. Each entry: {word, nth, take}. word: a word of the text as typed (split on spaces); the whole token is matched first, then ignoring punctuation round it, so "9.81" finds "9.81," and "(9.81)". nth: which match, from 1 in reading order (default 1; with more matches and no nth the first is used and the report says "first of N"). take: whole number from 1 (default 1): take 1 is another drawing than the plain one, take 2 yet another; the same call always gives the same picture. A word that is not in the text stops that answer before anything is drawn and lists the words. In kind mixed a piece of math is one word: word is its TeX (the text between the dollar signs) or give math: 2 for the second piece. Not available for kind math.',
+    items: { type: 'object', properties: { word: { type: 'string' }, nth: { type: 'integer' }, take: { type: 'integer' }, math: { type: 'integer', description: 'kind mixed only: the piece of math to redo, counted from 1, instead of word.' } } },
+  };
+  /** Checks a redo argument and returns the list the engine takes (see synth.redoLayout). Throws before anything is drawn. */
+  function redoOf(v, where, kind) {
+    if (v === undefined || v === null) return undefined;
+    const at = where ? where + ': ' : '';
+    if (!Array.isArray(v)) throw new Error(`${at}redo must be a list like [{"word": "9.81", "take": 2}].`);
+    if (!v.length) return undefined;
+    if (kind === 'math') throw new Error(`${at}redo is not available for kind math yet (a number in math is drawn from one shared stream, so redrawing it would change the other numbers). Put the number in a kind mixed answer (words with $math$ inside, or the number as a plain word) or use another seed.`);
+    if (v.length > 20) throw new Error(`${at}at most 20 redo entries.`);
+    const whole = (x, name, i, min) => {
+      const n = typeof x === 'string' && /^\d+$/.test(x.trim()) ? Number(x) : x;
+      if (!Number.isInteger(n) || n < min || n > 1000) throw new Error(`${at}redo ${i + 1}: ${name} must be a whole number from ${min}, not ${JSON.stringify(x)}.`);
+      return n;
+    };
+    return v.map((r, i) => {
+      if (!r || typeof r !== 'object') throw new Error(`${at}redo ${i + 1} must be an object like {"word": "9.81", "take": 2}.`);
+      const out = {};
+      const hasMath = r.math !== undefined && r.math !== null && r.math !== '';
+      if (hasMath) {
+        if (kind !== 'mixed') throw new Error(`${at}redo ${i + 1}: math is only for kind mixed (pieces of math inside words).`);
+        out.math = whole(r.math, 'math', i, 1);
+      } else if (typeof r.word !== 'string' || !r.word.trim()) throw new Error(`${at}redo ${i + 1}: word is required (a word of the text as typed)${kind === 'mixed' ? ', or math: 2 for the second piece of math' : ''}.`);
+      else out.word = r.word.trim();
+      if (r.nth !== undefined && r.nth !== null && r.nth !== '') out.nth = whole(r.nth, 'nth', i, 1);
+      out.take = r.take === undefined || r.take === null || r.take === '' ? 1 : whole(r.take, 'take', i, 1);
+      return out;
+    });
+  }
+  /** One report line per redo entry the layout carried out. */
+  function redoLines(placed) {
+    return (placed.redo || []).map((r) => {
+      const name = r.type === 'math' ? `math "${r.text}"` : `"${r.word}"`;
+      const bits = [`take ${r.take}`];
+      if (r.nth) bits.unshift(`nth ${r.nth}`);
+      else if (r.matches > 1) bits.push(`first of ${r.matches}`);
+      if (!r.ok) return `redo ${name} (${bits.join(', ')}): could not change "${r.text}": ${r.reason}; it is drawn as it is without redo.`;
+      const short = r.usedTake < r.take ? `only ${r.usedTake} different drawing${r.usedTake === 1 ? '' : 's'} exist${r.usedTake === 1 ? 's' : ''}, so this is take ${r.usedTake}: ` : '';
+      return `redo ${name} (${bits.join(', ')}): ${short}${r.changed} of ${r.total} characters changed.`;
+    });
+  }
+  /** Sheet.layoutBox, with a word that is not in the text reported by answer (nothing has been drawn at that point). */
+  function layoutWithRedo(where, style, box, look) {
+    try {
+      return Sheet.layoutBox(style, box, look);
+    } catch (e) {
+      if (e.redo) throw new Error(`${where}: ${e.message}`);
+      throw e;
+    }
+  }
   const lookFrom = (a) => ({
     messiness: clampNum(a.messiness, 0, 1, LOOK.messiness),
     variation: clampNum(a.variation, 0, 1, LOOK.variation),
@@ -236,6 +291,7 @@ function createTools(config) {
     const kind = kindOf(a);
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: seedOf(a.seed).seed, auto: false };
+    if (a.redo !== undefined) box.redo = redoOf(a.redo, '', kind);
     const chk = checkPlain(style, a, kind);
     if (chk.missing.length) return { a, format, chk, missing: chk.missing };
     const placed = Sheet.layoutBox(style, box, Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) }));
@@ -276,6 +332,7 @@ function createTools(config) {
     const notes = [`Written at letter height ${placed.xhPt} pt, ${drawn ? Math.round(drawn[1]) : Math.round(placed.layout.width * placed.K)} x ${drawn ? Math.round(drawn[2]) : Math.round(placed.layout.height * placed.K)} pt. SVG: ${svgPath}${pngPath ? '  PNG: ' + pngPath : ''}${notePath ? '  Notability note: ' + notePath : ''}`];
     if (seedOf(a.seed).given) notes[0] += `  Seed ${seedOf(a.seed).seed}.`;
     notes.push(...drawnNotes(chk, placed));
+    notes.push(...redoLines(placed));
     notes.push(...digitNotes((await load()).style, a.text));
     return { svg, format, b64: png && png.toString('base64'), note: note && { path: notePath, b64: Buffer.from(note).toString('base64') }, notes: notes.join('\n') };
   }
@@ -437,7 +494,7 @@ function createTools(config) {
     },
     {
       name: 'write_text',
-      description: "Writes text, TeX-style math, or both together (kind mixed: words with $math$ inside), in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
+      description: "Writes text, TeX-style math, or both together (kind mixed: words with $math$ inside), in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet. If one word or number came out badly, give redo ([{word, take}]) to draw just that word again with every other word unchanged, instead of another seed.",
       inputSchema: {
         type: 'object',
         required: ['text'],
@@ -455,6 +512,7 @@ function createTools(config) {
           pen_width: { type: 'number', description: 'format note only: the pen width in note units. Default 1.05 (about a Notability pen at thickness 3).' },
           left: { type: 'number', description: 'format note only: where the text starts, in note units from the left edge of the drawable area (512 wide). Default 20.' },
           top: { type: 'number', description: 'format note only: where the text starts, in note units down from the top of the page (about 705 tall). Default 40.' },
+          redo: REDO_SCHEMA,
           include_base64: { type: 'boolean', description: 'Also put the PNG, base64 encoded, in the text of the reply (for a client that cannot show images). It is long, so leave it off otherwise.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'What to do about a character the handwriting has no sample of (a degree sign, a macron, a symbol they never wrote). error (default): write nothing and say which characters, and which words they are in. fallback: draw a clean vector stand-in for the ones that have one (symbols and punctuation, never letters or digits) and list them in the reply; it still stops if a letter or digit is missing.' },
         },
@@ -470,7 +528,7 @@ function createTools(config) {
         type: 'object',
         required: ['items'],
         properties: {
-          items: { type: 'array', maxItems: 100, items: { type: 'object', required: ['text'], properties: { text: { type: 'string' }, kind: { type: 'string', enum: ['text', 'math', 'mixed'] }, seed: { type: 'integer' }, width_pt: { type: 'number' }, letter_height_pt: { type: 'number' }, ink: { type: 'string' } } } },
+          items: { type: 'array', maxItems: 100, items: { type: 'object', required: ['text'], properties: { text: { type: 'string' }, kind: { type: 'string', enum: ['text', 'math', 'mixed'] }, seed: { type: 'integer' }, width_pt: { type: 'number' }, letter_height_pt: { type: 'number' }, ink: { type: 'string' }, redo: REDO_SCHEMA } } },
           width_pt: { type: 'number' },
           letter_height_pt: { type: 'number' },
           ink: { type: 'string' },
@@ -534,7 +592,7 @@ function createTools(config) {
     },
     {
       name: 'fill_pdf',
-      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write. It can also draw pen marks with `marks`: circle (round an option), tick or cross (in a checkbox), underline, strike (cross out), box (round a final answer), arrow and line, aimed at a rectangle or at printed text (`text`), in the same pen as the writing; answers may be left out when there are marks.",
+      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write. It can also draw pen marks with `marks`: circle (round an option), tick or cross (in a checkbox), underline, strike (cross out), box (round a final answer), arrow and line, aimed at a rectangle or at printed text (`text`), in the same pen as the writing; answers may be left out when there are marks. An answer can take redo ([{word, nth, take}]) to draw one word of it again and keep the others as they were.",
       inputSchema: {
         type: 'object',
         required: ['pdf'],
@@ -588,6 +646,7 @@ function createTools(config) {
                 kind: { type: 'string', enum: ['text', 'math', 'mixed'] },
                 letter_height_pt: { type: 'number' },
                 seed: { type: 'integer', description: 'A whole number from 0 up. Without one, each answer gets its own seed from where it sits on the page, so no two answers open alike (the report says which). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. If a digit has only one or two clean examples the report says so: another seed can give the same one again.' },
+                redo: REDO_SCHEMA,
                 stagger: { type: 'boolean', description: 'true: start this answer a little in from the left (differently on every answer, the right edge stays), so answers do not all start on one vertical line.' },
                 shrink_to_fit: { type: 'boolean', description: 'Last resort when wrapping and growing are not enough: make the letters smaller, down to min_size_ratio. Default true. false: never shrink (it wraps and grows, and reports DOES NOT FIT if that is not enough).' },
                 min_size_ratio: { type: 'number', description: 'The smallest the letters may be made, as a fraction of letter_height_pt (or the default 9.5 pt). Default 0.8, 0.3 at the lowest. Anything smaller than the size asked for is reported.' },
@@ -638,6 +697,7 @@ function createTools(config) {
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
           const kind = kindOf(ans);
           const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, ans.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          if (ans.redo !== undefined) box.redo = redoOf(ans.redo, where, kind);
           if (ans.stagger === true || a.stagger === true) {
             // start a little in from the left, differently on every answer, and keep the right edge where it was
             const sh = Math.min(box.w * 0.25, (((Math.imul(box.seed + 1, 2654435761) >>> 8) % 1000) / 1000) * 1.4 * (box.xhPt || Sheet.DEFAULT_XH_PT) * 2);
@@ -670,7 +730,7 @@ function createTools(config) {
             problems.push({ where: label, missing: chk.missing });
             return;
           }
-          const placed = Sheet.layoutBox(style, box, look);
+          const placed = layoutWithRedo(where, style, box, look);
           if (kind !== 'text' && placed.unknown.length) texProblems.push({ where: label, text: ans.text, unknown: placed.unknown });
           const gone = kind !== 'text' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
           if (gone.length) {
@@ -678,7 +738,7 @@ function createTools(config) {
             return;
           }
           items.push({ box, placed });
-          report.push(fitReport(label, box, placed, drawnNotes(chk, placed).concat(digitNotes(style, ans.text)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
+          report.push(fitReport(label, box, placed, drawnNotes(chk, placed).concat(digitNotes(style, ans.text), redoLines(placed)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
           const wantPreview = a.preview === true || a.preview === 'all' || (a.preview === 'digits' && /[0-9]/.test(ans.text));
           if (wantPreview) previewJobs.push({ label, placed });
         });

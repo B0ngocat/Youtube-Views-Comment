@@ -324,7 +324,7 @@
   function createEngine(style, rng, opts) {
     const messiness = opts.messiness;
     // wordReuse: a word the writer recorded (dy, dx, x, 12) is written back from their own strokes, as in plain text
-    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map() };
+    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map(), ids: [] }; // ids: the examples written, in order (a redo compares them)
     const sample = Y.synthWord(style, 'x', G.mulberry32(1), { variation: 0, messiness: 0, usage: new Map(), missing: new Set(), rhythm: true });
     const ws = sample ? sample.strokes.flatMap((s) => s.pts.map((p) => p.w)).sort((a, b) => a - b) : [1.2];
     const PEN = ws[ws.length >> 1] || 1.2;
@@ -333,6 +333,7 @@
     function written(text, sc) {
       const w = Y.synthWord(style, text, rng, ctx);
       if (!w) return null;
+      for (const c of w.choices) ctx.ids.push(c.unit.id);
       const jitter = 1 + 0.03 * messiness * G.gaussian(rng);
       return boxOf(clone(w.strokes, 0, 0, sc * jitter, sc * jitter));
     }
@@ -747,6 +748,7 @@
       missing: Array.from(E.ctx.missing),
       unknown: parsed.unknown,
       standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])),
+      ids: E.ctx.ids,
     };
   }
 

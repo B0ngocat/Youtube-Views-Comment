@@ -78,7 +78,11 @@
   }
 
   /** Each piece of math has a stream of its own, from the layout's seed and the piece's number: editing one never changes another. */
-  const segSeed = (seed, n) => (Math.imul((Number(seed) | 0) ^ 0x9e3779b9, 2654435761) + Math.imul(n + 1, 0x85ebca6b)) >>> 0;
+  // take (redo): 0 is the plain piece; another number gives the piece a stream of its own and nothing else changes
+  const segSeed = (seed, n, take) => {
+    const s = (Math.imul((Number(seed) | 0) ^ 0x9e3779b9, 2654435761) + Math.imul(n + 1, 0x85ebca6b)) >>> 0;
+    return take ? Math.imul(s ^ Math.imul(take, 0x27d4eb2f), 0x85ebca6b) >>> 0 : s;
+  };
 
   /**
    * Same result shape as synth.layout, plus what math.layout reports: unknown (TeX commands that are not supported) and standIns.
@@ -86,6 +90,8 @@
    */
   function layout(style, text, opts) {
     const o = Object.assign({ messiness: 0.3, variation: 0.4, seed: 1 }, opts || {});
+    // opts.redo (see synth.redoLayout): the same text laid out again with the chosen words or pieces of math redrawn and the rest kept
+    if (o.redo && o.redo.length) return Y.redoLayout(style, o.redo, (patch) => layout(style, text, Object.assign({}, o, patch, { redo: null })));
     const segs = split(text);
     const boxes = [];
     const unknown = new Set();
@@ -98,7 +104,7 @@
         continue;
       }
       const n = boxes.length;
-      const box = M.inline(style, g.s.replace(/\s+/g, ' '), { seed: segSeed(o.seed, n), messiness: o.messiness, variation: o.variation, wordReuse: o.wordReuse });
+      const box = M.inline(style, g.s.replace(/\s+/g, ' '), { seed: segSeed(o.seed, n, o.retakeMath ? o.retakeMath[n] : 0), messiness: o.messiness, variation: o.variation, wordReuse: o.wordReuse });
       box.tex = g.s;
       for (const c of box.unknown) unknown.add(c);
       for (const c of box.standIns) standIns.add(c);
@@ -113,6 +119,8 @@
     lay.standIns = Array.from(standIns);
     lay.substituted = Array.from(new Set([...(lay.substituted || []), ...standIns])); // what the tools list as drawn rather than written
     lay.math = boxes.length;
+    lay.mathTex = boxes.map((b) => b.tex); // what each piece of math says, and the examples it was written with (redo)
+    lay.mathIds = boxes.map((b) => b.ids);
     return lay;
   }
 
