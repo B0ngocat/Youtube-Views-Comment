@@ -97,6 +97,13 @@ fill_pdf preview: "digits" | "all": a small picture of each answer's ink (5 to 1
 Math TeX: only commands listed by handwriting_status {math_help: true} work (\\Rightarrow \\implies \\iff \\in \\cup \\bar{x} \\vec{v} y' ...);
 others are refused with suggestions, never written out as words.
 
+fill_pdf placing: an answer can give after_text (printed text such as "3.", optional nth) and place ("line" | "right" | "below" | "auto") instead of
+x and y/line_y: it goes on the printed ruled line after that text, or in the blank space right of or below it (anything you also give wins; a text
+not printed on the page, or place "line" with no line, stops the call; the report says what was resolved). An answer on a printed rule with more
+evenly spaced rules under it (10 to 60 pt) is written on each rule in turn; line_spacing_pt gives the spacing for lined paper the PDF does not draw,
+follow_lines: false turns it off. WARNING lines say when the writing covers printed text or another answer or leaves the page. inspect_pdf adds
+what each line follows (after "Name:") and its place in a run of rules (line 2 of 4, 18 pt apart).
+
 fill_pdf fitting: too long for a box means wrap onto more lines, then grow the box downward (max_height; default stops above the
 nearest printed text; grow: false forbids it), and only then shrink, never below min_size_ratio (default 0.8) of the size asked
 for. The report says per answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it, and fix the box or the text

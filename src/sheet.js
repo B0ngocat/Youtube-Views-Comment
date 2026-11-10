@@ -45,6 +45,11 @@
    * Returns {layout, K, xhPt, dx, dy, overflow, missing, substituted, standIns} and what was done to make it fit:
    *   wantXh (the size asked for), lines, wrapped (more lines than the text has), h (the box height in the end),
    *   grown ({from, to} or null), shrunk ({from, to} or null), tooWide (a word wider than the box, which only shrinking fixes).
+   * box.lineStep (points, optional): the answer sits on printed ruled lines that far apart. The writing's line height becomes that,
+   * the first baseline sits 0.45 x-heights above the box's bottom edge (the first rule), every later line 0.45 above the next rule,
+   * and the box grows one rule at a time (as far as box.growTo). Letters taller than the rules allow (more than lineStep / 1.9)
+   * are made smaller, within minRatio (unless auto === false); the result says so in `pitch`. `ruled` in the result holds
+   * {step, off: lines after the first whose spacing came out other than the step (a line with tall math gets extra room), tall}.
    * K is points per layout pixel, and the layout belongs at (box.x - dx * K, box.y - dy * K) in points.
    */
   function layoutBox(style, box, look) {
@@ -56,6 +61,8 @@
     const explicitLines = text.split('\n').length;
     // box.redo (words to draw again, see synth.redoLayout) goes into every pass of the fitting below, so a redone word stays the same word
     const redoOpt = box.redo && box.redo.length && box.kind !== 'math' ? { redo: box.redo } : {};
+    const step = box.lineStep > 0 ? Number(box.lineStep) : 0; // ruled lines: the pitch in points
+    const allowed = step ? 1 + Math.floor((Math.max(box.h, box.growTo || 0) - box.h) / step + 0.03) : 0; // lines the box may hold on its rules
 
     // the writing at one size, in a box h points tall
     function fitAt(xhPt, h) {
@@ -66,7 +73,7 @@
         Object.assign({}, look || {}, {
           xh: ENGINE_XH,
           width: Math.max(60, Math.round(box.w / K)),
-          lineHeight: box.kind === 'math' ? 3 : 2.5,
+          lineHeight: step ? step / xhPt : box.kind === 'math' ? 3 : 2.5,
           seed: box.seed === undefined ? 1 : box.seed, // 0 is a seed too
           margin: 8,
         }, redoOpt)
@@ -77,6 +84,18 @@
       // do on paper) instead of hanging from the top with a gap above the printed line.
       const oneLine = box.kind !== 'math' && lay.baselines.length === 1 && h <= 3.4 * xhPt;
       let dy = moved.dy; // the layout's origin is box.y - dy * K points from the top of the page
+      if (step) {
+        // every line sits on its rule: the first rule is the box's bottom edge, the others are `step` apart below it
+        dy = lay.baselines[0] - (box.h / K - 0.45 * ENGINE_XH);
+        const n = lay.baselines.length;
+        const gaps = [];
+        for (let i = 1; i < n; i++) if (Math.abs((lay.baselines[i] - lay.baselines[i - 1]) * K - step) > 1) gaps.push(i + 1);
+        const tooTallRules = n > allowed;
+        const right2 = (b.maxX - moved.dx) * K;
+        const wide = right2 > box.w + 1;
+        const ruled = { step, off: gaps, tall: (lay.lineInk || []).some((l) => l.tall) };
+        return { layout: lay, K, xhPt, dx: moved.dx, dy, overflow: wide || tooTallRules, tooWide: wide, tooTall: tooTallRules, bottom: box.h + (n - 1) * step, h: box.h + (Math.min(n, allowed) - 1) * step, missing: lay.missing || [], substituted: lay.substituted || lay.standIns || [], unknown: lay.unknown || [], ruled };
+      }
       if (oneLine) {
         const top = b.minY - dy; // ink top, below the box top, in layout px
         const down = h / K - 0.45 * ENGINE_XH - (lay.baselines[0] - dy); // to put the baseline there
@@ -92,6 +111,12 @@
 
     const maxH = Math.max(box.h, box.growTo || 0);
     let xhPt = wantXh;
+    let pitch = null;
+    if (step && box.auto !== false && wantXh > step / 1.9 + 0.05) {
+      // letters this tall would touch the lines above and below: smaller, as far as min_size_ratio lets them
+      xhPt = Math.max(floor, step / 1.9);
+      pitch = { from: wantXh, to: xhPt, step, tight: xhPt > step / 1.9 + 0.05 };
+    }
     let out = null;
     for (let tries = 0; tries < 40; tries++) {
       out = fitAt(xhPt, box.h);
@@ -110,6 +135,7 @@
     out.grown = out.h > box.h + 0.01 ? { from: box.h, to: out.h } : null;
     out.redo = out.layout.redo || null; // what was done for each box.redo entry (see synth.redoLayout)
     out.shrunk = out.xhPt < wantXh - 0.05 ? { from: wantXh, to: out.xhPt } : null;
+    out.pitch = pitch; // set when the printed lines' spacing made the letters smaller (see lineStep)
     return out;
   }
 

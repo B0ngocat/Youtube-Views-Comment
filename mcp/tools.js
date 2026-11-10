@@ -23,6 +23,7 @@ const { isSealed, unseal } = require('./sealed');
 const Notability = require('../src/notability');
 const Marks = require('../src/marks');
 const Anchors = require('./anchors');
+const Placing = require('./placing');
 const PDF = !globalThis.__HW_NO_PDF__;
 const pdfLib = () => require('../vendor/pdf-lib.min.js');
 const inspectPdf = (bytes, o) => require('./pdfinfo').inspect(bytes, o);
@@ -386,7 +387,8 @@ function createTools(config) {
     if (placed.wrapped) bits.push(`WRAPPED onto ${placed.lines} lines`);
     const stop = box.blocker && box.growTo > box.h - 0.01 ? ` (it may not grow into the printed text "${box.blocker.text.slice(0, 40)}" at y = ${r1(box.blocker.y)})` : '';
     if (placed.grown) bits.push(`box GROWN downward from ${r1(placed.grown.from)} to ${r1(placed.grown.to)} pt (it now ends at y = ${r1(box.y + placed.grown.to)})${placed.grown.to >= box.growTo - 1 ? stop : ''}`);
-    if (placed.shrunk) bits.push(`SHRUNK from ${r1(placed.shrunk.from)} to ${r1(placed.shrunk.to)} pt (${Math.round((100 * placed.shrunk.to) / placed.shrunk.from)}% of the size asked for) because wrapping${box.growTo > box.h ? ' and growing' : ''} was not enough${stop}`);
+    if (placed.shrunk && placed.pitch && Math.abs(placed.shrunk.to - placed.pitch.to) < 0.05) bits.push(`SHRUNK from ${r1(placed.shrunk.from)} to ${r1(placed.shrunk.to)} pt (${Math.round((100 * placed.shrunk.to) / placed.shrunk.from)}% of the size asked for) because the printed lines are only ${r1(placed.pitch.step)} pt apart`);
+    else if (placed.shrunk) bits.push(`SHRUNK from ${r1(placed.shrunk.from)} to ${r1(placed.shrunk.to)} pt (${Math.round((100 * placed.shrunk.to) / placed.shrunk.from)}% of the size asked for) because wrapping${box.growTo > box.h ? ' and growing' : ''} was not enough${stop}`);
     if (placed.overflow) {
       const need = Math.ceil(placed.bottom - placed.h);
       bits.push(placed.tooWide ? 'DOES NOT FIT: a word is wider than the box. Make the box wider, shorten the text, or lower min_size_ratio' : `DOES NOT FIT: it needs about ${need} pt more height than the box may have${stop}. Make the box taller (height, max_height), shorten the text, or lower min_size_ratio`);
@@ -399,10 +401,10 @@ function createTools(config) {
   const r1m = (v) => (Math.round(v * 10) / 10).toFixed(1);
 
   /** Checks each mark, finds its target, draws it, pushes {box, placed} onto items and returns one report line per mark. Throws before anything is drawn if one is wrong. */
-  async function marksFor(a, bytes, sizes, items) {
+  async function marksFor(a, bytes, sizes, items, known) {
     const list = Array.isArray(a.marks) ? a.marks : [];
     if (!list.length) return [];
-    let inspected = null;
+    let inspected = known || null; // fill_pdf has already read the page text once: reuse it
     const made = [];
     for (let i = 0; i < list.length; i++) {
       const mk = list[i] || {};
@@ -470,6 +472,76 @@ function createTools(config) {
       items.push(Marks.toPlaced(Marks.draw(m.geo, { xh: m.xh, seed: m.seed }), { xh: m.xh, page: m.page }));
       return m.line;
     });
+  }
+
+  // ---- placing answers (fill_pdf after_text, ruled lines, warnings) -----------------------------------
+  const given = (v) => v !== undefined && v !== null && v !== '';
+
+  /**
+   * Where one answer goes: its box position and size, from x / y / line_y / width / height as given, or from the printed text
+   * `after_text` (anything given explicitly wins over what was found), and the ruled lines it follows. Throws before anything is drawn.
+   * printed: the inspect data (or null), size: {w, h} of the page, page: from 0.
+   */
+  function placeFor(ans, where, printed, size, page) {
+    const num = (v) => given(v) && Number.isFinite(Number(v));
+    const xhPt = ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : Sheet.DEFAULT_XH_PT;
+    const pg = printed && printed.find((p) => p.page === page + 1);
+    const anchored = given(ans.after_text);
+    let r = null;
+    if (anchored) {
+      if (typeof ans.after_text !== 'string' || !ans.after_text.trim()) throw new Error(`${where}: after_text must be some of the printed text on the page.`);
+      if (!pg) throw new Error(`${where}: cannot read the printed text of this PDF to find ${JSON.stringify(ans.after_text)}; give x, line_y (or y) and width instead.`);
+      r = Placing.resolve(printed, { where, page: page + 1, text: ans.after_text, nth: ans.nth, place: ans.place, xh: xhPt, size, width: num(ans.width) ? Number(ans.width) : undefined });
+      r.nthGiven = given(ans.nth);
+    } else {
+      for (const k of ['x', 'width']) if (!Number.isFinite(Number(ans[k]))) throw new Error(`${where}: ${k} must be a number.`);
+      if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on), or after_text (printed text to place it by).`);
+    }
+    const x = num(ans.x) ? Number(ans.x) : r.x;
+    const width = num(ans.width) ? Number(ans.width) : r.width;
+    const yGiven = num(ans.y);
+    let lineY = num(ans.line_y) ? Number(ans.line_y) : yGiven ? undefined : r && r.lineY;
+    if (anchored && !(width > 0)) throw new Error(`${where}: the space found for the answer is not wide enough; give width yourself.`);
+    const below = r && r.mode === 'below' && lineY === undefined;
+    const h = clampNum(ans.height, 8, 800, lineY !== undefined ? 28 : below ? Math.max(8, Math.min(r.avail, 40)) : 40);
+    const y = lineY !== undefined ? lineY - h : yGiven ? Number(ans.y) : r.top;
+    const out = { x, width, y, h, step: 0, count: 0, explicitStep: false, notes: [], anchored };
+    if (r) {
+      const own = ['x', 'width', 'y', 'line_y', 'height'].filter((k) => num(ans[k]));
+      out.notes.push(Placing.describe(r, { x, width, lineY: lineY === undefined ? y + h : lineY, y, h }) + (own.length ? ` [you set ${own.join(', ')}, which wins]` : ''));
+    }
+    // the ruled lines under the answer: written on each in turn when the answer wraps
+    if (given(ans.line_spacing_pt)) {
+      const st = Number(ans.line_spacing_pt);
+      if (!(st >= Placing.MIN_PITCH && st <= Placing.MAX_PITCH)) throw new Error(`${where}: line_spacing_pt must be the distance between ruled lines in points, from ${Placing.MIN_PITCH} to ${Placing.MAX_PITCH}.`);
+      if (below) throw new Error(`${where}: line_spacing_pt needs the answer to sit on a line (line_y, or after_text with place "line" or "right"); place "below" hangs from the top of the box.`);
+      out.step = st;
+      out.explicitStep = true;
+    } else if (ans.follow_lines !== false && pg && lineY !== undefined) {
+      const rule = Placing.ruleAt(pg, x, width, lineY);
+      const f = rule && Placing.followFrom(pg, rule);
+      if (f) {
+        out.step = f.pitch;
+        out.count = f.count;
+      }
+    }
+    if (!out.step && r && r.mode === 'line' && lineY !== undefined && ans.follow_lines !== false) {
+      // a lone printed rule found by after_text: the first line sits on it, later lines follow below at the writing's usual spacing
+      out.step = 2.5 * xhPt;
+      out.natural = true;
+    }
+    return out;
+  }
+
+  /** The report lines for the ruled lines an answer follows (nothing for a one-line answer on an automatically found rule, as before). */
+  function ruledNotes(pl, placed) {
+    if (!placed.ruled) return [];
+    const notes = [];
+    const loud = !pl.natural && (pl.anchored || pl.explicitStep || placed.lines > 1);
+    if (loud) notes.push(pl.explicitStep ? `follows ruled lines ${r1m(pl.step)} pt apart (line_spacing_pt)` : `follows ${pl.count} printed lines, ${r1m(pl.step)} pt apart`);
+    if (placed.ruled.off.length) notes.push(`line${placed.ruled.off.length > 1 ? 's' : ''} ${placed.ruled.off.join(', ')} ${placed.ruled.off.length > 1 ? 'are' : 'is'} NOT on the ruled lines${placed.ruled.tall ? ': a line holding tall math (a fraction, an integral with limits) was given extra room, so the lines after it drift off the rules' : ''}; split the answer into one answer per ruled line to keep each on its line`);
+    if (placed.pitch && placed.pitch.tight) notes.push(`the letters are taller than lines ${r1m(pl.step)} pt apart allow and min_size_ratio stops them shrinking: lines may touch`);
+    return notes;
   }
 
   const defs = [
@@ -575,7 +647,7 @@ function createTools(config) {
     },
     {
       name: 'inspect_pdf',
-      description: 'Reads a PDF and tells you where things are, so you can choose where answers go. For each page: its size in points, the printed text as lines with their position, and the ruled lines (answer lines and box edges), and small squares that look like checkboxes (`box`, both sides 6 to 30 pt; aim a tick or cross at one with fill_pdf marks). All positions are in points from the top-left corner of the page, the same as fill_pdf. Look at the PDF itself too if you can, since this lists only text and lines, not pictures.',
+      description: 'Reads a PDF and tells you where things are, so you can choose where answers go. For each page: its size in points, the printed text as lines with their position, and the ruled lines (answer lines and box edges), and small squares that look like checkboxes (`box`, both sides 6 to 30 pt; aim a tick or cross at one with fill_pdf marks). All positions are in points from the top-left corner of the page, the same as fill_pdf. A `line` also says the printed text it follows on its row (after "Name:") and, for a run of evenly spaced lines, its place in it (line 2 of 4, 18 pt apart); fill_pdf can then place an answer with after_text instead of x and y. Look at the PDF itself too if you can, since this lists only text and lines, not pictures.',
       inputSchema: { type: 'object', required: ['pdf'], properties: { pdf: { type: 'string', description: 'Path to the PDF.' }, min_rule_pt: { type: 'number', description: 'Shortest line to report, in points. Default 36.' } } },
       async run(a) {
         const bytes = readPdf(a.pdf);
@@ -584,7 +656,8 @@ function createTools(config) {
         for (const p of pages) {
           lines.push(`Page ${p.page}: ${p.width} x ${p.height} pt${p.rotated ? ' (rotated: fill_pdf cannot write on it)' : ''}`);
           for (const t of p.text) lines.push(`  text  x=${t.x} y=${t.y} w=${t.w} h=${t.h}  "${t.text}"`);
-          for (const r of p.rules) lines.push(`  line  x=${r.x} y=${r.y} w=${r.w}`);
+          const labels = Placing.ruleLabels(p); // what each line follows on its row, and its place in a run of evenly spaced lines
+          p.rules.forEach((r, i) => lines.push(`  line  x=${r.x} y=${r.y} w=${r.w}${labels[i] ? '  ' + labels[i] : ''}`));
           for (const b of p.boxes || []) lines.push(`  box  x=${b.x} y=${b.y} w=${b.w} h=${b.h}`);
         }
         return [text(lines.join('\n'))];
@@ -592,7 +665,7 @@ function createTools(config) {
     },
     {
       name: 'fill_pdf',
-      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write. It can also draw pen marks with `marks`: circle (round an option), tick or cross (in a checkbox), underline, strike (cross out), box (round a final answer), arrow and line, aimed at a rectangle or at printed text (`text`), in the same pen as the writing; answers may be left out when there are marks. An answer can take redo ([{word, nth, take}]) to draw one word of it again and keep the others as they were.",
+      description: "Writes answers in the user's handwriting onto a PDF and saves a new PDF (the original is not changed). Each answer goes in a box: x and y are the box's top-left corner in points from the page's top-left, width is how wide it may be. Give height (the box's height), or line_y instead of y to have the writing sit on a printed line at that y (use the y of a 'line' from inspect_pdf). When an answer does not fit its box at the letter size asked for, it is dealt with in this order: it wraps onto more lines inside the box's width; the box grows downward (up to max_height; by default it stops just above the nearest printed text under it, or at the bottom margin of the page; grow: false turns this off); and only as a last resort is the writing made smaller, never below min_size_ratio (default 0.8) of the size asked for. The report says for each answer whether it was wrapped, grown or shrunk, and says DOES NOT FIT if it still does not. Every character is checked before anything is written: one with no sample stops the call and is listed with the words it is in (see on_missing). You can skip the arithmetic: give after_text (printed text such as 3. or Name:, with place line, right, below or auto) instead of x, y and width, and the answer is put on the printed line after that text or in the blank space next to it; and when an answer sits on a ruled line with more evenly spaced rules under it, a wrapped answer is written on each rule in turn (follow_lines, line_spacing_pt). The report says what was resolved, and WARNING lines say when the writing covers printed text, covers another answer or leaves the page (the file is still saved: look at the page). Pages are numbered from 1. Do not invent answers for the user; write only what you were asked to write. It can also draw pen marks with `marks`: circle (round an option), tick or cross (in a checkbox), underline, strike (cross out), box (round a final answer), arrow and line, aimed at a rectangle or at printed text (`text`), in the same pen as the writing; answers may be left out when there are marks. An answer can take redo ([{word, nth, take}]) to draw one word of it again and keep the others as they were.",
       inputSchema: {
         type: 'object',
         required: ['pdf'],
@@ -634,14 +707,19 @@ function createTools(config) {
             type: 'array',
             items: {
               type: 'object',
-              required: ['page', 'x', 'width', 'text'],
+              required: ['page', 'text'],
               properties: {
                 page: { type: 'integer', description: 'From 1.' },
-                x: { type: 'number' },
+                x: { type: 'number', description: 'Left edge of the box. Needed unless after_text is given (then it overrides the position found).' },
                 y: { type: 'number', description: 'Top of the box.' },
                 line_y: { type: 'number', description: 'Instead of y: the y of the printed line the writing sits on.' },
-                width: { type: 'number' },
+                width: { type: 'number', description: 'How wide the writing may be. Needed unless after_text is given (then it overrides the width found).' },
                 height: { type: 'number', description: 'Default 28 (one line) when line_y is used, otherwise 40.' },
+                after_text: { type: 'string', description: 'Place the answer by printed text instead of x and y/line_y: for example "3." or "Name:". It is found on that page (exact first, then ignoring case and extra spaces); if it is not printed there the call stops before anything is drawn and lists the closest printed lines. Where the answer goes is set by place. Anything you also give (x, width, y, line_y, height) wins over what was found. The report says what was resolved.' },
+                nth: { type: 'integer', description: 'With after_text: which match on the page, from 1 (reading order). Default 1; the report says "first of N matches" when there were more.' },
+                place: { type: 'string', enum: Placing.PLACES, description: 'With after_text. line: on the printed ruled line that belongs to the text (a rule on its row to the right of it, else the first rule under it before other printed text); x, line_y and width are the rule\'s. right: in the blank space right of the text on its row, sitting on its baseline, up to the next printed text or the margin. below: in the blank space under the text from its left edge, down to the next printed text. auto (default): line if there is one, else right if at least 60 pt are free, else below. line with no line found stops the call.' },
+                line_spacing_pt: { type: 'number', description: 'The distance in points between ruled lines the answer is written on, 10 to 60: a wrapped answer puts line 1 on line_y (or the box\'s bottom edge), line 2 one step lower, and so on, and may grow only as far as other printed text allows. Needed only for lined paper the PDF does not expose as rules; rules drawn in the PDF are followed automatically.' },
+                follow_lines: { type: 'boolean', description: 'Default true: when the answer sits on a printed rule (line_y or after_text) with more evenly spaced rules under it (same x, 10 to 60 pt apart), its wrapped lines land on those rules, and the box may grow only to the last one; the letters are made smaller (within min_size_ratio) if they are too tall for the spacing. false turns this off.' },
                 text: { type: 'string' },
                 kind: { type: 'string', enum: ['text', 'math', 'mixed'] },
                 letter_height_pt: { type: 'number' },
@@ -676,9 +754,10 @@ function createTools(config) {
         const problems = [];
         const texProblems = [];
         const previewJobs = [];
+        const inks = []; // each answer's ink in page points, for the warnings
         // where the printed text is, so a box that grows stops above it (unless the answer says how far it may grow)
         let printed = null;
-        if (a.answers.some((x) => x && x.grow !== false && !(x.max_height > 0))) {
+        if (a.answers.length) { // also for after_text, the ruled lines and the warnings, which all need to know where the printed text and lines are
           try {
             printed = await inspectPdf(bytes, { minRule: 36 });
           } catch {
@@ -691,12 +770,10 @@ function createTools(config) {
           if (!(page >= 0 && page < sizes.length)) throw new Error(`${where}: page ${ans.page} does not exist (the PDF has ${sizes.length}).`);
           if (typeof ans.text !== 'string' || !ans.text.trim()) throw new Error(`${where}: text is empty.`);
           banEmDash(ans.text, where);
-          for (const k of ['x', 'width']) if (!Number.isFinite(Number(ans[k]))) throw new Error(`${where}: ${k} must be a number.`);
-          if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
-          const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
-          const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
+          const pl = placeFor(ans, where, printed, sizes[page], page); // x, y, width, height, from the numbers given or from after_text
+          const { h, y } = pl;
           const kind = kindOf(ans);
-          const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, ans.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          const box = { page, x: pl.x, y, w: pl.width, h, lineStep: pl.step || undefined, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, pl.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (ans.redo !== undefined) box.redo = redoOf(ans.redo, where, kind);
           if (ans.stagger === true || a.stagger === true) {
             // start a little in from the left, differently on every answer, and keep the right edge where it was
@@ -718,6 +795,7 @@ function createTools(config) {
             }
           }
           box.growTo = ans.grow === false ? box.h : Math.max(box.h, Math.min(ans.max_height > 0 ? Number(ans.max_height) : room, sizes[page].h - box.y));
+          if (pl.count) box.growTo = Math.max(box.h, Math.min(box.growTo, box.h + (pl.count - 1) * pl.step + 0.5)); // not past the last rule of the run
           box.blocker = blocker;
           const label = `${where} (page ${page + 1})`;
           let chk;
@@ -738,13 +816,15 @@ function createTools(config) {
             return;
           }
           items.push({ box, placed });
-          report.push(fitReport(label, box, placed, drawnNotes(chk, placed).concat(digitNotes(style, ans.text), redoLines(placed)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
+          inks.push({ label, page, boxes: Placing.inkBoxes(box, placed) });
+          report.push(fitReport(label, box, placed, pl.notes.concat(ruledNotes(pl, placed), drawnNotes(chk, placed), digitNotes(style, ans.text), redoLines(placed)), seedOf(ans.seed).given ? seedOf(ans.seed).seed : `own seed ${box.seed}`));
           const wantPreview = a.preview === true || a.preview === 'all' || (a.preview === 'digits' && /[0-9]/.test(ans.text));
           if (wantPreview) previewJobs.push({ label, placed });
         });
         if (problems.length || texProblems.length) throw new Error([texProblems.length ? texMessage(texProblems) : '', problems.length ? missingMessage(problems) : ''].filter(Boolean).join('\n\n')); // before a single stroke is drawn
         // pen marks: every one is checked (page, rectangle, text found) before anything is drawn
-        report.push(...(await marksFor(a, bytes, sizes, items)));
+        report.push(...(await marksFor(a, bytes, sizes, items, printed)));
+        report.push(...Placing.warnings(inks, printed, sizes)); // quiet unless the writing covers printed text, another answer, or leaves the page
         const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');

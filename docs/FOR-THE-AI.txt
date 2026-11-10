@@ -64,8 +64,30 @@ Fitting an answer to its box (fill_pdf): too long for the box means, in this ord
   forbids it), and only as a last resort are the letters made smaller, never below "min_size_ratio" (default 0.8) of the size you
   asked for. The report says for every answer: fits as it is / WRAPPED / box GROWN / SHRUNK / DOES NOT FIT. Read it. If it says
   DOES NOT FIT, or SHRUNK to a size that looks different from the other answers on the page, make the box taller or wider or
-  shorten the text; do not hand in a page where answers are at visibly different sizes. Wrapped lines do not follow the printed
-  ruled lines under the box, so look at the page.
+  shorten the text; do not hand in a page where answers are at visibly different sizes. Wrapped lines follow the printed ruled
+  lines under the box when there are some (see Placing answers); otherwise they are spaced evenly. Look at the page.
+
+Placing answers (fill_pdf, inspect_pdf): you do not have to work out x, y and width. Give  "after_text"  (printed text on that page,
+  such as "3." or "Name:"; "nth": 2 for the second match) instead of x and y/line_y, and  "place":
+    "line"   on the printed ruled line that belongs to the text: a rule on its row to the right of it, else the first rule under it
+             before other printed text (x, line_y and width are the rule's). No line found: the call stops and says so.
+    "right"  the blank space right of the text on its row, on its baseline, up to the next printed text or the margin.
+    "below"  the blank space under the text, from its left edge down to the next printed text.
+    "auto"   (default) line if there is one, else right if at least 60 pt are free, else below.
+  Anything you also give (x, width, y, line_y, height) wins over what was found. The text not being printed on that page stops the
+  call before anything is drawn and lists the closest printed lines. The report says what was resolved:
+    placed on the printed line after "3." (x 120.0, line_y 214.5, width 380.0) (first of 2 matches)
+  Ruled lines: when an answer sits on a printed rule (line_y or after_text) and more rules lie under it at a regular spacing (same x,
+  10 to 60 pt apart), a wrapped answer is written on each rule in turn ("follows 3 printed lines, 18.0 pt apart"), and the box grows
+  only to the last rule. Letters too tall for the spacing are made smaller within min_size_ratio, and the report says so. For lined
+  paper the PDF does not draw as lines give "line_spacing_pt": 24 (line 1 on line_y, the next one 24 pt lower, and so on).
+  "follow_lines": false turns the automatic behaviour off. A mixed line holding tall math (a fraction) gets extra room and then the
+  lines after it are OFF the rules: the report says which, so split such an answer into one answer per rule.
+  WARNING lines in the report say when the writing covers printed text, covers another answer, or leaves the page, with how many
+  points. The file is still saved: look at the page and move the answer. No warning means none was found.
+  inspect_pdf adds to each "line" the printed text it follows (after "Name:") and, for evenly spaced rules, line 2 of 4, 18 pt apart.
+    fill_pdf {"pdf": "/path/worksheet.pdf", "answers": [{"page": 1, "after_text": "3.", "text": "Because it is heavier, so it sinks."},
+              {"page": 1, "after_text": "Name:", "place": "right", "text": "my answer"}]}
 
 Spanish: send the text with its real characters, for example  "text": "¿Cómo estás? ¡Qué día! Mañana vamos al pingüino."
   The accents (á é í ó ú ü), ñ, the capitals (Á É Í Ó Ú Ñ) and the upside-down ¿ ¡ all work. They are drawn in the
