@@ -17,6 +17,7 @@ const R = require('../src/render');
 const Sheet = require('../src/sheet');
 const Y = require('../src/synth');
 const Math2 = require('../src/math');
+const Mixed = require('../src/mixed');
 const { renderPng } = require('./raster');
 const { isSealed, unseal } = require('./sealed');
 const Notability = require('../src/notability');
@@ -208,7 +209,9 @@ function createTools(config) {
   }
 
   /** The characters of a plain text with no sample (see Y.checkText), or [] for math (found by laying it out). */
-  const checkPlain = (style, a, kind) => (kind === 'math' ? { missing: [], substituted: [], composed: [] } : Y.checkText(style, a.text, { fallback: fallbackOn(a) }));
+  const checkPlain = (style, a, kind) => (kind === 'math' ? { missing: [], substituted: [], composed: [] } : Y.checkText(style, kind === 'mixed' ? Mixed.plainText(a.text) : a.text, { fallback: fallbackOn(a) })); // mixed: the words only; the math is found by laying it out
+
+  const kindOf = (a) => (a.kind === 'math' ? 'math' : a.kind === 'mixed' ? 'mixed' : 'text');
 
   /** The missing characters of a math layout, with the words they are in. */
   const mathMissing = (txt, placed) => placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(txt, ch), standIn: false }));
@@ -230,14 +233,14 @@ function createTools(config) {
     banEmDash(a.text, '');
     const { style } = await load();
     const format = formatOf(a);
-    const kind = a.kind === 'math' ? 'math' : 'text';
+    const kind = kindOf(a);
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
     const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: seedOf(a.seed).seed, auto: false };
     const chk = checkPlain(style, a, kind);
     if (chk.missing.length) return { a, format, chk, missing: chk.missing };
     const placed = Sheet.layoutBox(style, box, Object.assign(lookFrom(a), { fallbackGlyphs: fallbackOn(a) }));
-    const missing = kind === 'math' ? mathMissing(a.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(a.text, ch), standIn: false }));
-    return { a, format, chk, placed, missing, unknown: kind === 'math' ? placed.unknown : [] };
+    const missing = kind !== 'text' ? mathMissing(a.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(a.text, ch), standIn: false }));
+    return { a, format, chk, placed, missing, unknown: kind !== 'text' ? placed.unknown : [] };
   }
 
   async function renderOne(a, prepared) {
@@ -434,13 +437,13 @@ function createTools(config) {
     },
     {
       name: 'write_text',
-      description: "Writes text, or TeX-style math, in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
+      description: "Writes text, TeX-style math, or both together (kind mixed: words with $math$ inside), in the user's own handwriting and returns a picture of it (blue ink on white). It also saves a transparent SVG (and the PNG) and gives their paths; ask for format \"svg\" to get the SVG markup itself back instead of a picture. Use it to check how an answer looks before putting it on a worksheet, or to produce a handwritten snippet.",
       inputSchema: {
         type: 'object',
         required: ['text'],
         properties: {
           text: { type: 'string', description: 'What to write. For math, TeX-style: x^2, \\frac{a}{b}, \\sqrt{x}, \\int_0^1 f(x)\\,dx.' },
-          kind: { type: 'string', enum: ['text', 'math'], description: 'Default text.' },
+          kind: { type: 'string', enum: ['text', 'math', 'mixed'], description: 'Default text. math: TeX only. mixed: words with math inside $...$ (or \\(...\\)) in one answer that flows and wraps like text, e.g. "The slope is $\\frac{3}{4}$, so $y = 3x + 1$." \\$ is a dollar sign. In text, a $ is just a character.' },
           width_pt: { type: 'number', description: 'Line width in points before it wraps. Default 400.' },
           letter_height_pt: { type: 'number', description: 'Height of a lowercase letter in points. Default 9.5, which looks like handwriting on a letter-size page.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3 (blue).' },
@@ -467,7 +470,7 @@ function createTools(config) {
         type: 'object',
         required: ['items'],
         properties: {
-          items: { type: 'array', maxItems: 100, items: { type: 'object', required: ['text'], properties: { text: { type: 'string' }, kind: { type: 'string', enum: ['text', 'math'] }, seed: { type: 'integer' }, width_pt: { type: 'number' }, letter_height_pt: { type: 'number' }, ink: { type: 'string' } } } },
+          items: { type: 'array', maxItems: 100, items: { type: 'object', required: ['text'], properties: { text: { type: 'string' }, kind: { type: 'string', enum: ['text', 'math', 'mixed'] }, seed: { type: 'integer' }, width_pt: { type: 'number' }, letter_height_pt: { type: 'number' }, ink: { type: 'string' } } } },
           width_pt: { type: 'number' },
           letter_height_pt: { type: 'number' },
           ink: { type: 'string' },
@@ -582,7 +585,7 @@ function createTools(config) {
                 width: { type: 'number' },
                 height: { type: 'number', description: 'Default 28 (one line) when line_y is used, otherwise 40.' },
                 text: { type: 'string' },
-                kind: { type: 'string', enum: ['text', 'math'] },
+                kind: { type: 'string', enum: ['text', 'math', 'mixed'] },
                 letter_height_pt: { type: 'number' },
                 seed: { type: 'integer', description: 'A whole number from 0 up. Without one, each answer gets its own seed from where it sits on the page, so no two answers open alike (the report says which). Another number is another take of this answer (other examples of each letter and digit): use it to re-roll a digit that came out badly. If a digit has only one or two clean examples the report says so: another seed can give the same one again.' },
                 stagger: { type: 'boolean', description: 'true: start this answer a little in from the left (differently on every answer, the right edge stays), so answers do not all start on one vertical line.' },
@@ -633,7 +636,7 @@ function createTools(config) {
           if (!Number.isFinite(Number(ans.y)) && !Number.isFinite(Number(ans.line_y))) throw new Error(`${where}: give y (top of the box) or line_y (the printed line it sits on).`);
           const h = clampNum(ans.height, 8, 800, Number.isFinite(Number(ans.line_y)) ? 28 : 40);
           const y = Number.isFinite(Number(ans.line_y)) ? Number(ans.line_y) - h : Number(ans.y);
-          const kind = ans.kind === 'math' ? 'math' : 'text';
+          const kind = kindOf(ans);
           const box = { page, x: Number(ans.x), y, w: Number(ans.width), h, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, ans.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (ans.stagger === true || a.stagger === true) {
             // start a little in from the left, differently on every answer, and keep the right edge where it was
@@ -657,14 +660,19 @@ function createTools(config) {
           box.growTo = ans.grow === false ? box.h : Math.max(box.h, Math.min(ans.max_height > 0 ? Number(ans.max_height) : room, sizes[page].h - box.y));
           box.blocker = blocker;
           const label = `${where} (page ${page + 1})`;
-          const chk = checkPlain(style, { text: ans.text, on_missing: a.on_missing }, kind);
+          let chk;
+          try {
+            chk = checkPlain(style, { text: ans.text, on_missing: a.on_missing }, kind);
+          } catch (e) {
+            throw new Error(`${where}: ${e.message}`); // an unclosed $ in mixed text
+          }
           if (chk.missing.length) {
             problems.push({ where: label, missing: chk.missing });
             return;
           }
           const placed = Sheet.layoutBox(style, box, look);
-          if (kind === 'math' && placed.unknown.length) texProblems.push({ where: label, text: ans.text, unknown: placed.unknown });
-          const gone = kind === 'math' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
+          if (kind !== 'text' && placed.unknown.length) texProblems.push({ where: label, text: ans.text, unknown: placed.unknown });
+          const gone = kind !== 'text' ? mathMissing(ans.text, placed) : placed.missing.map((ch) => ({ ch, code: 'U+' + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'), words: wordsWith(ans.text, ch), standIn: false }));
           if (gone.length) {
             problems.push({ where: label, missing: gone });
             return;

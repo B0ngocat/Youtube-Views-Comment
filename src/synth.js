@@ -703,6 +703,67 @@
     return { strokes, width: b.maxX - b.minX, joins: strokes.joins, choices, spans: spans.map(([lo, hi]) => [lo - b.minX, hi - b.minX]) };
   }
 
+  // ---- inline boxes (mixed.js) -----------------------------------------------------------
+
+  // mixed.js puts a marker for each inline box (a piece of math, laid out already) into the text: MARK_OPEN, the box's number, MARK_CLOSE.
+  // Characters from the private use area, which nobody types.
+  const MARK_OPEN = '\uE000';
+  const MARK_CLOSE = '\uE001';
+  const MARK_RE = /\uE000(\d+)\uE001/;
+
+  const cloneStrokes = (strokes, dx) => strokes.map((s) => ({ taperStart: s.taperStart, taperEnd: s.taperEnd, pts: s.pts.map((p) => ({ x: p.x + dx, y: p.y, w: p.w })) }));
+
+  /**
+   * A "word" that holds inline boxes, with or without plain text stuck to them ("(", then a box, then ","), as one unbreakable
+   * piece in engine units like synthWord's. It takes ONE number from `rng` however many parts it has and whatever is in them,
+   * and gives each text part a stream of its own, so editing a box never changes the letters of any other word.
+   * The boxes are never changed (they are copied). Returns what synthWord returns plus up and down (x-heights of the boxes).
+   */
+  function synthCompound(style, word, rng, ctx, boxes) {
+    const seed = Math.floor(rng() * 4294967296) >>> 0;
+    const parts = word.split(/(\uE000\d+\uE001)/).filter(Boolean);
+    const strokes = [];
+    const choices = [];
+    const spans = [];
+    let x = 0;
+    let up = 0;
+    let down = 0;
+    let prev = null;
+    parts.forEach((part, j) => {
+      const m = MARK_RE.exec(part);
+      let piece = null;
+      let w = 0;
+      let t = null;
+      if (m) {
+        const box = boxes[Number(m[1])];
+        if (!box) return;
+        piece = cloneStrokes(box.strokes, 0);
+        w = box.w;
+        up = Math.max(up, box.up);
+        down = Math.max(down, box.down);
+      } else {
+        t = synthWord(style, part, G.mulberry32((seed + 7919 * (j + 1)) >>> 0), ctx, null);
+        if (!t) return;
+        piece = t.strokes;
+        w = t.width;
+      }
+      // a mark of punctuation stays close to the box before it, anything else gets the gap of a letter pair
+      if (prev) x += prev.math && !m && /^[.,;:!?)\]]/.test(part) ? 0.08 : 0.25;
+      if (t) {
+        for (const c of t.choices) choices.push(c);
+        for (const sp of t.spans) spans.push([sp[0] + x, sp[1] + x]);
+      }
+      for (const s of piece) {
+        for (const p of s.pts) p.x += x;
+        strokes.push(s);
+      }
+      x += w;
+      prev = { math: !!m };
+    });
+    if (!strokes.length) return null;
+    return { strokes, width: x, joins: [], choices, spans, up, down };
+  }
+
   // ---- page layout ----------------------------------------------------------------------
 
   /**
@@ -734,6 +795,13 @@
     const strokesOut = [];
     const wordsOut = [];
     const baselines = [];
+    // opts.inline (mixed.js): boxes of laid-out math. Which line each stroke and word is on, and how far each line's boxes reach up and down
+    // (x-heights), so lines holding tall boxes can be given room once all words are placed
+    const boxes = o.inline || null;
+    const strokeLine = [];
+    const wordLine = [];
+    const reachUp = [];
+    const reachDown = [];
     let line = 0;
     let x = margin;
     const pickSlope = () => (R ? Math.tan(R.slopeSd * k * G.gaussian(rng)) : (rng() * 2 - 1) * 0.006 * o.messiness);
@@ -766,9 +834,10 @@
       for (const word of words) {
         const pinsForWord = o.pins ? o.pins[wordNo] : null;
         wordNo++;
-        const w = synthWord(style, word, rng, ctx, pinsForWord);
+        const w = boxes && word.includes(MARK_OPEN) ? synthCompound(style, word, rng, ctx, boxes) : synthWord(style, word, rng, ctx, pinsForWord);
         if (!w) {
           wordsOut.push(null); // keeps the numbering of words, so pins stay lined up
+          wordLine.push(line);
           continue;
         }
         // to pixels, with slant (and, from the writer's rhythm, this word's own size and slant)
@@ -787,6 +856,10 @@
         const b = bounds(pxStrokes);
         const wpx = b.maxX - b.minX;
         if (x > margin && x + wpx > o.width - margin) newLine();
+        if (w.up !== undefined) {
+          reachUp[line] = Math.max(reachUp[line] || 0, w.up * sc);
+          reachDown[line] = Math.max(reachDown[line] || 0, w.down * sc);
+        }
         if (R) wordOff = ar(wordOff / xh, R.baseRho, R.baseSd * k) * xh;
         else wordOff = wordOff * 0.7 + (rng() * 2 - 1) * 0.035 * xh * o.messiness;
         // opts.bounce: a small up and down, on top of the writer's own drift: a slow wave along the line, each word a little above or
@@ -806,10 +879,12 @@
             p.x += dx;
           }
           strokesOut.push(s);
+          strokeLine.push(line);
         }
+        wordLine.push(line);
         // where each letter ended up on the page, so a tap can be traced back to the example that drew it
         wordsOut.push({
-          text: word,
+          text: boxes ? word.replace(/\uE000(\d+)\uE001/g, (_, n) => '$' + (boxes[Number(n)] ? boxes[Number(n)].tex : '') + '$') : word,
           choices: w.choices.map((c) => c.unit),
           ids: w.choices.map((c) => c.unit.id),
           spans: w.spans.map(([lo, hi]) => [(lo + 0.5 * tanW) * xh * sc + dx, (hi + 0.5 * tanW) * xh * sc + dx]),
@@ -823,11 +898,56 @@
       }
     });
 
-    const height = baselines[baselines.length - 1] + 1.5 * xh + margin * 0.5;
-    return { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
+    let height = baselines[baselines.length - 1] + 1.5 * xh + margin * 0.5;
+    // Lines with tall boxes (a fraction, an integral with limits) get room so they do not touch the lines around them. A line with
+    // nothing beyond the usual reach (ascenders up to 1.9 x-heights, descenders down to 0.9) gets none, so plain text is unchanged.
+    const NORMAL_UP = 1.9;
+    const NORMAL_DOWN = 0.9;
+    const GAP = 0.35;
+    let lineInk = null;
+    if (reachUp.length || reachDown.length) {
+      const shift = [];
+      let total = 0;
+      for (let i = 0; i < baselines.length; i++) {
+        const tallUp = (reachUp[i] || 0) > NORMAL_UP;
+        const tallDownAbove = i > 0 && (reachDown[i - 1] || 0) > NORMAL_DOWN;
+        if (i === 0) total += tallUp ? Math.max(0, reachUp[0] - 1.7) * xh : 0;
+        else if (tallUp || tallDownAbove) {
+          const need = Math.max(reachDown[i - 1] || 0, NORMAL_DOWN) + Math.max(reachUp[i] || 0, NORMAL_UP) + GAP;
+          total += Math.max(0, need * xh - lineH);
+        }
+        shift.push(total);
+      }
+      strokesOut.forEach((s, i) => {
+        const d = shift[strokeLine[i]];
+        if (d) for (const p of s.pts) p.y += d;
+      });
+      wordsOut.forEach((wd, i) => {
+        const d = shift[wordLine[i]];
+        if (wd && d) {
+          wd.top += d;
+          wd.bottom += d;
+        }
+      });
+      baselines.forEach((b, i) => (baselines[i] = b + shift[i]));
+      const last = baselines.length - 1;
+      height += shift[last] + Math.max(0, (reachDown[last] || 0) - 1.3) * xh;
+      // what each line really covers (px), and whether it holds something tall: for a caller (or a test) checking lines do not touch
+      lineInk = baselines.map((_, i) => ({ top: Infinity, bottom: -Infinity, tall: (reachUp[i] || 0) > NORMAL_UP || (reachDown[i] || 0) > NORMAL_DOWN }));
+      strokesOut.forEach((s, i) => {
+        const L = lineInk[strokeLine[i]];
+        for (const p of s.pts) {
+          if (p.y < L.top) L.top = p.y;
+          if (p.y > L.bottom) L.bottom = p.y;
+        }
+      });
+    }
+    const result = { width: o.width, height, strokes: strokesOut, words: wordsOut, missing: Array.from(ctx.missing), substituted: Array.from(ctx.substituted), baselines, xh, lineHeightPx: lineH };
+    if (lineInk) result.lineInk = lineInk;
+    return result;
   }
 
-  const api = { layout, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
+  const api = { layout, MARK_OPEN, MARK_CLOSE, synthWord, chooseUnits, assemble, deform, checkText, glyphUnit, cutReturnStroke, accentStrokes };
   root.HW = root.HW || {};
   root.HW.synth = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

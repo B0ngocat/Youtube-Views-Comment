@@ -3,13 +3,15 @@
  * fitting an answer into the box it was given, and writing the ink into the PDF. The screen part is sheetui.js.
  *
  * Boxes are in PDF points, from the top-left corner of the page, the way a person looks at it:
- *   {page, x, y, w, h, text, kind: 'text' | 'math', xhPt, seed, auto}
+ *   {page, x, y, w, h, text, kind: 'text' | 'math' | 'mixed', xhPt, seed, auto}
+ * (mixed: words with $math$ inside, see mixed.js)
  */
 (function (root) {
   'use strict';
 
   const Y = typeof require !== 'undefined' ? require('./synth') : root.HW.synth;
   const M = typeof require !== 'undefined' ? require('./math') : root.HW.math;
+  const X = typeof require !== 'undefined' ? require('./mixed') : root.HW.mixed;
   const R = typeof require !== 'undefined' ? require('./render') : root.HW.render;
 
   const ENGINE_XH = 34; // the engine lays out at this x-height in its own pixels; everything is scaled to points afterwards
@@ -48,7 +50,7 @@
   function layoutBox(style, box, look) {
     const text = String(box.text || '');
     const wantXh = box.xhPt || DEFAULT_XH_PT;
-    const gen = box.kind === 'math' ? M : Y;
+    const gen = box.kind === 'math' ? M : box.kind === 'mixed' ? X : Y;
     const pad = 0.1 * ENGINE_XH;
     const floor = box.minRatio ? Math.max(MIN_XH_PT, wantXh * box.minRatio) : MIN_XH_PT;
     const explicitLines = text.split('\n').length;

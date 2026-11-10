@@ -726,6 +726,30 @@
     };
   }
 
+  /**
+   * One TeX fragment as an inline box, for mixed.js: engine units (x from 0, y up from the baseline, x-height 1), no slant,
+   * no page. Its own random stream is `opts.seed`, so a fragment never disturbs the text around it. `lines` is how many
+   * rows the TeX had (a box is one row; the caller decides what to do with more).
+   * opts: {seed, messiness, variation, wordReuse}. Returns {strokes, w, up, down, lines, missing, unknown, standIns}.
+   */
+  function inline(style, tex, opts) {
+    const o = Object.assign({ messiness: 0.3, variation: 0.4, seed: 1 }, opts || {});
+    const E = createEngine(style, G.mulberry32(o.seed >>> 0), o);
+    const parsed = parse(tex);
+    const nodes = parsed.length === 1 ? parsed[0] : [];
+    const box = row(E, nodes, 1);
+    return {
+      strokes: box.strokes,
+      w: box.w,
+      up: box.up,
+      down: box.down,
+      lines: parsed.length,
+      missing: Array.from(E.ctx.missing),
+      unknown: parsed.unknown,
+      standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])),
+    };
+  }
+
   /** The TeX that works, as plain text for an error message or a help page. */
   function supportedCommands() {
     const sym = Object.entries(COMMANDS).map(([k, v]) => `\\${k} ${v}`);
@@ -760,7 +784,7 @@
       .map((x) => x.c);
   }
 
-  const api = { layout, parse, tokenize, supportedCommands, suggestCommands, COMMANDS };
+  const api = { layout, inline, parse, tokenize, supportedCommands, suggestCommands, COMMANDS };
   root.HW = root.HW || {};
   root.HW.math = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

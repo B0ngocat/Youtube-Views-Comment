@@ -69,7 +69,7 @@ As a web address instead of a program (add to the command above)
 
 Tools
   handwriting_status   is the handwriting loaded, which characters have no sample
-  write_text           {text, kind: "text"|"math", width_pt, letter_height_pt, ink, seed, format, include_base64}
+  write_text           {text, kind: "text"|"math"|"mixed" (words with $math$ inside, one answer), width_pt, letter_height_pt, ink, seed, format, include_base64}
                        format "png" (default): a PNG as MCP image content (include_base64 also gives it as text)
                        format "svg": the SVG markup itself as text, transparent, sized in points
                        format "both": both. Start with --format svg to make SVG the default.

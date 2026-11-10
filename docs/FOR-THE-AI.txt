@@ -93,6 +93,16 @@ Math TeX: only the commands in handwriting_status {"math_help": true} work (arro
   primes y' f'', Greek, \frac \sqrt \int \sum ...). Anything else is refused with a short message and suggestions, never written out
   as a word. Symbols the person never wrote are drawn as clean stand-ins and the reply says so; Greek letters need the person's own.
 
+Words and math together: "kind": "mixed" (write_text, write_batch, and each fill_pdf answer). Put the math between single dollar signs
+  inside ordinary sentences, so a worked answer is ONE answer instead of boxes you line up by hand:
+    {"text": "The slope is $\\frac{3}{4}$, so $y = 3x + 1$.", "kind": "mixed"}
+  $...$ and \\(...\\) are math (the same TeX as math kind); \\$ is a dollar sign. The words flow and wrap like text; each piece of math is
+  one unbreakable piece on the same baseline, same size and slant. A comma or full stop typed right after the closing $ stays against
+  the math. A line holding a fraction or an integral with limits gets extra room; other lines are spaced as usual. Math cannot contain a
+  line break. An unclosed $ is an error that says where (nothing is guessed). A missing letter, a missing digit in the math or an unknown
+  TeX command stops the call, as above. In kind "text" a $ is just a character, so use "mixed" whenever there is math in the sentence.
+  With a digit in the math, on_missing "fallback" cannot help: digits are never faked.
+
 Up and down: every line of writing slides a little above and below the line (a slow wave, each word a little up or down, a slight bounce
   from letter to letter), so it does not sit on a typeset baseline. "bounce" (0 to 3, default 1.5) on write_text, write_batch and fill_pdf
   changes it; 0 is straight across. It is the person's chosen amount: do not turn it to 0 to make the page look tidier.
