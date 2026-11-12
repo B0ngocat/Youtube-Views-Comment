@@ -99,6 +99,9 @@
           out.push({ k: 'ch', v: s[i + 1] }); // \% \$ \{ and so on: the character itself
           i += 2;
         }
+      } else if (c === '&') {
+        out.push({ k: 'align' }); // f(x) &= ... \\ &= ...: the rows line up at their & (the = signs under each other)
+        i++;
       } else if (c === '{' || c === '}' || c === '^' || c === '_') {
         out.push({ k: c });
         i++;
@@ -177,6 +180,9 @@
       if (t.k === 'gap') {
         i++;
         return { t: 'gap', w: t.v };
+      } else if (t.k === 'align') {
+        i++;
+        return { t: 'align' };
       } else if (t.k === 'text') {
         i++;
         n = { t: 'text', s: t.v };
@@ -422,7 +428,11 @@
       return { w: natural.w * sx, up: wantUp, down: wantDown, strokes };
     }
 
-    return { ctx, written, drawn, standIn, symbol, fence, PEN, line };
+    // the writer's own room round =, + and brackets (style.mathGaps), with a little hand-to-hand variation from a stream of its own,
+    // so the letters drawn are the same as without it (the layout's rng is not touched)
+    const gaps = style.mathGaps || null;
+    const grng = gaps ? G.mulberry32(((Number(opts.seed) || 1) ^ 0x5bd1e995) >>> 0) : null;
+    return { ctx, written, drawn, standIn, symbol, fence, PEN, line, gaps, grng };
   }
 
   function layoutNodes(E, nodes, sc) {
@@ -446,18 +456,21 @@
         if (up > 1.4 * sc || down > 0.5 * sc) {
           const a = E.fence(items[o].c, sc, up, down);
           const b = E.fence(it.c, sc, up, down);
-          if (a) items[o].box = a;
-          if (b) it.box = b;
+          // a stretched bracket keeps its exponent: (4x^2 - x)^{1/5} lost the 1/5 when the brackets grew around the x^2
+          if (a) items[o].box = items[o].box.parts ? attachScripts(E, items[o].n, a, sc, items[o].box.parts) : a;
+          if (b) it.box = it.box.parts ? attachScripts(E, it.n, b, sc, it.box.parts) : b;
         }
       }
     });
     return items;
   }
 
-  function gapBetween(a, b, atStart) {
+  function gapBetween(a, b, atStart, E) {
     if (!a) return 0;
     const unary = b.c === '-' && (atStart || a.kind === 'open' || a.kind === 'rel' || a.kind === 'bin');
     if (a.kind === 'gap' || b.kind === 'gap') return 0; // a space that was asked for is the whole gap
+    const own = E && E.gaps ? ownGap(E, a, b, unary) : null;
+    if (own !== null) return own;
     if (a.kind === 'rel' || b.kind === 'rel') return 0.7;
     if (a.kind === 'bin' && !(a.unary)) return 0.45;
     if (b.kind === 'bin' && !unary) return 0.45;
@@ -470,46 +483,81 @@
     return 0.12;
   }
 
+  /**
+   * The gap the writer leaves between two items, when their own equations say (style.mathGaps), else null for the fixed numbers.
+   * Each gap varies by about +-15% (a hand never spaces twice the same).
+   */
+  function ownGap(E, a, b, unary) {
+    const g = E.gaps;
+    let v = null;
+    if ((a.kind === 'rel' || b.kind === 'rel') && g.rel !== undefined) v = g.rel;
+    else if (((a.kind === 'bin' && !a.unary) || (b.kind === 'bin' && !unary)) && g.bin !== undefined) v = g.bin;
+    else if ((a.kind === 'open' || b.kind === 'close') && g.inner !== undefined) v = g.inner;
+    else if (b.kind === 'open' && a.kind !== 'bin' && a.kind !== 'rel' && g.outer !== undefined) v = g.outer;
+    if (v === null) return null;
+    return v * (1 + 0.3 * (E.grng() - 0.5));
+  }
+
   /** Lay items left to right on one baseline. Returns a box. */
   function row(E, nodes, sc) {
-    const items = layoutNodes(E, nodes, sc);
+    const all = layoutNodes(E, nodes, sc);
+    // an & takes no room and is not a neighbour: it only says where this row lines up with the others (alignX: the left edge of
+    // what follows it, after its gap)
+    const marks = new Set();
+    const items = [];
+    for (const it of all) {
+      if (it.kind === 'align') marks.add(items.length);
+      else items.push(it);
+    }
     const out = [];
     let x = 0;
     let up = 0;
     let down = 0;
+    let alignX;
     items.forEach((it, i) => {
       const prev = items[i - 1];
       if (prev && prev.kind === 'bin' && prev.c === '-' && (i === 1 || (items[i - 2] && ['open', 'rel', 'bin'].includes(items[i - 2].kind)))) prev.unary = true;
-      x += gapBetween(prev, it, i === 0) * sc;
+      x += gapBetween(prev, it, i === 0, E) * sc;
+      if (marks.has(i) && alignX === undefined) alignX = x;
       place(out, it.box, x, it.dy || 0);
       x += it.box.w;
       up = Math.max(up, it.box.up + (it.dy || 0));
       down = Math.max(down, it.box.down - (it.dy || 0));
     });
-    return { w: x, up, down, strokes: out };
+    if (marks.has(items.length) && alignX === undefined) alignX = x; // an & at the very end
+    return alignX === undefined ? { w: x, up, down, strokes: out } : { w: x, up, down, strokes: out, alignX };
   }
 
-  function attachScripts(E, n, box, sc) {
+  /**
+   * A box with its superscript, subscript and primes. `pre` is the `parts` of an earlier call for the same node: the scripts as they
+   * were drawn then, placed again on a new base (a bracket that has since been stretched), so nothing is drawn twice.
+   */
+  function attachScripts(E, n, box, sc, pre) {
     if (!n.sup && !n.sub && !n.primes) return box;
     const out = [];
     place(out, box, 0, 0);
     const ssc = sc * 0.7;
-    const sup = n.sup ? row(E, n.sup, ssc) : null;
-    const sub = n.sub ? row(E, n.sub, ssc) : null;
+    const sup = pre ? pre.sup : n.sup ? row(E, n.sup, ssc) : null;
+    const sub = pre ? pre.sub : n.sub ? row(E, n.sub, ssc) : null;
+    const primes = pre ? pre.primes : [];
     let x = box.w + 0.05 * sc;
     let w = box.w;
     let up = box.up;
     let down = box.down;
     if (n.primes) {
-      // y' and f'': a short slanted stroke just over the top right of the letter, whatever height the writer's own apostrophe has
+      // y' and f'': a slanted stroke over the top right of the letter, whatever height the writer's own apostrophe has. Clear of the
+      // letter and of each other, and long enough to read as a prime: short ticks close together read as the dot of an i ("f''" as "fi").
       const top = Math.max(box.up, sc); // the top of the letter, and at least the x-height
+      const foot = Math.max(0.95 * sc, top - 0.42 * sc);
+      x += 0.08 * sc;
       for (let k = 0; k < n.primes; k++) {
-        const pr = E.drawn([[[0.09, 0.46], [0.03, 0.0]]], sc);
-        place(out, pr, x, top - 0.26 * sc);
-        x += pr.w + 0.08 * sc;
+        const pr = pre ? primes[k] : E.drawn([[[0.1, 0.62], [0.02, 0.0]]], sc);
+        if (!pre) primes.push(pr);
+        place(out, pr, x, foot);
+        x += pr.w + 0.16 * sc;
         w = Math.max(w, x);
       }
-      up = Math.max(up, top + 0.22 * sc);
+      up = Math.max(up, foot + 0.64 * sc);
       x += 0.02 * sc;
     }
     if (sup) {
@@ -524,7 +572,7 @@
       w = Math.max(w, x + sub.w);
       down = Math.max(down, -base + sub.down);
     }
-    return { w, up, down, strokes: out };
+    return { w, up, down, strokes: out, parts: { sup, sub, primes } };
   }
 
   function layoutAtom(E, n, sc) {
@@ -570,6 +618,7 @@
       return { kind: 'run', box: attachScripts(E, n, { w, up: y + 0.25 * sc, down: inner.down, strokes: out }, sc) };
     }
     if (n.t === 'gap') return { kind: 'gap', box: { w: n.w * sc, up: 0, down: 0, strokes: [] } };
+    if (n.t === 'align') return { kind: 'align', box: { w: 0, up: 0, down: 0, strokes: [] } };
     if (n.t === 'text') {
       // plain text inside math: each word written as a word, with word gaps between (and no operator spacing in "-int")
       const out = [];
@@ -598,7 +647,7 @@
       let box = E.symbol(c, sc);
       if (!box) return null;
       box = attachScripts(E, n, box, sc);
-      return { kind, c, box };
+      return { kind, c, box, n };
     }
     if (n.t === 'group') {
       const box = attachScripts(E, n, row(E, n.a, sc), sc);
@@ -704,19 +753,33 @@
     const strokes = [];
     let base = margin;
     let widest = 0;
+    // rows with an & line up there (the = of each step under the one before), the others start at the margin
+    const aligned = lines.filter((ln) => ln.alignX !== undefined);
+    const target = aligned.length > 1 ? Math.max(...aligned.map((ln) => ln.alignX)) : 0;
+    // opts.hand: rows placed by hand, not by a ruler. Each row after the first starts (or lines up) a little off, and leans a little.
+    // From a stream of its own, so the letters are the same as without it.
+    const hrng = o.hand ? G.mulberry32(((Number(o.seed) || 1) ^ 0x2c1b3c6d) >>> 0) : null;
     lines.forEach((ln, i) => {
       const up = Math.max(ln.up, 1.7);
       base = i === 0 ? margin + up * xh : base + Math.max(o.lineHeight * xh, (lines[i - 1].down + up + 0.7) * xh);
       baselines.push(base);
       const drift = (rng() * 2 - 1) * 0.02 * o.messiness * xh;
+      const lined = aligned.length > 1 && ln.alignX !== undefined;
+      let dx = lined ? target - ln.alignX : 0;
+      let tilt = 0;
+      if (hrng) {
+        const off = (hrng() * 2 - 1) * (lined ? 0.25 : 0.4);
+        if (i > 0) dx = Math.max(dx === 0 ? 0 : -0.25, dx + off);
+        tilt = 0.009 * G.gaussian(hrng); // about half a degree
+      }
       for (const s of ln.strokes) {
         strokes.push({
           taperStart: s.taperStart,
           taperEnd: s.taperEnd,
-          pts: s.pts.map((p) => ({ x: margin + (p.x + p.y * tanS) * xh, y: base - p.y * xh + drift, w: p.w })),
+          pts: s.pts.map((p) => ({ x: margin + (p.x + dx + p.y * tanS) * xh, y: base - (p.y + tilt * p.x) * xh + drift, w: p.w })),
         });
       }
-      widest = Math.max(widest, ln.w + Math.max(0, ln.up) * Math.abs(tanS));
+      widest = Math.max(widest, dx + ln.w + Math.max(0, ln.up) * Math.abs(tanS));
     });
     const last = lines[lines.length - 1] || { down: 0 };
     const height = (baselines.length ? baselines[baselines.length - 1] : margin) + (Math.max(last.down, 0.8) + 0.8) * xh + margin * 0.5;
@@ -768,7 +831,7 @@
       'Symbols: ' + sym.join('  '),
       'Words (written as words): ' + Array.from(WORDS).map((w) => '\\' + w).join(' '),
       'Marks over a letter: ' + Object.keys(OVER).map((w) => '\\' + w + '{x}').join(' ') + "   Primes: y' f'' \\prime",
-      'Structure: x^2 x_1 x_i^2  \\frac{a}{b} \\dfrac \\sqrt{x} \\sqrt[3]{x} sqrt(x) cubert(x)  \\int \\sum \\prod with _ and ^  \\lim_{x \\to 0}  \\left( \\right)  \\text{words} \\mathrm{} \\operatorname{}  \\, \\; \\: \\quad \\qquad \\  and a line break (\\\\ or a new line)',
+      'Structure: x^2 x_1 x_i^2  \\frac{a}{b} \\dfrac \\sqrt{x} \\sqrt[3]{x} sqrt(x) cubert(x)  \\int \\sum \\prod with _ and ^  \\lim_{x \\to 0}  \\left( \\right)  \\text{words} \\mathrm{} \\operatorname{}  \\, \\; \\: \\quad \\qquad \\  and a line break (\\\\ or a new line), with & where the rows line up (f(x) &= ... \\\\ &= ...)',
     ].join('\n');
   }
 

@@ -893,6 +893,7 @@
     // never past 0.6: a point further from its digits than that reads as two numbers
     const dotClearance = pairClearance((a, b) => (a === '.' && isDigit(b)) || (b === '.' && isDigit(a)), 0.6);
 
+    const mathGaps = measureMathGaps(aligned);
     const liftGap = gaps.length ? Math.min(0.5, Math.max(-0.05, A.median(gaps))) : 0.1;
     const unitById = new Map();
     for (const list of allByChar.values()) for (const u of list) unitById.set(u.id, u);
@@ -917,6 +918,7 @@
       clearance,
       digitClearance,
       dotClearance,
+      mathGaps, // how far apart this writer puts =, + and brackets from their neighbours (math.js spaces equations with it)
       specks, // characters the writer wrote too small to read (left out of the pools)
       rhythm: computeRhythm(words, aligned),
       slant: slants.length ? A.median(slants) : 0,
@@ -928,6 +930,40 @@
       suspect,
       count: aligned.filter((w) => w.ok).length,
     };
+  }
+
+  /**
+   * How much room this writer leaves round the symbols of an equation, from the equations they wrote in the math rounds
+   * (x=2, y=mx+b, 2x+3=11, (x+1), f(x)): the gap between the ink boxes of neighbouring symbols, in x-heights, median of each kind.
+   * rel: next to = < > ...; bin: next to a + or - between two things (not a leading minus); inner: inside a bracket, between it and
+   * what it holds; outer: before an opening bracket ("f(", "3("). A kind with fewer than 6 pairs is left out (math.js keeps its
+   * own number for it). Clamped, so one odd word cannot spread an equation across the page or glue it shut.
+   * Measured on one real page of worked chain-rule steps: about 1.15 x-heights round =, 0.45 inside brackets; math.js used 0.7 and 0.05.
+   */
+  function measureMathGaps(aligned) {
+    const REL = '=<>≤≥≠≈';
+    const BIN = '+-×±÷';
+    const OPEN = '([';
+    const CLOSE = ')]';
+    const pairs = { rel: [], bin: [], inner: [], outer: [] };
+    for (const w of aligned) {
+      if (!w.ok || !w.units || w.units.length < 2) continue;
+      const us = w.units;
+      for (let i = 1; i < us.length; i++) {
+        const p = us[i - 1];
+        const u = us[i];
+        if (!p.box || !u.box) continue;
+        const g = u.box.minX - p.box.maxX;
+        if (REL.includes(p.ch) || REL.includes(u.ch)) pairs.rel.push(g);
+        else if ((BIN.includes(p.ch) && i - 1 > 0) || (BIN.includes(u.ch) && i < us.length - 1 && !OPEN.includes(p.ch))) pairs.bin.push(g);
+        else if (OPEN.includes(p.ch) || CLOSE.includes(u.ch)) pairs.inner.push(g);
+        else if (OPEN.includes(u.ch)) pairs.outer.push(g);
+      }
+    }
+    const LIM = { rel: [0.35, 1.6], bin: [0.2, 1.2], inner: [0.02, 0.6], outer: [0.05, 0.9] };
+    const out = {};
+    for (const k of Object.keys(pairs)) if (pairs[k].length >= 6) out[k] = Math.min(LIM[k][1], Math.max(LIM[k][0], A.median(pairs[k])));
+    return Object.keys(out).length ? out : null;
   }
 
   /** Characters (from `text`) we have no sample for. */

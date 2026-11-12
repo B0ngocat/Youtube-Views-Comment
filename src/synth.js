@@ -973,6 +973,7 @@
     const reachDown = [];
     let line = 0;
     let x = margin;
+    let lineStart = margin; // where the current line began (a word wider than the line still goes on it, never on an empty line of its own)
     const pickSlope = () => (R ? Math.tan(R.slopeSd * k * G.gaussian(rng)) : (rng() * 2 - 1) * 0.006 * o.messiness);
     let slope = pickSlope();
     let wordOff = 0;
@@ -985,9 +986,12 @@
     // AR(1): next = rho * previous + noise, so drift is smooth along the line instead of jumping
     const ar = (prev, rho, sd) => rho * prev + Math.sqrt(1 - rho * rho) * sd * G.gaussian(rng);
 
+    // opts.hand: a line written by hand does not start exactly under the one before. Its own stream, so the letters do not change.
+    const hrng = o.hand ? G.mulberry32(((Number(o.seed) || 1) ^ 0x2c1b3c6d) >>> 0) : null;
     const newLine = () => {
       line++;
-      x = margin;
+      x = margin + (hrng ? (hrng() * 2 - 1) * 0.35 * xh : 0);
+      lineStart = x;
       slope = pickSlope();
       wordOff = 0;
       liftState = 0;
@@ -1026,7 +1030,7 @@
         }));
         const b = bounds(pxStrokes);
         const wpx = b.maxX - b.minX;
-        if (x > margin && x + wpx > o.width - margin) newLine();
+        if (x > lineStart && x + wpx > o.width - margin) newLine();
         if (w.up !== undefined) {
           reachUp[line] = Math.max(reachUp[line] || 0, w.up * sc);
           reachDown[line] = Math.max(reachDown[line] || 0, w.down * sc);

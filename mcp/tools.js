@@ -188,7 +188,14 @@ function createTools(config) {
     wordReuse: clampNum(a.word_reuse, 0, 1, LOOK.wordReuse),
     slantDelta: LOOK.slantDelta,
     wordSpacing: LOOK.wordSpacing,
+    hand: a.hand !== false, // rows of math placed by hand: each starts (or lines up at its &) a little off and leans a little
   });
+  // The person's own letter height and pen width, when the server was told them (--letter-pt / --pen-pt, HANDWRITING_LETTER_PT /
+  // HANDWRITING_PEN_PT): every call then uses them unless it says otherwise. The pen is in points and does not shrink with the
+  // letters: a person who writes small does not use a thinner pen, and neither does an answer squeezed into its box.
+  const XH0 = clampNum(config.letterPt, 4, 40, Sheet.DEFAULT_XH_PT);
+  const PEN0 = clampNum(config.penPt, 0.2, 5, Sheet.PEN_PER_XH * Sheet.DEFAULT_XH_PT);
+  const penLook = (a) => ({ penPt: clampNum(a.pen_pt, 0.2, 5, PEN0) });
   // An em dash in a piece of writing is refused: it is the first thing that makes a fill read as machine text, and some assignments ban it outright.
   const EM_DASH = /\u2014/;
   function banEmDash(txt, where) {
@@ -292,7 +299,7 @@ function createTools(config) {
     const format = formatOf(a);
     const kind = kindOf(a);
     // a Notability page is 537.6 units wide (a 612 pt page) with 512 drawable: the text has to fit in about 460 of those units
-    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT), seed: seedOf(a.seed).seed, auto: false };
+    const box = { page: 0, x: 0, y: 0, w: clampNum(a.width_pt, 40, 1200, format === 'note' ? 520 : 400), h: 1e4, text: a.text, kind, xhPt: clampNum(a.letter_height_pt, 4, 40, XH0), seed: seedOf(a.seed).seed, auto: false };
     if (a.redo !== undefined) box.redo = redoOf(a.redo, '', kind);
     const chk = checkPlain(style, a, kind);
     if (chk.missing.length) return { a, format, chk, missing: chk.missing };
@@ -310,7 +317,7 @@ function createTools(config) {
     const base = safeName(a.text.slice(0, 24)) + '-' + Date.now().toString(36) + (counter++).toString(36);
     const pt = (v) => Math.round(v * placed.K * 100) / 100;
     // the SVG is sized in points, so it comes out at the letter height that was asked for when it is placed at its own size
-    const svg = R.toSVG(placed.layout, { ink, pen: 1, constant: true, paper: 'none' }).replace(/ width="[^"]*" height="[^"]*"/, ` width="${pt(placed.layout.width)}pt" height="${pt(Math.ceil(placed.layout.height))}pt"`);
+    const svg = R.toSVG(placed.layout, { ink, pen: Sheet.penFor(placed, penLook(a)), constant: true, paper: 'none' }).replace(/ width="[^"]*" height="[^"]*"/, ` width="${pt(placed.layout.width)}pt" height="${pt(Math.ceil(placed.layout.height))}pt"`);
     const svgPath = outPath(base + '.svg');
     fs.writeFileSync(svgPath, svg);
     let png = null;
@@ -324,7 +331,7 @@ function createTools(config) {
       fs.writeFileSync(notePath, note);
     }
     if (format === 'png' || format === 'both') {
-      const d = R.layoutToPath(placed.layout, 1, true);
+      const d = R.layoutToPath(placed.layout, Sheet.penFor(placed, penLook(a)), true);
       const rgb = Sheet.hexToRgb(ink).map((v) => Math.round(v * 255));
       png = renderPng(d, placed.layout.width, Math.ceil(placed.layout.height), placed.K * 4, rgb).png; // 4 pixels per point
       pngPath = outPath(base + '.png');
@@ -415,7 +422,7 @@ function createTools(config) {
       if (!(page >= 0 && page < sizes.length)) throw new Error(`${where}: page ${mk.page} does not exist (the PDF has ${sizes.length}).`);
       const sz = sizes[page];
       const num = (k) => Number.isFinite(Number(mk[k])) && mk[k] !== null && mk[k] !== undefined && mk[k] !== '';
-      const xh = mk.letter_height_pt ? clampNum(mk.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : Sheet.DEFAULT_XH_PT;
+      const xh = mk.letter_height_pt ? clampNum(mk.letter_height_pt, 4, 40, XH0) : XH0;
       const inPage = (x, y, w, h) => x >= -1 && y >= -1 && x + w <= sz.w + 1 && y + h <= sz.h + 1;
       let geo;
       let target;
@@ -485,7 +492,7 @@ function createTools(config) {
    */
   function placeFor(ans, where, printed, size, page) {
     const num = (v) => given(v) && Number.isFinite(Number(v));
-    const xhPt = ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : Sheet.DEFAULT_XH_PT;
+    const xhPt = ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, XH0) : XH0;
     const pg = printed && printed.find((p) => p.page === page + 1);
     const anchored = given(ans.after_text);
     let r = null;
@@ -557,6 +564,7 @@ function createTools(config) {
         const chk = Y.checkText(style, a.check || 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()+-=/\'"', { fallback: false });
         const letters = [...style.byChar.values()].reduce((n, a) => n + a.length, 0); // style.count is the number of words that aligned, not letters
         const lines = [`Handwriting loaded: ${words} recorded words, ${letters} letters and symbols cut out of them (${style.byChar.size} different characters).`];
+        lines.push(`Defaults: letter height ${XH0} pt, pen ${Math.round(PEN0 * 100) / 100} pt${config.letterPt || config.penPt ? ' (set when the server was started)' : ' (the built-in ones: compare with a page the person wrote by hand and pass letter_height_pt and pen_pt if theirs differ)'}.`);
         if (chk.missing.length) {
           lines.push('No sample for: ' + chk.missing.map((m) => m.ch + (m.speck ? ' (written too small to read)' : '')).join(' '));
           const drawable = chk.missing.filter((m) => m.standIn);
@@ -573,10 +581,12 @@ function createTools(config) {
         type: 'object',
         required: ['text'],
         properties: {
-          text: { type: 'string', description: 'What to write. For math, TeX-style: x^2, \\frac{a}{b}, \\sqrt{x}, \\int_0^1 f(x)\\,dx.' },
+          text: { type: 'string', description: 'What to write. For math, TeX-style: x^2, \\frac{a}{b}, \\sqrt{x}, \\int_0^1 f(x)\\,dx. Worked steps: one row per step (\\\\) with & before each = so they line up: f(x) &= 3x^2 \\\\ f\'(x) &= 6x.' },
           kind: { type: 'string', enum: ['text', 'math', 'mixed'], description: 'Default text. math: TeX only. mixed: words with math inside $...$ (or \\(...\\)) in one answer that flows and wraps like text, e.g. "The slope is $\\frac{3}{4}$, so $y = 3x + 1$." \\$ is a dollar sign. In text, a $ is just a character.' },
           width_pt: { type: 'number', description: 'Line width in points before it wraps. Default 400.' },
-          letter_height_pt: { type: 'number', description: 'Height of a lowercase letter in points. Default 9.5, which looks like handwriting on a letter-size page.' },
+          letter_height_pt: { type: 'number', description: 'Height of a lowercase letter in points. Default 9.5 (or what the server was started with, --letter-pt), which looks like handwriting on a letter-size page. Match the person: on a page they wrote, measure the height of an x or an a.' },
+          pen_pt: { type: 'number', description: 'The pen width in points, 0.2 to 5. It stays the same whatever the letter height (a real pen does not get thinner when someone writes smaller). Default 1.14, or what the server was started with (--pen-pt). Match the person: measure the width of their strokes on a page they wrote.' },
+          hand: { type: 'boolean', description: 'Math rows placed by hand (default true): each row after the first starts a little off (or lines up at its & a little off) and leans a little, as a person writes steps under each other. false: ruler straight, as before.' },
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3 (blue).' },
           seed: { type: 'integer', description: 'A whole number from 0 up (default 1). Another number gives another take of the same text: other examples of each letter and digit are chosen, so use it to re-roll a digit that came out badly. The same number always gives the same writing.' },
           neatness: { type: 'number', description: '0 to 1, higher is easier to read. Default 0.5.' },
@@ -608,6 +618,8 @@ function createTools(config) {
           ink: { type: 'string' },
           neatness: { type: 'number' },
           bounce: { type: 'number' },
+          pen_pt: { type: 'number', description: 'The pen width in points; see write_text.' },
+          hand: { type: 'boolean' },
           messiness: { type: 'number' },
           format: { type: 'string', enum: ['png', 'svg', 'both', 'note'], description: 'As in write_text. Default png.' },
           on_missing: { type: 'string', enum: ['error', 'fallback'], description: 'As in write_text. With the default (error), if ANY character of ANY item has no sample the whole call stops before writing anything and lists them item by item.' },
@@ -677,6 +689,8 @@ function createTools(config) {
           ink: { type: 'string', description: 'Pen colour as #rrggbb. Default #1749b3.' },
           neatness: { type: 'number' },
           bounce: { type: 'number' },
+          pen_pt: { type: 'number', description: 'The pen width in points (0.2 to 5), the same for every answer and mark whatever its letter height, also when an answer is shrunk to fit. Default 1.14, or what the server was started with (--pen-pt).' },
+          hand: { type: 'boolean', description: 'Math rows placed by hand (default true): see write_text.' },
           notability: { type: 'boolean', description: 'Also save a Notability note (<name>-filled.note) with the PDF as its pages and the answers on top as pen strokes that can be edited in Notability. Default false.' },
           pen_width: { type: 'number', description: 'With notability: the pen width in note units. Default 1.05.' },
           preview: { type: 'string', enum: ['none', 'all', 'digits'], description: 'Return a small picture of each answer\'s ink (cropped to the ink, on white, about 3 pixels per point, at most 640 px wide) with the report, so you can check digits without rendering and cropping whole pages. all: every answer. digits: only the answers that contain a digit. none (default). They show the writing only, not the page behind it, and at most 20 are returned.' },
@@ -775,7 +789,7 @@ function createTools(config) {
           const pl = placeFor(ans, where, printed, sizes[page], page); // x, y, width, height, from the numbers given or from after_text
           const { h, y } = pl;
           const kind = kindOf(ans);
-          const box = { page, x: pl.x, y, w: pl.width, h, lineStep: pl.step || undefined, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, Sheet.DEFAULT_XH_PT) : undefined, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, pl.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
+          const box = { page, x: pl.x, y, w: pl.width, h, lineStep: pl.step || undefined, text: ans.text, kind, xhPt: ans.letter_height_pt ? clampNum(ans.letter_height_pt, 4, 40, XH0) : XH0, seed: ans.seed === undefined || ans.seed === null || ans.seed === '' ? placeSeed(page, pl.x, y, ans.text) : seedOf(ans.seed, where).seed, auto: ans.shrink_to_fit !== false, minRatio: clampNum(ans.min_size_ratio, 0.3, 1, 0.8) };
           if (ans.redo !== undefined) box.redo = redoOf(ans.redo, where, kind);
           if (ans.stagger === true || a.stagger === true) {
             // start a little in from the left, differently on every answer, and keep the right edge where it was
@@ -827,7 +841,7 @@ function createTools(config) {
         // pen marks: every one is checked (page, rectangle, text found) before anything is drawn
         report.push(...(await marksFor(a, bytes, sizes, items, printed)));
         report.push(...Placing.warnings(inks, printed, sizes)); // quiet unless the writing covers printed text, another answer, or leaves the page
-        const out = await Sheet.writeInk(PDFLib, bytes, items, { ink: inkOf(a), pen: 1, constant: true });
+        const out = await Sheet.writeInk(PDFLib, bytes, items, Object.assign({ ink: inkOf(a), constant: true }, penLook(a)));
         const dest = a.out ? path.resolve(a.out) : outPath(safeName(path.basename(a.pdf).replace(/\.pdf$/i, '')) + '-filled.pdf');
         if (path.resolve(a.pdf) === dest) throw new Error('out is the same file as pdf. Choose another name; the original is never overwritten.');
         fs.mkdirSync(path.dirname(dest), { recursive: true });

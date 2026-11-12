@@ -254,7 +254,8 @@ test('line_spacing_pt: lines on paper the PDF does not draw', async () => {
   assert.match(textOf(r), /follows ruled lines 25\.0 pt apart \(line_spacing_pt\)/);
   const lines = linesOf(await inkPoints(textOf(r).match(/Saved (\S+)/)[1], 2), 5);
   assert.equal(lines.length, 3);
-  [240, 265, 290].forEach((rule, i) => assert.ok(Math.abs(lines[i].bottom - (rule - 0.45 * 9.5)) < 1.6, `line ${i + 1}: ${lines[i].bottom}`));
+  // the pen is 1.14 pt whatever the letter size (pen_pt), so half of it hangs under the baseline even when the letters were made smaller
+  [240, 265, 290].forEach((rule, i) => assert.ok(Math.abs(lines[i].bottom - (rule - 0.45 * 9.5)) < 1.8, `line ${i + 1}: ${lines[i].bottom}`));
   const bad = await fill({ pdf, answers: [ans({ line_y: 100, x: 50, width: 100, line_spacing_pt: 3 })] });
   assert.match(textOf(bad), /line_spacing_pt must be the distance between ruled lines in points, from 10 to 60/);
 });

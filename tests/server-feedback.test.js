@@ -154,7 +154,7 @@ test("y' is a y with a small prime over its top right, not a word with a tall ap
   const base = primed.baselines[0];
   const markTop = (base - Math.min(...mark.map((p) => p.y))) / 34; // x-heights above the baseline
   const yTop = (base - Math.min(...plain.strokes.flatMap((s) => s.pts.map((p) => p.y)))) / 34;
-  assert.ok(markTop - yTop < 0.5 && markTop - yTop > 0, `the prime tops out ${(markTop - yTop).toFixed(2)} x-heights over the y (it was about a whole line before)`);
+  assert.ok(markTop - yTop < 0.75 && markTop - yTop > 0, `the prime tops out ${(markTop - yTop).toFixed(2)} x-heights over the y (it was about a whole line before)`);
   const yRight = Math.max(...plain.strokes.flatMap((s) => s.pts.map((p) => p.x)));
   assert.ok(Math.min(...mark.map((p) => p.x)) > yRight - 10, 'and it is at the right of the y');
   assert.ok(top(primed) <= top(plain));

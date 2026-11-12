@@ -156,15 +156,28 @@
     return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
   }
 
+  // The constant pen is this many letter heights wide at pen 1 (render.js: 0.085 x CONSTANT_W), so 1.14 pt at the default 9.5 pt.
+  const PEN_PER_XH = 0.12;
+
+  /**
+   * The pen multiplier render.js wants for a placed box. look.penPt is the pen's width in points, the same on every answer however
+   * big its letters are (a real pen does not get thinner when someone writes smaller, or when an answer is shrunk to fit its box);
+   * without it, look.pen scales with the letters as before.
+   */
+  function penFor(placed, look) {
+    if (look && look.penPt > 0) return Math.round((look.penPt / (PEN_PER_XH * placed.layout.xh * placed.K)) * 1e6) / 1e6; // 1, not 0.9999999999999998, at the default size
+    return look && look.pen !== undefined ? look.pen : 1;
+  }
+
   /** The ink of a placed box as SVG path data in layout pixels. */
   function inkPath(placed, look) {
-    return R.layoutToPath(placed.layout, look.pen === undefined ? 1 : look.pen, look.constant !== false);
+    return R.layoutToPath(placed.layout, penFor(placed, look), look.constant !== false);
   }
 
   /**
    * Write the boxes' ink into a PDF as vector shapes, on top of what is already on the pages.
    * PDFLib: the pdf-lib module. bytes: the PDF. items: [{box, placed}] with placed from layoutBox.
-   * look: {ink: '#rrggbb', pen, constant}. Returns the new PDF's bytes.
+   * look: {ink: '#rrggbb', pen, penPt, constant} (penPt: the pen's width in points, see penFor). Returns the new PDF's bytes.
    */
   async function writeInk(PDFLib, bytes, items, look) {
     const doc = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
@@ -197,7 +210,7 @@
     return doc.save();
   }
 
-  const api = { layoutBox, writeInk, inkPath, pdfFromImage, hexToRgb, DEFAULT_XH_PT, MIN_XH_PT, ENGINE_XH };
+  const api = { layoutBox, writeInk, inkPath, penFor, pdfFromImage, hexToRgb, DEFAULT_XH_PT, MIN_XH_PT, ENGINE_XH, PEN_PER_XH };
   root.HW = root.HW || {};
   root.HW.sheet = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

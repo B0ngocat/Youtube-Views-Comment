@@ -9,6 +9,8 @@
  *   node mcp/server.js --samples ... --http 8787 --token <secret>      (a web address instead of stdin/stdout)
  *
  * --format svg (or HANDWRITING_FORMAT=svg) makes write_text return SVG markup instead of a PNG unless a call asks otherwise.
+ * --letter-pt 6.5 and --pen-pt 1.1 (or HANDWRITING_LETTER_PT, HANDWRITING_PEN_PT) are the person's own letter height and pen width
+ * in points, used by every call that does not give letter_height_pt / pen_pt (defaults 9.5 and 1.14).
  *
  * Samples can also be the sealed file the site publishes: --samples-url <address> (or --samples with a downloaded copy)
  * and --password <password> (or HANDWRITING_PASSWORD, which keeps it out of the process list).
@@ -143,6 +145,8 @@ function main() {
     // the sealed file on the site: given, or the address this copy of the server was published with (see build-site-extras.js)
     samplesUrl: argValue(argv, '--samples-url') || process.env.HANDWRITING_URL || globalThis.__HW_DEFAULT_SAMPLES_URL__,
     format: argValue(argv, '--format') || process.env.HANDWRITING_FORMAT, // png (default), svg, both or note: what write_text returns unless asked
+    letterPt: argValue(argv, '--letter-pt') || process.env.HANDWRITING_LETTER_PT, // this person's lowercase letter height in points (default 9.5)
+    penPt: argValue(argv, '--pen-pt') || process.env.HANDWRITING_PEN_PT, // their pen's width in points (default 1.14)
     password: argValue(argv, '--password') || process.env.HANDWRITING_PASSWORD,
     out: argValue(argv, '--out') || process.env.HANDWRITING_OUT,
     cache: argv.includes('--no-cache') ? false : argValue(argv, '--cache') || process.env.HANDWRITING_CACHE,

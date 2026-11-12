@@ -100,6 +100,7 @@ Spanish: send the text with its real characters, for example  "text": "¿Cómo e
 Math input:  x^2   x_1   \frac{a}{b}   \sqrt{x} or sqrt(x)   \sqrt[3]{x} or cubert(x)   \int_0^1   \sum_{i=1}^{n}
   \text{ words }   for plain words inside math.     "\ " (backslash space) for a space that stays.
   Ordinary spaces inside math are ignored, like in TeX.
+  Several rows: \\ (or a new line) between them, and & where the rows line up:  f(x) &= 3x^2 \\ f'(x) &= 6x
 
 Digits: they are the weakest part, and now less wobbly in dense math (digits are brought to the person's usual size and baseline,
   operators sit in the middle of a digit with room round them, digits are spaced the way the person spaces their own numbers so they
@@ -153,6 +154,28 @@ Marks and capitals: tildes and other accents are one smooth stroke, drawn fresh 
 Fills that read as handwriting, not as typed text turned into handwriting: write short answers, not full-width tidy lines; give each answer its own
   place and, if wanted, "stagger": true (starts it a little in from the left, differently each time); no dashes or hyphens as separators in
   prose, use commas; EM DASHES ARE REFUSED by the tools (use a comma, a full stop or a new sentence).
+
+Looking like THEIR page, not a generated one. Before you fill a worksheet, ask for one page they did themselves by hand (an earlier
+  homework) and put your result next to it. A friend's page was spotted at once; measured against his own pages, what gave it away was:
+  1. Too big for the pen. His x is about 6 pt tall and his digits 10 pt; ours were 7.5 and 11.5 with the same pen, so the ink looked thin
+     and drawn. Measure an x and a stroke on their page and pass "letter_height_pt" and "pen_pt" (the pen stays that wide at any letter
+     size). For good: have the server started with --letter-pt and --pen-pt; handwriting_status says which defaults are in use.
+  2. An answer key instead of work. Every problem got the same three or four tidy notes ("zeros - ...", "up - ...", "down - ...",
+     "crit - ...", "undefi") and no working. His real pages show the work the worksheet asks for: rewrite the function, apply the rule
+     with the inside written out, (2(-8)x + 4), then simplify on the next line. Write what they would write, in their words and habits
+     (copy them from their page: how they write a fraction in an exponent, whether each line starts with f'(x) = or with =), and do not
+     repeat one template on every problem.
+  3. Ruler-straight blocks. Every line of every answer started at exactly the same x, evenly spaced, beside every graph. Write worked
+     steps as ONE kind "math" answer, one step per row (\\), with & before each = so the = signs stand under each other:
+       f'(x) &= -\frac{1}{3}(2(-8)x+4)(-8x^2+4x)^{-4/3} \\ &= -\frac{1}{3}(-16x+4)(-8x^2+4x)^{-4/3}
+     Rows are placed by hand (each starts or lines up a little off and leans a little; "hand": false turns it off). Put each answer
+     where a person would (under or beside its question, in the room there is), not all on one vertical line.
+  4. Packed math. He leaves clear room round = and + and inside brackets; ours touched. Spacing in equations now comes from the
+     equations the person wrote in the "x and y" and "dy/dx and calculus" rounds: if they skipped those, equations come out tighter than
+     they write, so ask them to do those two rounds.
+  5. Words in math mode. "zeros - 0" written as math floats the minus up next to the letters. Use kind "mixed" for a sentence with math
+     in it ("zeros at $x = 0$ and $x = \pm\frac{3\sqrt{10}}{10}$").
+  Then look at your page and theirs side by side again before handing it over.
 
 Marks (fill_pdf "marks"): what a person does with a pen besides writing words. Drawn wobbly, in the same pen and ink as the writing,
   the same for the same seed, and each mark that has no "seed" gets its own from where it sits, so two circles are never alike.
