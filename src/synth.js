@@ -795,7 +795,18 @@
   function redoMatches(entries, req) {
     const words = entries.filter((e) => e.type === 'word');
     const maths = entries.filter((e) => e.type === 'math');
-    if (req.math !== undefined && req.math !== null) return { list: maths.slice(req.math - 1, req.math) };
+    const runs = entries.filter((e) => e.type === 'run');
+    const hasMath = req.math !== undefined && req.math !== null;
+    // a written run (digits with their point, a letter run) of a kind math answer, or of piece `math` of a kind mixed one
+    if ((hasMath && req.word) || (!words.length && !maths.length)) {
+      const pool = hasMath ? runs.filter((e) => e.box === req.math - 1) : runs;
+      const w = String(req.word);
+      const exact = pool.filter((e) => e.text === w);
+      if (exact.length) return { list: exact };
+      const core = stripPunct(w);
+      return { list: core ? pool.filter((e) => stripPunct(e.text) === core) : [] };
+    }
+    if (hasMath) return { list: maths.slice(req.math - 1, req.math) };
     const w = String(req.word);
     const squash = (t) => t.replace(/\s+/g, ' ').trim();
     const exact = words.filter((e) => e.text === w);
@@ -837,25 +848,30 @@
       if (w && !w.compound) entries.push({ type: 'word', n, text: w.text });
     });
     (first.mathTex || []).forEach((tex, k) => entries.push({ type: 'math', k, text: tex }));
-    const nameOf = (req) => (req.math !== undefined && req.math !== null ? 'math piece ' + req.math : '"' + req.word + '"');
+    // the written runs of every piece of math (kind math: one piece), in the order they were drawn: what redo of a run points at
+    (first.runBoxes || []).forEach((runs, box) => runs.forEach((r, k) => entries.push({ type: 'run', box, k, text: r.text })));
+    const nameOf = (req) => (req.math !== undefined && req.math !== null && !req.word ? 'math piece ' + req.math : '"' + req.word + '"');
     const slots = requests.map((req, i) => {
       const m = redoMatches(entries, req);
       if (!m.list.length || (req.nth && req.nth > m.list.length)) {
         const have = entries.filter((e) => e.type === 'word').map((e) => '"' + e.text + '"');
         const why = m.list.length ? `has ${m.list.length} match${m.list.length === 1 ? '' : 'es'}, so nth ${req.nth} does not exist` : 'is not in the text';
         const maths = (first.mathTex || []).map((t, k) => `${k + 1}: ${t}`);
-        throw redoError(`redo ${i + 1}: ${nameOf(req)} ${why}. The words are: ${have.join(', ') || '(none)'}.${maths.length ? ' The pieces of math are: ' + maths.join(' | ') + '.' : ''}`);
+        const runs = entries.filter((e) => e.type === 'run' && (req.math == null || e.box === req.math - 1)).map((e) => '"' + e.text + '"');
+        throw redoError(`redo ${i + 1}: ${nameOf(req)} ${why}.${have.length || !runs.length ? ' The words are: ' + (have.join(', ') || '(none)') + '.' : ''}${maths.length ? ' The pieces of math are: ' + maths.join(' | ') + '.' : ''}${runs.length ? ' The written runs of the math are: ' + runs.join(', ') + '.' : ''}`);
       }
       return { req, entry: m.list[req.nth ? req.nth - 1 : 0], matches: m.list.length, nth: req.nth || null };
     });
     const seen = new Set();
     for (const sl of slots) {
-      const key = sl.entry.type + (sl.entry.type === 'word' ? sl.entry.n : sl.entry.k);
+      const key = sl.entry.type + (sl.entry.type === 'word' ? sl.entry.n : sl.entry.type === 'run' ? sl.entry.box + ':' + sl.entry.k : sl.entry.k);
       if (seen.has(key)) throw redoError(`redo: ${nameOf(sl.req)} is listed twice (it is the same place in the text). List each word once.`);
       seen.add(key);
     }
-    const state = { pins: first.words.map((w) => (w ? w.pins : null)), retake: {}, retakeMath: {} };
-    const idsOf = (lay, e) => (e.type === 'word' ? (lay.words[e.n] ? lay.words[e.n].ids : []) : (lay.mathIds || [])[e.k] || []);
+    // runs: per piece of math {pins: {run number: pins}, take: {run number: take}}; every run starts pinned to what the plain drawing used
+    const runsOf = (lay) => (lay.runBoxes || []).map((rs) => { const pins = {}; rs.forEach((r, k) => { if (r.pins) pins[k] = r.pins; }); return { pins, take: {} }; });
+    const state = { pins: first.words.map((w) => (w ? w.pins : null)), retake: {}, retakeMath: {}, runs: runsOf(first) };
+    const idsOf = (lay, e) => (e.type === 'word' ? (lay.words[e.n] ? lay.words[e.n].ids : []) : e.type === 'run' ? ((lay.runBoxes[e.box] || [])[e.k] || { ids: [] }).ids : (lay.mathIds || [])[e.k] || []);
     let cur = first;
     const reports = [];
     for (const sl of slots) {
@@ -868,9 +884,18 @@
         if (e.type === 'word') {
           const pins = state.pins.slice();
           pins[e.n] = null; // this word is drawn afresh, on its own stream
-          return { pins, retake: Object.assign({}, state.retake, { [e.n]: s }), retakeMath: state.retakeMath };
+          return { pins, retake: Object.assign({}, state.retake, { [e.n]: s }), retakeMath: state.retakeMath, runs: state.runs };
         }
-        return { pins: state.pins, retake: state.retake, retakeMath: Object.assign({}, state.retakeMath, { [e.k]: s }) };
+        const runs = state.runs.slice();
+        if (e.type === 'run') {
+          const b = runs[e.box];
+          const pins = Object.assign({}, b.pins);
+          delete pins[e.k]; // this run is drawn afresh, on its own stream
+          runs[e.box] = { pins, take: Object.assign({}, b.take, { [e.k]: s }) };
+          return { pins: state.pins, retake: state.retake, retakeMath: state.retakeMath, runs };
+        }
+        runs[e.k] = null; // a whole piece of math redone: none of its runs is pinned
+        return { pins: state.pins, retake: state.retake, retakeMath: Object.assign({}, state.retakeMath, { [e.k]: s }), runs };
       };
       let got = 0;
       for (let s = 1; s <= REDO_TRIES * take && got < take; s++) {
@@ -881,16 +906,23 @@
         got++;
         accepted = { s, lay, ids };
       }
-      const report = { type: e.type, word: sl.req.word !== undefined ? sl.req.word : null, math: sl.req.math || null, text: e.type === 'math' ? '$' + e.text + '$' : e.text, nth: sl.nth, take, usedTake: got, matches: sl.matches, ok: got > 0, changed: 0, total: base.length, reason: '' };
+      const report = { type: e.type, word: sl.req.word !== undefined ? sl.req.word : null, math: sl.req.math || null, text: e.type === 'math' ? '$' + e.text + '$' : e.text, box: e.box, nth: sl.nth, take, usedTake: got, matches: sl.matches, ok: got > 0, changed: 0, total: base.length, reason: '' };
       if (accepted) {
         report.changed = accepted.ids.reduce((n, id, i) => n + (id === base[i] ? 0 : 1), 0);
         if (e.type === 'word') {
           state.pins[e.n] = accepted.lay.words[e.n].pins;
           state.retake[e.n] = accepted.s;
-        } else state.retakeMath[e.k] = accepted.s;
+        } else if (e.type === 'math') state.retakeMath[e.k] = accepted.s;
+        if (e.type !== 'word') {
+          // the piece of math now draws what the accepted layout drew: keep its other runs (and a run just redone) pinned to that
+          const box = e.type === 'run' ? e.box : e.k;
+          const was = state.runs[box] || { pins: {}, take: {} };
+          const fresh = runsOf(accepted.lay)[box];
+          state.runs[box] = { pins: fresh.pins, take: e.type === 'run' ? Object.assign({}, was.take, { [e.k]: accepted.s }) : {} };
+        }
         cur = accepted.lay;
       } else {
-        const few = e.type === 'word' ? fewExamples(style, e.text) : [];
+        const few = e.type !== 'math' ? fewExamples(style, e.text) : [];
         report.reason = few.length ? `only one usable example of ${few.join(' and ')}` : `no other example fits (${REDO_TRIES} streams were tried and all gave the same examples)`;
       }
       reports.push(report);

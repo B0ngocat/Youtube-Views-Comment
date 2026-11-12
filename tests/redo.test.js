@@ -10,7 +10,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { corpus, CORPUS } = require('./fixtures');
-const { writeWord } = require('./synth-writer');
+const { writeWord, GLYPHS } = require('./synth-writer');
 const S = require('../src/style');
 const Y = require('../src/synth');
 const X = require('../src/mixed');
@@ -21,6 +21,18 @@ const { createServer } = require('../mcp/server');
 const { build } = require('../scripts/build-mcp');
 
 const style = corpus('print').style;
+// Digits for the fake writer (it has none): ten distinct skeletons, 1.7 tall, so numbers in math have something to be written with.
+// A separate writer for the math tests: the corpus words, two copies of every single digit, and a few numbers.
+for (let d = 0; d < 10; d++) GLYPHS[String(d)] = [0.5, [[0.05 + 0.02 * d, 0.1], [0.1 + 0.03 * d, 0.9], [0.45 - 0.02 * d, 1.7], [0.3, 0.8], [0.1 + 0.04 * ((d * 3) % 7), 0.05], [0.5, 0.1]], null, true];
+const digitRaws = () => {
+  const words = [];
+  for (let rep = 0; rep < 3; rep++) for (const d of '0123456789') words.push(d);
+  words.push('9.81', '4.5', '123', '9.8', '1.2', '45', '18', 'a', 'b', 'c', 'd', 'e', 'f', 'x', 'y', 'F', 'F');
+  return corpus('print').raws.map((r, i) => writeWord(r.text, { style: 'print', seed: i + 1 })).concat(words.map((w, i) => writeWord(w, { style: 'print', seed: 2000 + i })));
+};
+const dstyle = S.buildStyle(digitRaws());
+const MATH = 'F = 9.81 \\times 4.5 + 9.8 - ab';
+const runIds = (lay) => lay.runBoxes[0].map((r) => (r ? r.ids.join(',') : null));
 const hash = (l) => crypto.createHash('sha256').update(JSON.stringify(l.strokes)).digest('hex').slice(0, 16);
 const TEXT = 'the quick brown fox jumps over the lazy dog, then the lazy dog sleeps and jumps over home';
 const idsOf = (lay) => lay.words.map((w) => (w ? w.ids.join(',') : null));
@@ -187,6 +199,143 @@ test('mixed: a word with no math in it works like text mode', () => {
   assert.deepEqual(differing(base, r), [5]);
 });
 
+// ---- kind math: a written run (a number, a letter run) ----------------------------------------------
+
+test('math: a run is redone, every other run keeps its examples, whatever the run is', () => {
+  const base = M.layout(dstyle, MATH, { seed: 5 });
+  const ids = runIds(base);
+  assert.equal(ids.length, 5, 'F, 9.81, 4.5, 9.8, ab (the operators are drawn stand-ins, not written runs): ' + ids.length);
+  assert.ok(base.runBoxes[0].some((r) => r.text === '9.81'));
+  for (const word of ['F', '9.81', '4.5', '9.8', 'ab']) {
+    const r = M.layout(dstyle, MATH, { seed: 5, redo: [{ word }] });
+    const after = runIds(r);
+    assert.equal(after.length, ids.length, 'the same runs are written, in the same order');
+    const changed = ids.map((x, i) => (x !== after[i] ? i : -1)).filter((i) => i >= 0);
+    assert.ok(changed.length <= 1, word + ' changed runs ' + changed);
+    if (changed.length) assert.equal(base.runBoxes[0][changed[0]].text, word);
+    assert.ok(r.redo[0].ok || /only one usable|no other example/.test(r.redo[0].reason));
+    assert.equal(r.strokes.length > 0, true);
+  }
+  const r = M.layout(dstyle, MATH, { seed: 5, redo: [{ word: '9.81' }] });
+  assert.ok(r.redo[0].ok, '9.81 has other examples');
+  assert.ok(r.redo[0].changed >= 1 && r.redo[0].total === 4);
+});
+
+test('math: nothing else moves; the redone number is the only different ink and the rest sits where it was', () => {
+  const base = M.layout(dstyle, MATH, { seed: 5 });
+  const r = M.layout(dstyle, MATH, { seed: 5, redo: [{ word: '4.5' }] });
+  // the shared stream is untouched: the runs before the target have exactly the same strokes
+  const k = base.runBoxes[0].findIndex((q) => q && q.text === '4.5');
+  const ptsBefore = (lay) => lay.strokes.filter((s) => s.pts[0].x < Math.min(...base.strokes.map((q) => q.pts[0].x)) + 1e9);
+  assert.equal(ptsBefore(base).length > 0, true);
+  assert.deepEqual(runIds(r).slice(0, k), runIds(base).slice(0, k));
+  assert.deepEqual(runIds(r).slice(k + 1), runIds(base).slice(k + 1));
+  const n = Math.min(base.strokes.length, r.strokes.length);
+  let same = 0;
+  for (let i = 0; i < n; i++) if (JSON.stringify(base.strokes[i].pts.map((p) => p.y)) === JSON.stringify(r.strokes[i].pts.map((p) => p.y))) same++;
+  assert.ok(same >= n - 12, 'most strokes (all but the number\'s) are identical: ' + same + ' of ' + n);
+});
+
+test('math: deterministic, take 2 is another drawing than take 1 and the plain one, nth picks one run', () => {
+  const run = (o) => M.layout(dstyle, MATH, Object.assign({ seed: 5 }, o));
+  assert.equal(hash(run({ redo: [{ word: '9.81' }] })), hash(run({ redo: [{ word: '9.81' }] })));
+  const plain = runIds(run({}));
+  const k = run({}).runBoxes[0].findIndex((q) => q && q.text === '9.81');
+  const t1 = runIds(run({ redo: [{ word: '9.81', take: 1 }] }))[k];
+  const t2 = runIds(run({ redo: [{ word: '9.81', take: 2 }] }))[k];
+  assert.notEqual(t1, plain[k]);
+  assert.notEqual(t2, plain[k]);
+  assert.notEqual(t2, t1);
+  // 9.8 matches "9.8" exactly; "9.81" is not 9.8. A word with punctuation round it finds the run, and two matches say first of N
+  const twice = M.layout(dstyle, '1 + 1 + 1', { seed: 2, redo: [{ word: '1', nth: 2 }] });
+  assert.equal(twice.redo[0].matches, 3);
+  assert.equal(twice.redo[0].nth, 2);
+  const first = M.layout(dstyle, '1 + 1 + 1', { seed: 2, redo: [{ word: '1' }] });
+  assert.equal(first.redo[0].nth, null);
+  const base = M.layout(dstyle, '1 + 1 + 1', { seed: 2 });
+  const diff = (a) => runIds(a).map((x, i) => (x !== runIds(base)[i] ? i : -1)).filter((i) => i >= 0);
+  assert.deepEqual(diff(first), [0]);
+  assert.deepEqual(diff(twice), [1]);
+});
+
+test('math: a run that is not there lists the runs; a run with one example cannot change', () => {
+  assert.throws(() => M.layout(dstyle, MATH, { seed: 5, redo: [{ word: '7.7' }] }), (e) => e.redo && /"7\.7" is not in the text\. The written runs of the math are: "F", "9\.81", "4\.5"/.test(e.message));
+  // a writer with one 8 only
+  const raws = digitRaws().filter((w) => !/8/.test(w.text));
+  raws.push(writeWord('8', { style: 'print', seed: 3001 }));
+  const st = S.buildStyle(raws);
+  assert.equal(st.byChar.get('8').length, 1);
+  const base = M.layout(st, '8 + a', { seed: 1 });
+  const r = M.layout(st, '8 + a', { seed: 1, redo: [{ word: '8' }] });
+  assert.equal(r.redo[0].ok, false);
+  assert.match(r.redo[0].reason, /only one usable example of 8/);
+  assert.equal(hash(r), hash(base), 'drawn as it was');
+});
+
+test('math: no cached unit is changed; without redo the output is the plain output', () => {
+  const st = S.buildStyle(digitRaws());
+  const before = unitsHash(st);
+  M.layout(st, MATH, { seed: 5, redo: [{ word: '9.81', take: 2 }, { word: 'F' }] });
+  X.layout(st, 'so $F = 9.81 + 4.5$ and $9.8$ ok', { seed: 5, redo: [{ math: 1, word: '4.5' }, { math: 2 }] });
+  assert.equal(unitsHash(st), before);
+  assert.equal(hash(M.layout(st, MATH, { seed: 5, redo: [] })), hash(M.layout(st, MATH, { seed: 5 })));
+  assert.equal(M.layout(st, MATH, { seed: 5 }).redo, undefined);
+});
+
+test('mixed: a run inside a piece of math, and the other pieces and words stay', () => {
+  const T = 'so $F = 9.81 + 4.5$ and $9.8 - 1.2$ over the lazy dog';
+  const base = X.layout(dstyle, T, { seed: 4 });
+  const r = X.layout(dstyle, T, { seed: 4, redo: [{ math: 1, word: '4.5' }] });
+  assert.deepEqual(differing(base, r), []);
+  assert.deepEqual(r.mathIds[1], base.mathIds[1], 'the second piece is untouched');
+  assert.notDeepEqual(r.mathIds[0], base.mathIds[0]);
+  const a = base.runBoxes[0].map((q) => (q ? q.ids.join() : null));
+  const b = r.runBoxes[0].map((q) => (q ? q.ids.join() : null));
+  assert.equal(a.filter((x, i) => x !== b[i]).length, 1, 'one run of the first piece changed');
+  assert.equal(r.redo[0].type, 'run');
+  assert.throws(() => X.layout(dstyle, T, { seed: 4, redo: [{ math: 2, word: '4.5' }] }), (e) => /"4\.5" is not in the text.*written runs of the math are: "9\.8", "1\.2"/.test(e.message));
+  // a word redone after a piece of math keeps the math as it was
+  const w = X.layout(dstyle, T, { seed: 4, redo: [{ word: 'lazy' }] });
+  assert.deepEqual(w.mathIds, base.mathIds);
+});
+
+test('write_text kind math: redo reports the run; kind math with redo is deterministic; not found stops before drawing', async () => {
+  const a = await callD('write_text', { text: MATH, kind: 'math', format: 'svg', seed: 5, redo: [{ word: '9.81', take: 2 }] });
+  const b = await callD('write_text', { text: MATH, kind: 'math', format: 'svg', seed: 5, redo: [{ word: '9.81', take: 2 }] });
+  const plain = await callD('write_text', { text: MATH, kind: 'math', format: 'svg', seed: 5 });
+  assert.ok(!a.result.isError, textOf(a));
+  assert.match(textOf(a), /redo "9\.81" \(take 2\): \d of 4 characters changed\./);
+  assert.equal(svgOf(a), svgOf(b));
+  assert.notEqual(svgOf(a), svgOf(plain));
+  const miss = await callD('write_text', { text: MATH, kind: 'math', redo: [{ word: '3.14' }] });
+  assert.ok(miss.result.isError);
+  assert.match(textOf(miss), /redo 1: "3\.14" is not in the text\. The written runs of the math are: "F"/);
+  const mix = await callD('write_text', { text: 'so $F = 9.81 \\times 4.5$ ok', kind: 'mixed', format: 'svg', on_missing: 'fallback', redo: [{ math: 1, word: '9.81' }] });
+  assert.ok(!mix.result.isError, textOf(mix));
+  assert.match(textOf(mix), /redo "9\.81" \(in math piece 1, take 1\): \d of 4 characters changed\./);
+});
+
+test('the one-file build redoes a number in math', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hw-redo-math-bundle-'));
+  fs.writeFileSync(path.join(dir, 'handwriting-mcp.js'), build({}));
+  fs.copyFileSync(samplesD, path.join(dir, 'my-handwriting.json'));
+  const child = spawn(process.execPath, [path.join(dir, 'handwriting-mcp.js')], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
+  try {
+    const reply = await new Promise((resolve) => {
+      let buf = '';
+      child.stdout.on('data', (d) => {
+        buf += d;
+        if (buf.includes('\n')) resolve(JSON.parse(buf.split('\n')[0]));
+      });
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write_text', arguments: { text: MATH, kind: 'math', format: 'svg', redo: [{ word: '9.81' }] } } }) + '\n');
+    });
+    assert.ok(!reply.result.isError, JSON.stringify(reply).slice(0, 300));
+    assert.match(reply.result.content.map((c) => c.text || '').join(''), /redo "9\.81" \(take 1\): \d of 4 characters changed/);
+  } finally {
+    child.kill();
+  }
+});
+
 // ---- Sheet.layoutBox ----------------------------------------------------------------------------
 
 test('layoutBox carries box.redo through every pass of its fitting', () => {
@@ -200,8 +349,9 @@ test('layoutBox carries box.redo through every pass of its fitting', () => {
   assert.deepEqual(differing(plain.layout, red.layout), [2]);
   assert.equal(plain.redo, null);
   assert.equal(Sheet.layoutBox(style, box(undefined), {}).layout.strokes.length, plain.layout.strokes.length, 'unchanged without redo');
-  const tex = Sheet.layoutBox(style, { page: 0, x: 0, y: 0, w: 200, h: 30, text: 'x^2', kind: 'math', seed: 1, redo: [{ word: 'x' }] }, {});
-  assert.equal(tex.redo, null, 'kind math ignores it (the tools refuse it before this)');
+  const tex = Sheet.layoutBox(dstyle, { page: 0, x: 0, y: 0, w: 300, h: 30, text: MATH, kind: 'math', seed: 1, redo: [{ word: '9.81' }] }, {});
+  assert.equal(tex.redo.length, 1, 'kind math carries it too');
+  assert.ok(tex.redo[0].ok);
 });
 
 // ---- tools --------------------------------------------------------------------------------------
@@ -214,10 +364,15 @@ const samples1 = path.join(tmp, 'one-z', 'my-handwriting.json'); // z written on
 fs.mkdirSync(path.dirname(samples1));
 fs.writeFileSync(samples1, S.toJSON(corpus('print', 1).raws.filter((w) => !/z/.test(w.text) || w.text === 'lazy').map((r, i) => writeWord(r.text, { style: 'print', seed: i + 40 }))));
 const server1 = createServer({ samples: samples1, out: path.join(tmp, 'out1') });
+const samplesD = path.join(tmp, 'digits', 'my-handwriting.json');
+fs.mkdirSync(path.dirname(samplesD));
+fs.writeFileSync(samplesD, S.toJSON(digitRaws()));
+const serverD = createServer({ samples: samplesD, out: path.join(tmp, 'outD') });
 let nextId = 1;
 const callOn = (srv) => (name, args) => srv({ jsonrpc: '2.0', id: nextId++, method: 'tools/call', params: { name, arguments: args } });
 const call = callOn(server);
 const call1 = callOn(server1);
+const callD = callOn(serverD);
 const textOf = (r) => r.result.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
 const svgOf = (r) => r.result.content.find((c) => c.type === 'text' && c.text.startsWith('<svg')).text;
 const T2 = 'the lazy dog and the lazy fox jumps over a quick brown box';
@@ -248,11 +403,7 @@ test('write_text: a word that is not there stops before drawing, and says which 
   assert.match(textOf(none), /redo 1: word is required/);
 });
 
-test('write_text: redo for kind math says it is not there yet, and for kind mixed it takes a piece of math', async () => {
-  const m = await call('write_text', { text: 'x^2 + 3', kind: 'math', redo: [{ word: 'x' }] });
-  assert.ok(m.result.isError);
-  assert.match(textOf(m), /redo is not available for kind math yet/);
-  assert.match(textOf(m), /kind mixed answer/);
+test('write_text: kind mixed takes a piece of math, or a run inside one', async () => {
   const ok = await call('write_text', { text: 'the lazy $\\frac{a}{b}$ dog', kind: 'mixed', format: 'svg', on_missing: 'fallback', redo: [{ word: '\\frac{a}{b}' }, { word: 'lazy' }] });
   assert.ok(!ok.result.isError, textOf(ok));
   assert.match(textOf(ok), /redo math "\$\\frac\{a\}\{b\}\$" \(take 1\)/);
@@ -297,8 +448,11 @@ test('fill_pdf: redo per answer, in the report, and a word that is not there sto
   assert.ok(miss.result.isError);
   assert.match(textOf(miss), /answer 1: redo 1: "zebra" is not in the text/);
   assert.ok(!fs.existsSync(dest), 'nothing written');
-  const math = await call('fill_pdf', { pdf, out: dest, answers: ans([{ word: 'x' }], { text: 'x^2', kind: 'math' }) });
-  assert.match(textOf(math), /answer 1: redo is not available for kind math yet/);
+  const math = await callD('fill_pdf', { pdf, out: dest, answers: ans([{ word: '9.81' }], { text: MATH, kind: 'math', width: 300 }) });
+  assert.ok(!math.result.isError, textOf(math));
+  assert.match(textOf(math), /redo "9\.81" \(take 1\): \d of 4 characters changed\./);
+  const mathMiss = await callD('fill_pdf', { pdf, out: dest + '2', answers: ans([{ word: '7.7' }], { text: MATH, kind: 'math', width: 300 }) });
+  assert.match(textOf(mathMiss), /answer 1: redo 1: "7\.7" is not in the text\. The written runs of the math are: /);
   // a box too small for the text wraps and shrinks, and the redone word is still redone
   const tight = await call('fill_pdf', { pdf, out: dest, answers: ans([{ word: 'brown' }], { width: 90, height: 14 }) });
   assert.ok(!tight.result.isError, textOf(tight));

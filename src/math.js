@@ -324,16 +324,22 @@
   function createEngine(style, rng, opts) {
     const messiness = opts.messiness;
     // wordReuse: a word the writer recorded (dy, dx, x, 12) is written back from their own strokes, as in plain text
-    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map(), ids: [] }; // ids: the examples written, in order (a redo compares them)
+    const ctx = { variation: opts.variation, messiness, usage: new Map(), missing: new Set(), substituted: new Set(), glyphs: true, standIns: new Set(), rhythm: true, wordReuse: opts.wordReuse, wordUse: new Map(), ids: [], runs: [], runNo: 0 }; // ids: the examples written, in order (a redo compares them)
     const sample = Y.synthWord(style, 'x', G.mulberry32(1), { variation: 0, messiness: 0, usage: new Map(), missing: new Set(), rhythm: true });
     const ws = sample ? sample.strokes.flatMap((s) => s.pts.map((p) => p.w)).sort((a, b) => a - b) : [1.2];
     const PEN = ws[ws.length >> 1] || 1.2;
 
     /** The writer's own writing of `text`, scaled by sc. */
     function written(text, sc) {
-      const w = Y.synthWord(style, text, rng, ctx);
+      // redo: opts.runSet = {pins, take} by run number (the order of calls to this function). synthWord takes ONE number from the shared
+      // rng whatever it draws, and this function takes one gaussian after it, so pinning or retaking one run moves no other run's stream.
+      const k = ctx.runNo++;
+      const rs = opts.runSet;
+      const w = Y.synthWord(style, text, rng, ctx, rs && rs.pins ? rs.pins[k] || null : null, rs && rs.take ? rs.take[k] || 0 : 0);
       if (!w) return null;
-      for (const c of w.choices) ctx.ids.push(c.unit.id);
+      const ids = w.choices.map((c) => c.unit.id);
+      ctx.runs[k] = { text, pins: w.pins, ids };
+      for (const id of ids) ctx.ids.push(id);
       const jitter = 1 + 0.03 * messiness * G.gaussian(rng);
       return boxOf(clone(w.strokes, 0, 0, sc * jitter, sc * jitter));
     }
@@ -686,7 +692,8 @@
   function layout(style, text, opts) {
     const o = Object.assign({ xh: 34, width: 900, lineHeight: 3.1, messiness: 0.3, variation: 0.4, slantDelta: 0, seed: 1 }, opts || {});
     const rng = G.mulberry32(o.seed);
-    const E = createEngine(style, rng, o);
+    if (o.redo && o.redo.length) return Y.redoLayout(style, o.redo, (patch) => layout(style, text, Object.assign({}, o, patch, { redo: null })));
+    const E = createEngine(style, rng, Object.assign({}, o, { runSet: o.runs ? o.runs[0] : null }));
     const xh = o.xh;
     const margin = o.margin != null ? o.margin : xh * 1.2;
     const tanS = Math.tan(style.slant + (o.slantDelta * Math.PI) / 180);
@@ -724,6 +731,7 @@
       baselines,
       xh,
       lineHeightPx: o.lineHeight * xh,
+      runBoxes: [E.ctx.runs], // the runs written, in order, with the examples each used (redo)
     };
   }
 
@@ -749,6 +757,7 @@
       unknown: parsed.unknown,
       standIns: Array.from(new Set([...E.ctx.standIns, ...E.ctx.substituted])),
       ids: E.ctx.ids,
+      runs: E.ctx.runs,
     };
   }
 

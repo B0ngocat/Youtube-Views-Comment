@@ -104,7 +104,7 @@
         continue;
       }
       const n = boxes.length;
-      const box = M.inline(style, g.s.replace(/\s+/g, ' '), { seed: segSeed(o.seed, n, o.retakeMath ? o.retakeMath[n] : 0), messiness: o.messiness, variation: o.variation, wordReuse: o.wordReuse });
+      const box = M.inline(style, g.s.replace(/\s+/g, ' '), { seed: segSeed(o.seed, n, o.retakeMath ? o.retakeMath[n] : 0), messiness: o.messiness, variation: o.variation, wordReuse: o.wordReuse, runSet: o.runs ? o.runs[n] : null });
       box.tex = g.s;
       for (const c of box.unknown) unknown.add(c);
       for (const c of box.standIns) standIns.add(c);
@@ -121,6 +121,7 @@
     lay.math = boxes.length;
     lay.mathTex = boxes.map((b) => b.tex); // what each piece of math says, and the examples it was written with (redo)
     lay.mathIds = boxes.map((b) => b.ids);
+    lay.runBoxes = boxes.map((b) => b.runs); // the written runs of each piece of math (redo of one number inside a piece)
     return lay;
   }
 

@@ -128,7 +128,7 @@ function createTools(config) {
   const REDO_SCHEMA = {
     type: 'array',
     maxItems: 20,
-    description: 'Draw one word again and keep every other word exactly as it was (same examples of every letter; positions may shift a little because the redone word has another width). For when ONE word or number came out badly and a new seed would redraw, and perhaps spoil, the rest. Each entry: {word, nth, take}. word: a word of the text as typed (split on spaces); the whole token is matched first, then ignoring punctuation round it, so "9.81" finds "9.81," and "(9.81)". nth: which match, from 1 in reading order (default 1; with more matches and no nth the first is used and the report says "first of N"). take: whole number from 1 (default 1): take 1 is another drawing than the plain one, take 2 yet another; the same call always gives the same picture. A word that is not in the text stops that answer before anything is drawn and lists the words. In kind mixed a piece of math is one word: word is its TeX (the text between the dollar signs) or give math: 2 for the second piece. Not available for kind math.',
+    description: 'Draw one word again and keep every other word exactly as it was (same examples of every letter; positions may shift a little because the redone word has another width). For when ONE word or number came out badly and a new seed would redraw, and perhaps spoil, the rest. Each entry: {word, nth, take}. word: a word of the text as typed (split on spaces); the whole token is matched first, then ignoring punctuation round it, so "9.81" finds "9.81," and "(9.81)". nth: which match, from 1 in reading order (default 1; with more matches and no nth the first is used and the report says "first of N"). take: whole number from 1 (default 1): take 1 is another drawing than the plain one, take 2 yet another; the same call always gives the same picture. A word that is not in the text stops that answer before anything is drawn and lists the words. In kind mixed a piece of math is one word: word is its TeX (the text between the dollar signs) or give math: 2 for the second piece; with math: 2 AND word: "9.81" it redoes that written run inside the second piece. In kind math word is a written run as it appears in the TeX (digits with their decimal point, or a run of letters: "9.81" in F = 9.81 \\times 4.5); nth counts matching runs in order; every other run keeps its examples.',
     items: { type: 'object', properties: { word: { type: 'string' }, nth: { type: 'integer' }, take: { type: 'integer' }, math: { type: 'integer', description: 'kind mixed only: the piece of math to redo, counted from 1, instead of word.' } } },
   };
   /** Checks a redo argument and returns the list the engine takes (see synth.redoLayout). Throws before anything is drawn. */
@@ -137,7 +137,6 @@ function createTools(config) {
     const at = where ? where + ': ' : '';
     if (!Array.isArray(v)) throw new Error(`${at}redo must be a list like [{"word": "9.81", "take": 2}].`);
     if (!v.length) return undefined;
-    if (kind === 'math') throw new Error(`${at}redo is not available for kind math yet (a number in math is drawn from one shared stream, so redrawing it would change the other numbers). Put the number in a kind mixed answer (words with $math$ inside, or the number as a plain word) or use another seed.`);
     if (v.length > 20) throw new Error(`${at}at most 20 redo entries.`);
     const whole = (x, name, i, min) => {
       const n = typeof x === 'string' && /^\d+$/.test(x.trim()) ? Number(x) : x;
@@ -151,7 +150,8 @@ function createTools(config) {
       if (hasMath) {
         if (kind !== 'mixed') throw new Error(`${at}redo ${i + 1}: math is only for kind mixed (pieces of math inside words).`);
         out.math = whole(r.math, 'math', i, 1);
-      } else if (typeof r.word !== 'string' || !r.word.trim()) throw new Error(`${at}redo ${i + 1}: word is required (a word of the text as typed)${kind === 'mixed' ? ', or math: 2 for the second piece of math' : ''}.`);
+        if (typeof r.word === 'string' && r.word.trim()) out.word = r.word.trim(); // with math: a written run inside that piece
+      } else if (typeof r.word !== 'string' || !r.word.trim()) throw new Error(`${at}redo ${i + 1}: word is required (${kind === 'math' ? 'a written run as it appears in the TeX, such as "9.81"' : 'a word of the text as typed'})${kind === 'mixed' ? ', or math: 2 for the second piece of math' : ''}.`);
       else out.word = r.word.trim();
       if (r.nth !== undefined && r.nth !== null && r.nth !== '') out.nth = whole(r.nth, 'nth', i, 1);
       out.take = r.take === undefined || r.take === null || r.take === '' ? 1 : whole(r.take, 'take', i, 1);
@@ -163,6 +163,7 @@ function createTools(config) {
     return (placed.redo || []).map((r) => {
       const name = r.type === 'math' ? `math "${r.text}"` : `"${r.word}"`;
       const bits = [`take ${r.take}`];
+      if (r.type === 'run' && r.math) bits.unshift(`in math piece ${r.math}`);
       if (r.nth) bits.unshift(`nth ${r.nth}`);
       else if (r.matches > 1) bits.push(`first of ${r.matches}`);
       if (!r.ok) return `redo ${name} (${bits.join(', ')}): could not change "${r.text}": ${r.reason}; it is drawn as it is without redo.`;

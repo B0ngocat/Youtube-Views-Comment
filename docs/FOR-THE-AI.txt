@@ -122,8 +122,11 @@ Redo one word: when ONE word or number came out badly, do not change the seed (t
   redo "9.81" (take 2): 3 of 4 characters changed. If the writer has no other example that fits (a digit with one clean example) the word
   is drawn as it was and the report says so ("could not change ..."): then the person has to write more of it in the Teach tab. A word that
   is not in the text stops that answer before anything is drawn, and the message lists the words. In kind "mixed" a piece of math is one
-  word: give its TeX ({"word": "x + y"}) or {"math": 2} for the second piece. kind "math" does not take redo yet (put the number in a
-  mixed answer, as a plain word outside the dollar signs, or use another seed). Use redo for one bad word; use seed to see a whole new take.
+  word: give its TeX ({"word": "x + y"}) or {"math": 2} for the second piece. In kind "math" word is a written run as it appears in
+  the TeX: digits with their decimal point, or a run of letters ({"text": "F = 9.81 \\times 4.5", "kind": "math", "redo": [{"word": "9.81"}]});
+  operators the writer never wrote are drawn stand-ins, not runs, so they cannot be redone; nth counts matching runs in order, and the
+  message for a run that is not there lists the runs. Inside a mixed answer, {"math": 1, "word": "9.81"} redoes that run inside the
+  first piece of math and leaves the rest of the piece alone. Use redo for one bad word; use seed to see a whole new take.
 Previews: fill_pdf with "preview": "digits" (or "all") returns a small picture of each answer's ink (5 to 10 KB each) so you can check
   digits without rendering and cropping whole pages. It shows the writing only, not the page behind it.
 Math TeX: only the commands in handwriting_status {"math_help": true} work (arrows \Rightarrow \implies \iff, sets \in \cup, \bar \vec \hat,

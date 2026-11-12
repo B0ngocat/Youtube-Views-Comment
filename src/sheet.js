@@ -61,7 +61,7 @@
     const floor = box.minRatio ? Math.max(MIN_XH_PT, wantXh * box.minRatio) : MIN_XH_PT;
     const explicitLines = text.split('\n').length;
     // box.redo (words to draw again, see synth.redoLayout) goes into every pass of the fitting below, so a redone word stays the same word
-    const redoOpt = box.redo && box.redo.length && box.kind !== 'math' ? { redo: box.redo } : {};
+    const redoOpt = box.redo && box.redo.length ? { redo: box.redo } : {};
     const step = box.lineStep > 0 ? Number(box.lineStep) : 0; // ruled lines: the pitch in points
     const allowed = step ? 1 + Math.floor((Math.max(box.h, box.growTo || 0) - box.h) / step + 0.03) : 0; // lines the box may hold on its rules
 
