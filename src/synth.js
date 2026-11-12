@@ -967,6 +967,7 @@
     // (x-heights), so lines holding tall boxes can be given room once all words are placed
     const boxes = o.inline || null;
     const strokeLine = [];
+    const strokeTall = []; // per stroke: it belongs to a word holding a tall box (opts.snapLines looks at its ink)
     const wordLine = [];
     const reachUp = [];
     const reachDown = [];
@@ -1050,6 +1051,7 @@
           }
           strokesOut.push(s);
           strokeLine.push(line);
+          strokeTall.push(compound && w.up !== undefined && (w.up * sc > 1.9 || w.down * sc > 0.9));
         }
         wordLine.push(line);
         // where each letter ended up on the page, so a tap can be traced back to the example that drew it
@@ -1080,18 +1082,54 @@
     if (reachUp.length || reachDown.length) {
       const shift = [];
       let total = 0;
+      // opts.snapLines: how far (px) tall ink on line i-1 or i overlaps the neighbouring line's ink in the same columns
+      const snapOverlap = (i) => {
+        if (!o.snapLines) return 0;
+        const ext = (ln, tallOnly) => {
+          const out = [];
+          strokesOut.forEach((st, k) => {
+            if (strokeLine[k] !== ln || (tallOnly && !strokeTall[k])) return;
+            let x0 = Infinity;
+            let x1 = -Infinity;
+            let y0 = Infinity;
+            let y1 = -Infinity;
+            for (const p of st.pts) {
+              if (p.x < x0) x0 = p.x;
+              if (p.x > x1) x1 = p.x;
+              if (p.y < y0) y0 = p.y;
+              if (p.y > y1) y1 = p.y;
+            }
+            out.push({ x0, x1, y0, y1 });
+          });
+          return out;
+        };
+        const mar = 0.1 * xh;
+        let worst = -Infinity;
+        const pass = (tall, other, down) => {
+          for (const t of tall) for (const q of other) {
+            if (q.x1 < t.x0 - mar || q.x0 > t.x1 + mar) continue;
+            worst = Math.max(worst, down ? t.y1 - q.y0 : q.y1 - t.y0);
+          }
+        };
+        pass(ext(i - 1, true), ext(i, false), true); // a tall piece reaching down over the next line's ink
+        pass(ext(i, true), ext(i - 1, false), false); // a tall piece reaching up into the line above's ink
+        return worst;
+      };
       for (let i = 0; i < baselines.length; i++) {
         const tallUp = (reachUp[i] || 0) > NORMAL_UP;
         const tallDownAbove = i > 0 && (reachDown[i - 1] || 0) > NORMAL_DOWN;
         // opts.snapLines (the caller writes on ruled lines): the room is a whole number of line heights, so every line stays on a
-        // rule. A tall piece that pokes into the next line's band by no more than about 0.45 x-heights beyond the usual gap
-        // gets no room (it just pokes over, as in handwriting); more than that skips whole lines. The first line moves nothing.
+        // rule, and it is given only where the ink really collides: with the lines exactly one line height apart, a tall piece
+        // (its own strokes) may overlap the other line's ink within its columns (+-0.1 x-heights) by at most 0.15 x-heights (about 1.4 pt: a brush of ink is not a collision); with
+        // more than that whole line heights are skipped, with less there is no room at all (a fraction just pokes under the rule).
+        // The first line moves nothing.
         if (i === 0) total += tallUp && !o.snapLines ? Math.max(0, reachUp[0] - 1.7) * xh : 0;
-        else if (tallUp || tallDownAbove) {
+        else if (o.snapLines) {
+          const hit = snapOverlap(i);
+          if (hit > 0.15 * xh) total += Math.ceil((hit - 0.15 * xh) / lineH - 1e-6) * lineH;
+        } else if (tallUp || tallDownAbove) {
           const need = Math.max(reachDown[i - 1] || 0, NORMAL_DOWN) + Math.max(reachUp[i] || 0, NORMAL_UP) + GAP;
-          let add = Math.max(0, need * xh - lineH);
-          if (o.snapLines) add = add <= (GAP + 0.45) * xh ? 0 : Math.ceil(add / lineH - 1e-6) * lineH;
-          total += add;
+          total += Math.max(0, need * xh - lineH);
         }
         shift.push(total);
       }

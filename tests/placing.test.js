@@ -442,9 +442,34 @@ test('a tighter pitch skips a rule for the fraction, and the report says so; a r
   assert.ok(onRule(roomy.lines[1], 102) && onRule(roomy.lines[2], 142), JSON.stringify(roomy.lines));
 });
 
-test('a rule skipped for tall math counts as a rule: it does not fit when the rules run out', async () => {
-  const { t } = await tallCase(18, FRAC, 3);
-  assert.match(t, /DOES NOT FIT/);
+test('a simple fraction over ordinary x-height words: no rule skipped, no shrink, lines 2 and 3 on rules 2 and 3', async () => {
+  const { t, lines } = await tallCase(24, FRAC, 3);
+  assert.ok(!/skips|NOT on|SHRUNK|DOES NOT FIT/.test(t), t);
+  assert.match(t, /written at 9\.5 pt/);
+  assert.equal(lines.length, 3);
+  [62, 86, 110].forEach((y, k) => assert.ok(onRule(lines[k], y), `line ${k + 1} on rule ${k + 1}: ${JSON.stringify(lines[k])}`));
+});
+
+test('a tall letter right under the denominator skips a rule (reported); the same letter away from the fraction does not', async () => {
+  const under = await tallCase(24, 'oxen $\\frac{a}{b}$\noxen hhhhhh\nmoon sew', 6);
+  assert.match(under.t, /line 2 skips a ruled line/);
+  const rules = [0, 1, 2, 3, 4, 5].map((k) => 62 + 24 * k);
+  const k2 = rules.findIndex((y) => onRule(under.lines[1], y));
+  assert.ok(k2 >= 2, 'line 2 is on a later rule: ' + k2);
+  const away = await tallCase(24, 'oxen $\\frac{a}{b}$\nhh oxen\nmoon sew', 6);
+  assert.ok(!/skips|NOT on/.test(away.t), away.t);
+  [62, 86, 110].forEach((y, k) => assert.ok(onRule(away.lines[k], y), `away: line ${k + 1}: ${JSON.stringify(away.lines[k])}`));
+});
+
+test('an integral with limits over ordinary words still skips a rule', async () => {
+  const r = await tallCase(18, 'oxen $\\int_a^b x$\noxen oxen oxen\nmoon sew', 8);
+  assert.match(r.t, /line 2 skips a ruled line/, r.t);
+  assert.ok(!/NOT on/.test(r.t), r.t);
+});
+
+test('a skipped rule counts as a rule: it does not fit when the rules run out', async () => {
+  const { t } = await tallCase(24, 'oxen $\\frac{a}{b}$\noxen hhhhhh\nmoon sew', 3);
+  assert.match(t, /DOES NOT FIT|SHRUNK/);
 });
 
 test('layoutBox lineStep and synth snapLines: whole steps for tall math; without the option nothing changes', () => {

@@ -82,8 +82,8 @@ Placing answers (fill_pdf, inspect_pdf): you do not have to work out x, y and wi
   only to the last rule. Letters too tall for the spacing are made smaller within min_size_ratio, and the report says so. For lined
   paper the PDF does not draw as lines give "line_spacing_pt": 24 (line 1 on line_y, the next one 24 pt lower, and so on).
   "follow_lines": false turns the automatic behaviour off. A mixed line holding tall math (a fraction) keeps every line on a rule:
-  if the fraction only pokes a little into the next line's band the next line stays on the next rule, otherwise the lines after it
-  skip whole rules (the report says "line 2 skips a ruled line"), so count the rules the answer needs: a skipped rule counts, and
+  a fraction over ordinary words just pokes under its rule and the next line stays on the next rule; only when it would really
+  collide with ink on the next line (a tall letter right under it) do the lines after it skip whole rules (the report says "line 2 skips a ruled line"), so count the rules the answer needs: a skipped rule counts, and
   "DOES NOT FIT" means the rules ran out.
   WARNING lines in the report say when the writing covers printed text, covers another answer, or leaves the page, with how many
   points. The file is still saved: look at the page and move the answer. No warning means none was found.
